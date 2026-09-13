@@ -48,3 +48,21 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Private Keys & Certificates
+*.pem
+keys/*.pem
+!keys/id_rsa.pem
+!keys/id_rsa.pub
+
+# Runtime & Generated Media
+media_*.png
+
+# Scratch scripts & foreign project artifacts
+patch_csp.py
+check_db.js
+gmail-src/
+*_gmail.*
+*-deploy-aws.sh
+deploy-*.sh
+AWS_DEPLOYMENT.md

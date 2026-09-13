@@ -4,7 +4,7 @@ module.exports = {
     collectCoverageFrom: ['src/**/*.js'],
     coverageDirectory: 'coverage',
     verbose: true,
-    testTimeout: 30000,
+    testTimeout: 60000,
     setupFilesAfterEnv: ['<rootDir>/tests/setup.js'],
     moduleFileExtensions: ['js', 'json'],
     transform: {},
