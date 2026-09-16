@@ -181,7 +181,11 @@ function resumeExistingSessions() {
         const authRoot = path.join(process.env.PERSIST_ROOT || __dirname, '.wwebjs_auth');
         if (!fs.existsSync(authRoot)) return;
 
-        const activeUserIds = new Set(listUsers().filter(u => u.status === 'active').map(u => u.id));
+        const activeUserIds = new Set(
+            listUsers()
+                .filter(u => u.status === 'active' && (u.role === 'admin' || u.wa_enabled === 1))
+                .map(u => u.id)
+        );
         const resumable = [];
 
         for (const dir of fs.readdirSync(authRoot)) {

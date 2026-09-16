@@ -98,7 +98,8 @@ function newSessionState() {
         userDisconnected: false,
         // Hibernation: tracks last message activity to decide when to free Chrome.
         lastActivityAt: Date.now(),
-        isHibernated: false
+        isHibernated: false,
+        qrTimeout: null
     };
 }
 
@@ -121,9 +122,12 @@ function clearStaleLocks(userId) {
                 for (const item of fs.readdirSync(dir)) {
                     const p = path.join(dir, item);
                     try {
-                        const st = fs.statSync(p);
-                        if (st.isDirectory()) cleanRecursive(p);
-                        else if (lockFiles.includes(item)) fs.rmSync(p, { force: true });
+                        if (lockFiles.includes(item)) {
+                            fs.rmSync(p, { force: true });
+                        } else {
+                            const st = fs.lstatSync(p);
+                            if (st.isDirectory()) cleanRecursive(p);
+                        }
                     } catch (_) {}
                 }
             } catch (_) {}
@@ -176,6 +180,7 @@ function clearTimers(s) {
     if (s.watchdogTimer)    { clearInterval(s.watchdogTimer);   s.watchdogTimer    = null; }
     if (s.restartTimer)     { clearTimeout(s.restartTimer);     s.restartTimer     = null; }
     if (s.hibernationTimer) { clearTimeout(s.hibernationTimer); s.hibernationTimer = null; }
+    if (s.qrTimeout)        { clearTimeout(s.qrTimeout);        s.qrTimeout        = null; }
 }
 
 // ─── Session Hibernation ──────────────────────────────────────
@@ -345,6 +350,18 @@ function initWhatsAppClient(userId) {
     if (!Number.isSafeInteger(userId) || userId <= 0) {
         throw new Error('initWhatsAppClient requires a positive integer userId');
     }
+
+    try {
+        const { getUserById } = require('./database');
+        const user = getUserById(userId);
+        if (!user || user.status !== 'active' || (user.role !== 'admin' && !user.wa_enabled)) {
+            console.warn(`⚠️ [user ${userId}] Denying WhatsApp client start — wa_enabled is 0 or account is not active.`);
+            return { accepted: false, reason: 'WhatsApp access is not enabled for this account.' };
+        }
+    } catch (e) {
+        // Non-fatal if DB not loaded (test harness)
+    }
+
     const s = getSession(userId);
     s.destroyed = false;
     s.userDisconnected = false;
@@ -466,15 +483,31 @@ function attachHandlers(userId, s, client) {
         } catch (err) {
             console.error(`[user ${userId}] Failed to generate QR data URL:`, err.message);
         }
+
+        // Auto-teardown idle QR code after 3 minutes if unscanned to free RAM & CPU
+        if (!s.qrTimeout) {
+            s.qrTimeout = setTimeout(async () => {
+                s.qrTimeout = null;
+                if (!s.isConnected && s.client) {
+                    console.log(`⏱️ [user ${userId}] QR code scan timed out after 3 minutes — stopping idle Chrome.`);
+                    clearTimers(s);
+                    s.currentQR = null;
+                    await safeDestroyClient(s);
+                    broadcastSSE(userId, { type: 'error', data: 'QR code timed out. Click Connect when ready to scan.' });
+                }
+            }, 180000);
+            s.qrTimeout.unref?.();
+        }
     });
 
     // ── Auth ────────────────────────────────────────────────
     client.on('authenticated', () => {
         console.log(`✅ [user ${userId}] WhatsApp Authenticated!`);
         s.currentQR = null;
+        if (s.qrTimeout) { clearTimeout(s.qrTimeout); s.qrTimeout = null; }
     });
 
-    // ── Ready ───────────────────────────────────────────────
+    // ── Ready ───────────────────────────────────────
     client.on('ready', () => {
         console.log(`✅ [user ${userId}] WhatsApp Client is READY!`);
         s.isConnected    = true;
@@ -484,6 +517,7 @@ function attachHandlers(userId, s, client) {
         s.crashCount     = 0;
         s.lastError      = null;
         s.lastActivityAt = Date.now();
+        if (s.qrTimeout) { clearTimeout(s.qrTimeout); s.qrTimeout = null; }
 
         try {
             broadcastSSE(userId, { type: 'ready', phone: client.info?.wid?.user || 'unknown' });
@@ -505,9 +539,6 @@ function attachHandlers(userId, s, client) {
                 const msg = e.message || '';
                 const isTransient = msg.includes('Execution context') || msg.includes('Target closed') || msg.includes('timeout');
                 if (isTransient) {
-                    // Counted, not ignored: a permanently wedged page produces
-                    // "transient" errors forever, and silently retrying every
-                    // 30s would leave the tenant disconnected with no signal.
                     s.transientKeepAliveFailures = (s.transientKeepAliveFailures || 0) + 1;
                     if (s.transientKeepAliveFailures >= 3) {
                         s.transientKeepAliveFailures = 0;
@@ -523,7 +554,10 @@ function attachHandlers(userId, s, client) {
         s.keepAliveTimer.unref?.();
 
         s.watchdogTimer = setInterval(() => {
-            if (!s.isConnected && !s.isInitializing && !s.restartTimer && !s.destroyed) {
+            if (s.currentQR || s.isInitializing || s.restartTimer || s.destroyed || s.userDisconnected) {
+                return;
+            }
+            if (!s.isConnected) {
                 console.warn(`🐕 [user ${userId}] Watchdog: not connected and not restarting — triggering restart.`);
                 scheduleRestart(userId, 5000);
             }
@@ -547,6 +581,7 @@ function attachHandlers(userId, s, client) {
         s.isConnected    = false;
         s.isInitializing = false;
         s.currentQR      = null;
+        if (s.watchdogTimer) { clearInterval(s.watchdogTimer); s.watchdogTimer = null; }
         scheduleRestart(userId, 8000);
     });
 
