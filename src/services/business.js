@@ -7,16 +7,16 @@ const { callGeminiWithRetry, extractText, parseJsonResponse } = require('./gemin
 const MAX_PRODUCTS_IN_CONTEXT = 40;
 
 // ─── Raw business info (what the owner typed in Settings) ───
-function getBusinessInfo(userId) {
+async function getBusinessInfo(userId) {
     return {
-        name:            getSetting(userId, 'business_name') || '',
-        website:         getSetting(userId, 'business_website') || '',
-        industry:        getSetting(userId, 'business_industry') || '',
-        description:     getSetting(userId, 'business_description') || '',
-        targetCustomers: getSetting(userId, 'business_target_customers') || '',
-        offers:          getSetting(userId, 'business_offers') || '',
-        currency:        getSetting(userId, 'business_currency') || '₹',
-        products:        getProducts(userId, true)
+        name:            (await getSetting(userId, 'business_name')) || '',
+        website:         (await getSetting(userId, 'business_website')) || '',
+        industry:        (await getSetting(userId, 'business_industry')) || '',
+        description:     (await getSetting(userId, 'business_description')) || '',
+        targetCustomers: (await getSetting(userId, 'business_target_customers')) || '',
+        offers:          (await getSetting(userId, 'business_offers')) || '',
+        currency:        (await getSetting(userId, 'business_currency')) || '₹',
+        products:        await getProducts(userId, true)
     };
 }
 
@@ -34,8 +34,8 @@ function hasBusinessInfo(info) {
  * is line-oriented and is placed in the system instruction: a product name
  * containing a newline could otherwise forge a directive line.
  */
-function getBusinessContext(userId) {
-    const info = getBusinessInfo(userId);
+async function getBusinessContext(userId) {
+    const info = await getBusinessInfo(userId);
     if (!hasBusinessInfo(info)) return '';
 
     const flat = (v) => String(v == null ? '' : v).replace(/[\r\n\u2028\u2029]+/g, ' ').trim();
@@ -64,7 +64,7 @@ function getBusinessContext(userId) {
     }
 
     // Include the AI-generated sales brief if the owner has run the analysis
-    const profileRaw = getSetting(userId, 'business_ai_profile');
+    const profileRaw = await getSetting(userId, 'business_ai_profile');
     if (profileRaw) {
         try {
             const profile = JSON.parse(profileRaw);
@@ -90,7 +90,7 @@ function getBusinessContext(userId) {
  * a permanent cost and a permanent risk on every message thereafter.
  */
 async function analyzeBusinessProfile(userId) {
-    const info = getBusinessInfo(userId);
+    const info = await getBusinessInfo(userId);
     if (!hasBusinessInfo(info)) {
         const err = new Error('Add some business details or products first, then run the analysis.');
         err.status = 400;
@@ -152,7 +152,7 @@ ${productText}`;
 
     const profile = normalizeBusinessProfile(raw);
     profile.analyzed_at = new Date().toISOString();
-    setSetting(userId, 'business_ai_profile', JSON.stringify(profile));
+    await setSetting(userId, 'business_ai_profile', JSON.stringify(profile));
     return profile;
 }
 

@@ -1,6 +1,7 @@
 const {
     verifySessionToken, getTokenFromRequest, shouldRotateToken,
-    createSessionToken, setSessionCookie, clearSessionCookie
+    createSessionToken, setSessionCookie, clearSessionCookie,
+    parseTimestampToMs
 } = require('../config/auth');
 const { getUserById } = require('../services/database');
 
@@ -16,16 +17,19 @@ const { getUserById } = require('../services/database');
  *
  * Returns { user } | { error } — never throws.
  */
-function resolveSession(req) {
-    const token = getTokenFromRequest(req);
+async function resolveSession(req) {
+    let token = null;
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+        token = req.headers.authorization.slice(7);
+    }
     if (!token) return { error: { status: 401, code: 'AUTH_REQUIRED', message: 'Not authenticated' } };
 
-    const payload = verifySessionToken(token);
+    const payload = verifySessionToken(token, 'access');
     if (!payload) return { error: { status: 401, code: 'AUTH_REQUIRED', message: 'Your session has expired. Please log in again.' } };
 
     let user;
     try {
-        user = getUserById(payload.id);
+        user = await getUserById(payload.id);
     } catch (e) {
         // The database is unavailable. Answering 401 here would silently log
         // everyone out and invite a stampede of re-logins against an already
@@ -34,6 +38,50 @@ function resolveSession(req) {
     }
 
     if (!user) return { error: { status: 401, code: 'AUTH_REQUIRED', message: 'Account no longer exists' } };
+
+    const tokenAuthVersion = typeof payload.auth_version === 'number'
+        ? payload.auth_version
+        : (typeof payload.token_version === 'number' ? payload.token_version : null);
+    const userAuthVersion = typeof user.auth_version === 'number' ? user.auth_version : 1;
+
+    if (tokenAuthVersion !== null) {
+        // Token carries explicit auth_version: must match or exceed user's persisted auth_version
+        if (tokenAuthVersion < userAuthVersion) {
+            return { error: { status: 401, code: 'AUTH_REQUIRED', message: 'Your session has expired. Please log in again.' } };
+        }
+    } else {
+        // Handling of existing legacy tokens without the new claim:
+        // Once a user changes password, auth_version is incremented (> 1), which voids all legacy tokens.
+        if (userAuthVersion > 1) {
+            return { error: { status: 401, code: 'AUTH_REQUIRED', message: 'Your session has expired. Please log in again.' } };
+        }
+        // Fallback check for legacy tokens before migration where user.auth_version is still 1:
+        if (user.password_changed_at) {
+            const changedMs = parseTimestampToMs(user.password_changed_at);
+            const tokenIatMs = typeof payload.iat === 'number' ? (payload.iat < 1e11 ? payload.iat * 1000 : payload.iat) : 0;
+            if (tokenIatMs && tokenIatMs <= changedMs) {
+                return { error: { status: 401, code: 'AUTH_REQUIRED', message: 'Your password was recently changed. Please log in again.' } };
+            }
+        }
+    }
+    if (user.status === 'pending') {
+        return {
+            error: {
+                status: 403,
+                code: 'ACCOUNT_PENDING',
+                message: 'Your account is pending administrator approval. Please wait for approval before logging in.'
+            }
+        };
+    }
+    if (user.status === 'rejected') {
+        return {
+            error: {
+                status: 403,
+                code: 'ACCOUNT_REJECTED',
+                message: 'Your account registration was declined by the administrator.'
+            }
+        };
+    }
     if (user.status === 'suspended') {
         return {
             error: {
@@ -54,30 +102,26 @@ function sendAuthError(res, error, clearCookie) {
 }
 
 /** Attaches req.user if a valid session cookie is present; otherwise 401/403. */
-function requireAuth(req, res, next) {
-    const { user, payload, error } = resolveSession(req);
-    if (error) {
-        // Only clear on "this token is dead" outcomes, never on 503.
-        const dead = error.status === 401;
-        return sendAuthError(res, error, dead);
-    }
+async function requireAuth(req, res, next) {
+    try {
+        const { user, payload, error } = await resolveSession(req);
+        if (error) {
+            // Clear on dead token or pending/rejected account, never on 503.
+            const dead = error.status === 401 || error.code === 'ACCOUNT_PENDING' || error.code === 'ACCOUNT_REJECTED';
+            return sendAuthError(res, error, dead);
+        }
 
-    // Sliding expiry: refresh the cookie for an actively used session so
-    // regular users are never logged out mid-work, while an idle session
-    // still ages out. Skipped for SSE, where headers are already committed
-    // to the event stream.
-    if (shouldRotateToken(payload) && !res.headersSent) {
-        try { setSessionCookie(res, createSessionToken(user)); } catch (e) { /* non-fatal */ }
+        req.user = user;
+        req.session = payload;
+        next();
+    } catch (err) {
+        next(err);
     }
-
-    req.user = user;
-    req.session = payload;
-    next();
 }
 
 /** Like requireAuth, but also requires role === 'admin' (read from the database). */
-function requireAdmin(req, res, next) {
-    requireAuth(req, res, (err) => {
+async function requireAdmin(req, res, next) {
+    await requireAuth(req, res, (err) => {
         if (err) return next(err);
         if (!req.user || req.user.role !== 'admin') {
             // Deliberately the same shape as any other 403 and with no hint
@@ -90,13 +134,17 @@ function requireAdmin(req, res, next) {
 }
 
 /** Best-effort — attaches req.user if a valid session exists, but never blocks. */
-function optionalAuth(req, res, next) {
-    const { user, payload } = resolveSession(req);
-    if (user) {
-        req.user = user;
-        req.session = payload;
+async function optionalAuth(req, res, next) {
+    try {
+        const { user, payload } = await resolveSession(req);
+        if (user) {
+            req.user = user;
+            req.session = payload;
+        }
+        next();
+    } catch (err) {
+        next(err);
     }
-    next();
 }
 
 module.exports = { requireAuth, requireAdmin, optionalAuth, resolveSession };

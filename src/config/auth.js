@@ -72,6 +72,7 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // Re-issue a cookie once it is more than a day old, so an active session
 // keeps sliding forward while an abandoned one actually expires.
 const SESSION_ROTATE_AFTER_MS = 24 * 60 * 60 * 1000;
+const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000; // 15 mins
 
 // ─── Revocation ─────────────────────────────────────────────────
 // Two mechanisms, because they answer different questions:
@@ -198,6 +199,26 @@ async function burnPasswordVerification() {
     return false;
 }
 
+function parseTimestampToMs(val) {
+    if (!val) return 0;
+    if (val instanceof Date) return val.getTime();
+    if (typeof val === 'number') {
+        return val < 1e11 ? val * 1000 : val;
+    }
+    if (typeof val === 'string') {
+        const trimmed = val.trim();
+        if (/^\d+$/.test(trimmed)) {
+            const num = Number(trimmed);
+            return num < 1e11 ? num * 1000 : num;
+        }
+        if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(trimmed) && !trimmed.endsWith('Z') && !/[+-]\d{2}:?\d{2}$/.test(trimmed)) {
+            return new Date(trimmed.replace(' ', 'T') + 'Z').getTime();
+        }
+        return new Date(trimmed).getTime();
+    }
+    return 0;
+}
+
 // ─── Lightweight signed session token (no external JWT dependency) ──
 /**
  * Token layout: base64url(payload) + "." + hex HMAC-SHA256.
@@ -208,25 +229,25 @@ async function burnPasswordVerification() {
  * middleware/auth.js re-reads role and status from the database on every
  * request, so a forged role claim in a validly signed token grants nothing.
  */
-function createSessionToken(user) {
-    // iat must never predate the account's revocation epoch, or a token
-    // minted immediately after a password change / role change would be
-    // rejected by its own revocation check — the two happen within the same
-    // millisecond, and the epoch is deliberately stamped 1ms ahead to void
-    // same-millisecond stragglers. Clamping here keeps "revoke everything,
-    // then issue a fresh session" working without widening that window.
-    const now = Math.max(Date.now(), getUserTokenEpoch(user.id));
-    const payload = { id: user.id, role: user.role, iat: now, exp: now + SESSION_TTL_MS };
+function createSessionToken(user, type = 'refresh') {
+    const now = Date.now();
+    const authVersion = user && typeof user.auth_version === 'number' ? user.auth_version : 1;
+    const ttl = type === 'access' ? ACCESS_TOKEN_TTL_MS : SESSION_TTL_MS;
+    const payload = {
+        id: user.id,
+        role: user.role,
+        auth_version: authVersion,
+        type,
+        iat: now,
+        exp: now + ttl
+    };
     const encoded = base64url(JSON.stringify(payload));
     const sig = crypto.createHmac('sha256', SESSION_SECRET).update(encoded).digest('hex');
     return `${encoded}.${sig}`;
 }
 
-function verifySessionToken(token) {
+function verifySessionToken(token, expectedType = 'refresh') {
     if (!token || typeof token !== 'string') return null;
-    // Exactly one separator: "a.b.c" must not be accepted by taking the
-    // first two parts, or a token could be extended with arbitrary trailing
-    // data that some other component might parse differently.
     const parts = token.split('.');
     if (parts.length !== 2) return null;
     const [encoded, sig] = parts;
@@ -234,8 +255,6 @@ function verifySessionToken(token) {
     if (isTokenBlacklisted(token)) return null;
 
     const expectedSig = crypto.createHmac('sha256', SESSION_SECRET).update(encoded).digest('hex');
-    // timingSafeEqual throws on length mismatch, so compare lengths first —
-    // and compare as fixed-length hex buffers, which they always are.
     if (sig.length !== expectedSig.length) return null;
     try {
         if (!crypto.timingSafeEqual(Buffer.from(sig, 'utf8'), Buffer.from(expectedSig, 'utf8'))) return null;
@@ -250,14 +269,13 @@ function verifySessionToken(token) {
         return null;
     }
     if (!payload || typeof payload !== 'object') return null;
+    if (payload.type !== expectedType) return null;
     if (typeof payload.id !== 'number' || !Number.isSafeInteger(payload.id) || payload.id <= 0) return null;
     if (typeof payload.exp !== 'number' || Date.now() > payload.exp) return null;
-    // A token whose lifetime exceeds the configured maximum was not minted
-    // by this code — reject it even though the signature checks out, so a
-    // future bug that lets an attacker influence `exp` can't grant a
-    // decade-long session.
-    const iat = typeof payload.iat === 'number' ? payload.iat : payload.exp - SESSION_TTL_MS;
-    if (payload.exp - iat > SESSION_TTL_MS + 60000) return null;
+    
+    const maxTtl = expectedType === 'access' ? ACCESS_TOKEN_TTL_MS : SESSION_TTL_MS;
+    const iat = typeof payload.iat === 'number' ? payload.iat : payload.exp - maxTtl;
+    if (payload.exp - iat > maxTtl + 60000) return null;
     if (iat < getUserTokenEpoch(payload.id)) return null;
 
     payload.iat = iat;
@@ -386,6 +404,7 @@ module.exports = {
     isValidEmail,
     isValidPassword,
     normalizeEmail,
+    parseTimestampToMs,
     COOKIE_NAME,
     // SESSION_SECRET is intentionally NOT exported. It is only used inside this
     // module to sign and verify tokens. Exporting it would make it accessible

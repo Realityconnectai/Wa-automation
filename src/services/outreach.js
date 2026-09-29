@@ -149,8 +149,8 @@ async function runJob(job, user, contacts, messageTemplate) {
         // during which an admin may suspend the account — continuing to send
         // on behalf of a suspended tenant is exactly what suspension is
         // supposed to stop.
-        const fresh = getUserById(user.id);
-        if (!fresh || fresh.status === 'suspended') {
+        const fresh = await getUserById(user.id);
+        if (!fresh || fresh.status !== 'active') {
             const remaining = job.total - job.sent - job.failed - job.skipped;
             job.skipped += remaining;
             job.results.push({ status: 'skipped', reason: 'Remaining sends stopped: this account is no longer active' });
@@ -161,7 +161,7 @@ async function runJob(job, user, contacts, messageTemplate) {
 
         // Plan message-limit check, re-evaluated per send since it can change
         // mid-job — same rule /messages/send enforces.
-        if (fresh.message_limit && getMonthlyOutgoingCount(fresh.id) >= fresh.message_limit) {
+        if (fresh.message_limit && (await getMonthlyOutgoingCount(fresh.id)) >= fresh.message_limit) {
             const remaining = job.total - job.sent - job.failed - job.skipped;
             job.skipped += remaining;
             job.results.push({
@@ -201,7 +201,7 @@ async function runJob(job, user, contacts, messageTemplate) {
         const personalized = renderTemplate(messageTemplate, contact);
         try {
             const result = await sendTextMessage(fresh.id, phone, personalized);
-            logMessage(fresh.id, {
+            await logMessage(fresh.id, {
                 waMessageId: result?.id?._serialized || result?.messageId || null,
                 phone,
                 contactName: contact.name || '',
@@ -210,14 +210,14 @@ async function runJob(job, user, contacts, messageTemplate) {
                 body: personalized,
                 status: 'sent'
             });
-            if (!getContactByPhone(fresh.id, phone)) upsertContact(fresh.id, phone, contact.name);
-            markContactOutreached(fresh.id, phone);
+            if (!(await getContactByPhone(fresh.id, phone))) await upsertContact(fresh.id, phone, contact.name);
+            await markContactOutreached(fresh.id, phone);
             job.sent++;
             job.results.push({ phone, name: contact.name, status: 'sent' });
             // Best-effort, deliberately not awaited before continuing: this
             // is a courtesy record, not something the send itself should
             // wait on, and logOutreachEvent already swallows its own errors.
-            logOutreachEvent(fresh.id, { phone, name: contact.name, message: personalized });
+            logOutreachEvent(fresh.id, { phone, name: contact.name, message: personalized }).catch?.(() => {});
         } catch (err) {
             job.failed++;
             // Don't echo raw internals into a response body the browser shows.

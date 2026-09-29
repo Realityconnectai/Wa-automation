@@ -10,16 +10,17 @@ describe('Priority 2: Background Jobs, Scheduler & AI Protections', () => {
     beforeAll(async () => {
         process.env.PERSIST_ROOT = require('path').join(__dirname, '..', 'data', 'test_p2');
         db = await initDatabase();
-        testUser = createUser({
-            email: 'p2_tester@example.com',
+        testUser = await createUser({
+            email: `p2_tester_${Date.now()}@example.com`,
             passwordHash: '$2a$10$abcdefghijklmnopqrstuvwxyz1234567890',
             businessName: 'Test Biz',
-            ownerName: 'Test Owner'
+            ownerName: 'Test Owner',
+            status: 'active'
         });
     });
 
-    afterAll(() => {
-        stopPersistence();
+    afterAll(async () => {
+        await stopPersistence();
     });
 
     beforeEach(() => {
@@ -27,20 +28,20 @@ describe('Priority 2: Background Jobs, Scheduler & AI Protections', () => {
     });
 
     describe('2.1 Scheduler Atomic Job Claiming', () => {
-        test('atomic claim prevents duplicate job execution by parallel workers', () => {
-            const res = createScheduledMessage(testUser.id, '919876543210', 'Test atomic claim', '2020-01-01 10:00:00');
+        test('atomic claim prevents duplicate job execution by parallel workers', async () => {
+            const res = await createScheduledMessage(testUser.id, '919876543210', 'Test atomic claim', '2020-01-01 10:00:00');
             const msgId = res.id;
 
             // Worker 1 claims
-            const claimed1 = claimScheduledMessage(msgId);
+            const claimed1 = await claimScheduledMessage(msgId);
             expect(claimed1).toBe(true);
 
             // Worker 2 attempts to claim same job -> fails
-            const claimed2 = claimScheduledMessage(msgId);
+            const claimed2 = await claimScheduledMessage(msgId);
             expect(claimed2).toBe(false);
 
             // Mark as sent
-            updateScheduledMessageStatus(msgId, 'sent');
+            await updateScheduledMessageStatus(msgId, 'sent');
         });
     });
 

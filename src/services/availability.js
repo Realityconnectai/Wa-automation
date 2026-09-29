@@ -48,8 +48,8 @@ const DEFAULT_MAX_RESULTS = 8;
 const MIN_LEAD_MINUTES = 15;
 
 /** The account's saved weekly hours, or the built-in defaults if it has never configured any (see the availability_settings table comment in database.js). */
-function getSettings(userId) {
-    const row = getAvailabilitySettings(userId);
+async function getSettings(userId) {
+    const row = await getAvailabilitySettings(userId);
     if (!row) return { ...DEFAULTS };
     return {
         workingDays: String(row.working_days).split(',').map(Number).filter(n => Number.isInteger(n)),
@@ -63,7 +63,7 @@ function getSettings(userId) {
 }
 
 /** Validates and persists a new weekly template. Throws ValidationError on bad input. */
-function saveSettings(userId, input) {
+async function saveSettings(userId, input) {
     const workingDays = normalizeWorkingDays(input.workingDays, 'workingDays');
     const startTime = assertHHMM(input.startTime, 'startTime');
     const endTime = assertHHMM(input.endTime, 'endTime');
@@ -91,8 +91,8 @@ function saveSettings(userId, input) {
 
     const bookingEnabled = !!input.bookingEnabled;
 
-    saveAvailabilitySettings(userId, { workingDays, startTime, endTime, slotDurationMinutes, bufferMinutes, timezone, bookingEnabled });
-    return getSettings(userId);
+    await saveAvailabilitySettings(userId, { workingDays, startTime, endTime, slotDurationMinutes, bufferMinutes, timezone, bookingEnabled });
+    return await getSettings(userId);
 }
 
 /** Every working-hours slot start/end (as UTC Date objects) over the next `daysAhead` days, before any busy/booked filtering. */
@@ -140,7 +140,7 @@ function rangesOverlap(aStart, aEnd, bStart, bEnd) {
  */
 async function getAvailableSlots(userId, { daysAhead = DEFAULT_DAYS_AHEAD, maxResults = DEFAULT_MAX_RESULTS } = {}) {
     const days = Math.min(Math.max(1, Number(daysAhead) || DEFAULT_DAYS_AHEAD), MAX_DAYS_AHEAD);
-    const settings = getSettings(userId);
+    const settings = await getSettings(userId);
     const candidates = generateCandidateSlots(settings, { daysAhead: days });
     if (candidates.length === 0) return { settings, slots: [] };
 
@@ -149,15 +149,15 @@ async function getAvailableSlots(userId, { daysAhead = DEFAULT_DAYS_AHEAD, maxRe
 
     const [busyBlocks, existing] = await Promise.all([
         getBusyBlocks(userId, rangeStart.toISOString(), rangeEnd.toISOString()),
-        Promise.resolve(listAppointments(userId, {
+        listAppointments(userId, {
             status: 'confirmed',
             fromAt: toSqliteUtc(rangeStart),
             toAt: toSqliteUtc(rangeEnd)
-        }))
+        })
     ]);
 
     const busy = busyBlocks.map(b => ({ start: new Date(b.start), end: new Date(b.end) }));
-    const booked = existing.map(a => ({ start: new Date(a.start_at + 'Z'), end: new Date(a.end_at + 'Z') }));
+    const booked = existing.map(a => ({ start: new Date(a.start_at), end: new Date(a.end_at) }));
 
     const free = candidates.filter(slot => {
         const hitsBusy = busy.some(b => rangesOverlap(slot.startUtc, slot.endUtc, b.start, b.end));
@@ -179,14 +179,6 @@ async function getAvailableSlots(userId, { daysAhead = DEFAULT_DAYS_AHEAD, maxRe
  * Re-validates and books a specific slot. Throws with `.code` set so callers
  * (the API route, the chatbot tool loop) can distinguish "bad input" from
  * "someone else took it" from "outside working hours".
- */
-/**
- * O(1) check that `start` lands exactly on a slot boundary this account's
- * weekly template would generate — same weekday/hours/duration/buffer math
- * as generateCandidateSlots, just evaluated for one instant instead of
- * enumerating a whole date range. Booking used to regenerate up to 30 days
- * of candidates on every call purely to find one match in the list; this
- * replaces that with a handful of arithmetic operations.
  */
 function isValidSlotBoundary(settings, start) {
     const parts = utcToZonedParts(start, settings.timezone);
@@ -215,7 +207,7 @@ async function bookAppointment(userId, { phone, contactName = '', startIso, note
         throw err;
     }
 
-    const settings = getSettings(userId);
+    const settings = await getSettings(userId);
     const end = new Date(start.getTime() + settings.slotDurationMinutes * 60000);
 
     if (start.getTime() < Date.now()) {
@@ -224,20 +216,13 @@ async function bookAppointment(userId, { phone, contactName = '', startIso, note
         throw err;
     }
 
-    // Must land on a real slot boundary for this account's template —
-    // otherwise a client (or a creative chatbot tool call) could book
-    // "3:07pm" and silently ignore the configured slot grid.
     if (!isValidSlotBoundary(settings, start)) {
         const err = new Error('That is not one of the available appointment slots.');
         err.code = 'INVALID_SLOT';
         throw err;
     }
 
-    // Per-tenant row cap — same reasoning as every other unbounded-growth
-    // table in this codebase (see LIMITS in validate.js): a shared,
-    // in-memory-then-exported-to-disk database can't let one account's
-    // bookings (or a chatbot stuck in a booking loop) grow without limit.
-    if (countAppointments(userId) >= LIMITS.MAX_APPOINTMENTS_PER_USER) {
+    if ((await countAppointments(userId)) >= LIMITS.MAX_APPOINTMENTS_PER_USER) {
         const err = new Error(`You've reached the limit of ${LIMITS.MAX_APPOINTMENTS_PER_USER} appointments. Cancel some old ones before booking more.`);
         err.code = 'APPOINTMENT_LIMIT';
         throw err;
@@ -246,13 +231,7 @@ async function bookAppointment(userId, { phone, contactName = '', startIso, note
     const startSql = toSqliteUtc(start);
     const endSql = toSqliteUtc(end);
 
-    // Fast-fail pre-checks. These happen before the two `await`s below,
-    // which yield the event loop — so on their own they do NOT close the
-    // race between two concurrent bookings of the same slot. They exist
-    // purely so an obviously-taken slot doesn't waste a Calendar API round
-    // trip; createAppointment() below is what actually makes booking safe
-    // under concurrency (see its comment in database.js).
-    if (countOverlappingAppointments(userId, startSql, endSql) > 0) {
+    if ((await countOverlappingAppointments(userId, startSql, endSql)) > 0) {
         const err = new Error('That slot was just booked by someone else. Please pick another.');
         err.code = 'SLOT_TAKEN';
         throw err;
@@ -267,22 +246,15 @@ async function bookAppointment(userId, { phone, contactName = '', startIso, note
 
     const trimmedNotes = String(notes || '').slice(0, LIMITS.APPOINTMENT_NOTES);
 
-    // Create the calendar event before the DB row so a Calendar failure
-    // never leaves an orphaned event with no local record — but the DB
-    // write is what actually reserves the slot, so a Calendar failure must
-    // not prevent it (see createAppointmentEvent's own best-effort design).
     const calendarEventId = await createAppointmentEvent(userId, {
         phone, contactName, startIso: start.toISOString(), endIso: end.toISOString(), notes: trimmedNotes
     });
 
-    const appointment = createAppointment(userId, {
+    const appointment = await createAppointment(userId, {
         phone, contactName, startAt: startSql, endAt: endSql, source, notes: trimmedNotes, calendarEventId
     });
 
     if (!appointment) {
-        // Lost the race: someone else's booking committed between our
-        // pre-check above and this atomic insert. Clean up the calendar
-        // event we just created so it doesn't linger as an orphan.
         if (calendarEventId) await cancelAppointmentEvent(userId, calendarEventId);
         const err = new Error('That slot was just booked by someone else. Please pick another.');
         err.code = 'SLOT_TAKEN';
@@ -294,7 +266,7 @@ async function bookAppointment(userId, { phone, contactName = '', startIso, note
 
 /** Cancels an appointment and best-effort removes its calendar event. Returns the cancelled row, or null if it didn't exist. */
 async function cancelAppointment(userId, id) {
-    const row = dbCancelAppointment(userId, id);
+    const row = await dbCancelAppointment(userId, id);
     if (row && row.calendar_event_id) {
         await cancelAppointmentEvent(userId, row.calendar_event_id);
     }

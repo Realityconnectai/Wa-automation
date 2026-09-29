@@ -61,6 +61,10 @@ class FakeClient extends EventEmitter {
         return { id: { _serialized: `fake_${this.sent.length}_${Date.now()}` } };
     }
 
+    async logout() {
+        this.state = 'DISCONNECTED';
+    }
+
     async destroy() {
         this.destroyed = true;
         this.state = 'DISCONNECTED';

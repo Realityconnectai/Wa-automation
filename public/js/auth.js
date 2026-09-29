@@ -1,9 +1,9 @@
 document.addEventListener('DOMContentLoaded', async () => {
     if (typeof hydrateIcons === 'function') hydrateIcons();
 
-    // If already logged in, skip straight to the app instead of showing the form.
+    // If already logged in (has a valid refresh cookie), skip straight to the app
     try {
-        const res = await fetch('/api/auth/me', { credentials: 'include' });
+        const res = await fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' });
         if (res.ok) {
             window.location.href = '/app';
             return;
@@ -110,6 +110,18 @@ function initSignupForm() {
             const json = await res.json();
             if (!res.ok || !json.success) {
                 throw new Error(json.error || 'Could not create your account.');
+            }
+            if (json.pendingApproval) {
+                const section = document.getElementById('signupFormSection');
+                const notice = document.getElementById('pendingApprovalNotice');
+                const emailText = document.getElementById('registeredEmailText');
+                if (section && notice) {
+                    section.style.display = 'none';
+                    if (emailText) emailText.textContent = email;
+                    notice.style.display = 'block';
+                    if (typeof hydrateIcons === 'function') hydrateIcons(notice);
+                    return;
+                }
             }
             window.location.href = '/app';
         } catch (err) {

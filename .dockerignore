@@ -6,12 +6,19 @@ npm-debug.log
 # Runtime secrets / credentials — must never be baked into image layers
 .env
 .env.*
+**/.env
+**/.env.*
 !.env.example
+!**/.env.example
 
 # Persistent state — mounted as Docker volumes, not baked in
 data/
+**/data/
 .wwebjs_auth/
+**/.wwebjs_auth/
 .wwebjs_cache/
+**/.wwebjs_cache/
+**/.session_secret*
 
 # Logs and error files
 *.log
@@ -24,17 +31,73 @@ tests/
 coverage/
 jest.config.js
 
+# Private Keys, Certificates & Credentials (CRITICAL: never bake into image layers)
+keys/
+**/keys/
+*.pem
+**/*.pem
+*.key
+**/*.key
+*.pub
+**/*.pub
+*.pkcs12
+*.pfx
+*.p12
+
+# Database Backups & Dumps
+backups/
+*.db
+*.sqlite
+*.bak
+
+# Cookies, Sessions & Auth Tokens
+*.cookie
+*.cookies
+*cookies.txt
+
+# Local deployment and operational shell scripts
+*.sh
+check_users.sh
+deploy.sh
+test_*.sh
+scripts/*.sh
+!scripts/backup-db.sh
+
+# Foreign / Unrelated Project Files
+gmail-src/
+*_gmail.*
+create-demo-admin.js
+patch_csp.py
+check_db.js
+inboxforge*
+*inboxforge*
+
+# Archives & Bundles
+*.zip
+*.tar.gz
+*.tgz
+deploy.zip
+inboxforge.zip
+
 # Development-only scripts
 scripts/dev/
 
 # Local load-test scripts (contain no production logic)
 scripts/load-test-*.js
 
-# Large documentation files (save image space)
+# Large documentation files & audit reports (save image space & prevent report leaks)
 PROJECT_DEPLOYMENT_ANALYSIS.md
 WHATSAPP_AUTOMATION_COMPLETE_SYSTEM_DOCUMENTATION.md
+WHATSAPP_AUTOMATION_COMPLETE_AUDIT.md
+FINAL_PRODUCTION_AUDIT.md
+AWS_PRODUCTION_DEPLOYMENT.md
+AWS_DEPLOYMENT.md
 BUG_REPORT.md
+CHECKLIST.md
+RELEASE_CHECKLIST.md
+TASK_*.md
 
 # Misc dev files
 opencode.json
 test-data/
+

@@ -29,13 +29,13 @@ const writeLimiter = perUser('appointments-write', {
 });
 
 // ─── Availability settings ─────────────────────────────────────
-router.get('/settings', (req, res) => {
-    res.json({ success: true, data: getSettings(req.user.id) });
-});
+router.get('/settings', asyncHandler(async (req, res) => {
+    res.json({ success: true, data: await getSettings(req.user.id) });
+}));
 
-router.put('/settings', writeLimiter, requireDurableWrite, (req, res) => {
+router.put('/settings', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
     const body = req.body || {};
-    const settings = saveSettings(req.user.id, {
+    const settings = await saveSettings(req.user.id, {
         workingDays: body.workingDays,
         startTime: body.startTime,
         endTime: body.endTime,
@@ -45,7 +45,7 @@ router.put('/settings', writeLimiter, requireDurableWrite, (req, res) => {
         bookingEnabled: !!body.bookingEnabled
     });
     res.json({ success: true, data: settings });
-});
+}));
 
 // ─── Slot preview (dashboard + manual booking form) ────────────
 router.get('/slots', asyncHandler(async (req, res) => {
@@ -59,16 +59,18 @@ router.get('/slots', asyncHandler(async (req, res) => {
 }));
 
 // ─── Appointment list ───────────────────────────────────────────
-router.get('/', (req, res) => {
+router.get('/', asyncHandler(async (req, res) => {
     const status = req.query.status === 'cancelled' ? 'cancelled' : req.query.status === 'confirmed' ? 'confirmed' : null;
+    const appointments = await listAppointments(req.user.id, { status });
+    const total = await countAppointments(req.user.id);
     res.json({
         success: true,
         data: {
-            appointments: listAppointments(req.user.id, { status }),
-            total: countAppointments(req.user.id)
+            appointments,
+            total
         }
     });
-});
+}));
 
 // Owner books a slot manually from the dashboard (e.g. a walk-in or phone call) — same engine and same conflict checks as the chatbot.
 router.post('/', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {

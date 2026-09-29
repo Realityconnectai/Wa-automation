@@ -33,11 +33,11 @@ function sweepExpiredStates() {
     }
 }
 
-router.get('/status', (req, res) => {
+router.get('/status', asyncHandler(async (req, res) => {
     if (!isConfigured()) {
         return res.json({ success: true, data: { configured: false, connected: false } });
     }
-    const account = getGoogleCalendarAccount(req.user.id);
+    const account = await getGoogleCalendarAccount(req.user.id);
     res.json({
         success: true,
         data: {
@@ -48,7 +48,7 @@ router.get('/status', (req, res) => {
             lastSyncAt: account ? account.last_sync_at : null
         }
     });
-});
+}));
 
 router.get('/connect', (req, res) => {
     if (!isConfigured()) {
@@ -136,23 +136,23 @@ router.get('/oauth/callback', asyncHandler(async (req, res) => {
     closeAndNotify(true);
 }));
 
-router.post('/disconnect', (req, res) => {
-    disconnectAccount(req.user.id);
+router.post('/disconnect', asyncHandler(async (req, res) => {
+    await disconnectAccount(req.user.id);
     res.json({ success: true });
-});
+}));
 
-router.put('/settings', (req, res) => {
-    if (!isConnected(req.user.id)) {
+router.put('/settings', asyncHandler(async (req, res) => {
+    if (!(await isConnected(req.user.id))) {
         return res.status(409).json({ success: false, error: 'Connect Google Calendar first.' });
     }
-    setAvailabilityCheck(req.user.id, !!(req.body && req.body.checkAvailability));
+    await setAvailabilityCheck(req.user.id, !!(req.body && req.body.checkAvailability));
     res.json({ success: true });
-});
+}));
 
 // Manual "sync now" button, for after adding an event when the user doesn't
 // want to wait for the next 5-minute tick.
 router.post('/sync', asyncHandler(async (req, res) => {
-    if (!isConnected(req.user.id)) {
+    if (!(await isConnected(req.user.id))) {
         return res.status(409).json({ success: false, error: 'Connect Google Calendar first.' });
     }
     const imported = await syncEventsToScheduledMessages(req.user.id);

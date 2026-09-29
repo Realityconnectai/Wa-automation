@@ -16,21 +16,11 @@ const fs = require('fs');
 const os = require('os');
 
 // ─── Scrub production-only env vars before any module load ──────────────────
-//
-// These must be deleted BEFORE require('dotenv') runs anywhere in the
-// require chain. If BOOTSTRAP_ADMIN_EMAIL is set in the developer's .env,
-// it leaks through dotenv.config() (called in src/config/app.js at module
-// level) and ensureBootstrapAdmin() creates an admin in every "fresh"
-// database — causing the countUsers() === 0 assertion in freshDatabase() to
-// throw and making 100+ tests fail with misleading isolation errors.
 delete process.env.BOOTSTRAP_ADMIN_EMAIL;
 delete process.env.GOOGLE_CALENDAR_CLIENT_ID;
 delete process.env.GOOGLE_CALENDAR_CLIENT_SECRET;
 delete process.env.GOOGLE_CALENDAR_REDIRECT_URI;
-// Prevent dotenv from loading the developer's real .env during tests.
-// src/config/app.js guards dotenv.config() behind NODE_ENV !== 'test',
-// but we also block it here as defence-in-depth in case any new module
-// calls dotenv.config() at require time.
+
 process.env.NODE_ENV = 'test';
 
 // A unique directory per worker so `jest --maxWorkers` doesn't have two
@@ -40,20 +30,11 @@ const TEST_ROOT = path.join(
     `wa-tests-${process.pid}-${process.env.JEST_WORKER_ID || '1'}`
 );
 
-// NODE_ENV = 'test' is already set above; this line is intentionally removed.
 process.env.PERSIST_ROOT = TEST_ROOT;
-// Deterministic and long enough to satisfy the production-length check.
 process.env.SESSION_SECRET = 'test-session-secret-' + 'x'.repeat(88);
-// No real network calls, ever. Any test that needs AI mocks gemini-client.
 process.env.GEMINI_API_KEY = '';
 process.env.MAX_CONCURRENT_WHATSAPP_SESSIONS = '5';
-// Rate limiting is *on* for the tests that assert it and switched off
-// elsewhere, so unrelated suites don't fail because a previous test used up
-// a bucket. See withRateLimits().
 process.env.DISABLE_RATE_LIMITS = 'true';
-// bcrypt at production cost (12) would add ~250ms per password operation and
-// several minutes across the suite. 4 keeps the code path identical while
-// staying fast; the cost factor itself is asserted separately.
 process.env.BCRYPT_ROUNDS = '4';
 
 function ensureDir(dir) {
@@ -61,39 +42,22 @@ function ensureDir(dir) {
 }
 
 function rmrf(dir) {
-    // Retry briefly: on Windows a directory can be transiently locked (a
-    // just-closed file handle, an antivirus scan), and a silently swallowed
-    // failure here is dangerous — it leaves the previous test's database in
-    // place, which surfaces later as inexplicable 409s from signup and
-    // assertions that see users they never created.
     for (let attempt = 0; attempt < 5; attempt++) {
         try {
             fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
             return;
         } catch (e) {
             if (attempt === 4) {
-                // Deliberately loud. A leaked directory means test isolation
-                // is broken, and a broken isolation guarantee makes every
-                // result in the run untrustworthy.
                 console.warn(`⚠️ Could not remove test directory ${dir}: ${e.message}`);
             }
         }
     }
 }
 
-// Each freshDatabase() call gets its own directory rather than reusing and
-// deleting one. Deletion is the fragile part on Windows, and since
-// freshDatabase already clears the module cache — so src/database.js and
-// src/auth.js re-read PERSIST_ROOT — pointing them somewhere new is both
-// simpler and strictly safer than trying to guarantee a wipe succeeded.
 let dbGeneration = 0;
 
 /** Wipes all test state and returns a fresh, initialised database. */
 async function freshDatabase() {
-    // Stop the previous instance's debounced writer BEFORE moving on. This is
-    // not housekeeping: the old module instance survives in the timer's
-    // closure holding its own in-memory database, and a flush landing after
-    // the switch would write stale data into the new location.
     try {
         require('../src/services/database').stopPersistence();
     } catch (e) { /* not loaded yet */ }
@@ -110,14 +74,6 @@ async function freshDatabase() {
     ensureDir(path.join(root, 'data'));
     process.env.PERSIST_ROOT = root;
 
-    // Drop every cached module that captured state at require time: the
-    // database handle, the auth secret and its secret-file path, rate-limit
-    // buckets, session registries. Without this, suite N sees suite N-1's
-    // users regardless of where the file lives.
-    // These paths must exactly match the real file locations — a wrong path
-    // silently fails (caught below) and leaves the previous test's module
-    // state in place. Run `node -e "require.resolve('<path>')"` from the
-    // tests/ directory to verify each one.
     for (const mod of [
         '../src/services/database',
         '../src/config/auth',
@@ -152,10 +108,40 @@ async function freshDatabase() {
     const db = require('../src/services/database');
     await db.initDatabase();
 
-    // Assert the isolation the rest of the suite depends on, rather than
-    // assuming it. If this ever fails, every subsequent expectation is
-    // meaningless, so failing here with a clear message is the point.
-    const existing = db.countUsers();
+    if (process.env.DATABASE_URL) {
+        const { validateTestDatabaseTarget, verifyConnectedDatabase } = require('../src/utils/test-db-guard');
+        const { dbName } = validateTestDatabaseTarget({
+            connectionString: process.env.DATABASE_URL,
+            env: process.env,
+            requireDestructiveOptIn: true
+        });
+
+        const { getPool } = require('../src/services/db-pool');
+        const p = getPool();
+        if (p) {
+            // Verify connected database identity matches the authorized test database
+            await verifyConnectedDatabase(p, dbName);
+
+            await p.query('DELETE FROM users');
+
+            // Verify no orphaned rows remain in any application table
+            const appTables = [
+                'contacts', 'messages', 'chatbot_rules', 'scheduled_messages',
+                'settings', 'products', 'crm_deals', 'crm_activities', 'lead_analysis',
+                'google_calendar_accounts', 'google_calendar_synced_events',
+                'availability_settings', 'appointments'
+            ];
+            for (const table of appTables) {
+                const check = await p.query(`SELECT COUNT(*) as count FROM ${table}`);
+                const count = Number(check.rows[0]?.count || 0);
+                if (count !== 0) {
+                    throw new Error(`Test isolation broken: table "${table}" has ${count} non-user-owned or orphaned row(s) after reset.`);
+                }
+            }
+        }
+    }
+
+    const existing = await db.countUsers();
     if (existing !== 0) {
         throw new Error(`Test isolation broken: fresh database already contains ${existing} user(s) at ${root}`);
     }
@@ -163,22 +149,14 @@ async function freshDatabase() {
     return db;
 }
 
-/**
- * Builds the real Express app.
- *
- * whatsapp-web.js is stubbed at the module level: launching real Chrome
- * processes in a test suite is slow, flaky, and would attempt real network
- * connections to WhatsApp. The stub keeps the surface the app uses
- * (initWhatsAppClient/getStatus/sendTextMessage/…) so route behaviour,
- * authorization and tenant scoping are all still exercised for real.
- */
+/** Builds the real Express app. */
 function createTestApp() {
     const { createApp } = require('../src/config/app');
     return createApp();
 }
 
 /** Signs up a user through the real HTTP route and returns their cookie. */
-async function signup(agentOrApp, { email, password = 'ValidPass123!', businessName, ownerName } = {}) {
+async function signup(agentOrApp, { email, password = 'ValidPass123!', businessName, ownerName, autoApprove = true } = {}) {
     const request = require('supertest');
     const res = await request(agentOrApp)
         .post('/api/auth/signup')
@@ -186,10 +164,25 @@ async function signup(agentOrApp, { email, password = 'ValidPass123!', businessN
     if (res.status !== 200) {
         throw new Error(`signup failed (${res.status}): ${JSON.stringify(res.body)}`);
     }
+
+    let user = res.body.data;
+    let cookie = null;
+
+    if (res.headers['set-cookie'] && res.headers['set-cookie'][0]) {
+        cookie = res.headers['set-cookie'][0].split(';')[0];
+    } else if (autoApprove && user) {
+        const { updateUser, getUserById } = require('../src/services/database');
+        const { createSessionToken } = require('../src/config/auth');
+        await updateUser(user.id, { status: 'active', wa_enabled: 1 });
+        user = await getUserById(user.id);
+        cookie = `wa_session=${encodeURIComponent(createSessionToken(user))}`;
+    }
+
     return {
-        user: res.body.data,
-        cookie: res.headers['set-cookie'][0].split(';')[0],
-        password
+        user,
+        cookie,
+        password,
+        rawResponse: res
     };
 }
 
@@ -199,11 +192,12 @@ async function createUserDirect(overrides = {}) {
     const { hashPassword, createSessionToken } = require('../src/config/auth');
     const email = overrides.email || `u${Date.now()}${Math.random().toString(36).slice(2, 8)}@example.com`;
     const password = overrides.password || 'ValidPass123!';
-    const user = createUser({
+    const user = await createUser({
         email,
         passwordHash: await hashPassword(password),
         businessName: overrides.businessName || 'Test Business',
-        ownerName: overrides.ownerName || 'Test Owner'
+        ownerName: overrides.ownerName || 'Test Owner',
+        status: overrides.status || 'active'
     });
     return {
         user,
@@ -232,19 +226,27 @@ global.signup = signup;
 global.createUserDirect = createUserDirect;
 global.withRateLimits = withRateLimits;
 
-afterAll(async () => {
-    // Same ordering rationale as freshDatabase: stop the debounced writer
-    // before removing the directory it writes to, or the run ends with a
-    // spurious ENOENT and Jest reports a lingering handle.
-    try { require('../src/services/database').stopPersistence(); } catch (e) {}
-    try { await require('../src/services/whatsapp-client').destroyAllClients(); } catch (e) {}
-    try { require('../src/services/outreach').cancelAllOutreachJobs(); } catch (e) {}
-    try { require('../src/services/lead-analyzer').clearPendingAutoAnalyses(); } catch (e) {}
-    try { require('../src/services/scheduler').stopScheduler(); } catch (e) {}
-    rmrf(TEST_ROOT);
-});
+module.exports = {
+    TEST_ROOT,
+    freshDatabase,
+    createTestApp,
+    signup,
+    createUserDirect,
+    withRateLimits
+};
 
-jest.setTimeout(30000);
+if (typeof afterAll === 'function') {
+    afterAll(async () => {
+        try { require('../src/services/database').stopPersistence(); } catch (e) {}
+        try { await require('../src/services/whatsapp-client').destroyAllClients(); } catch (e) {}
+        try { require('../src/services/outreach').cancelAllOutreachJobs(); } catch (e) {}
+        try { require('../src/services/lead-analyzer').clearPendingAutoAnalyses(); } catch (e) {}
+        try { require('../src/services/scheduler').stopScheduler(); } catch (e) {}
+        try { require('../src/services/db-pool').closePool().catch(() => {}); } catch (e) {}
+        rmrf(TEST_ROOT);
+    });
+}
 
-
-
+if (typeof jest !== 'undefined' && typeof jest.setTimeout === 'function') {
+    jest.setTimeout(30000);
+}

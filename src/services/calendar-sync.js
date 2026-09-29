@@ -31,7 +31,7 @@ function initCalendarSync() {
         if (isRunning) return; // a slow tick shouldn't pile up alongside the next one
         isRunning = true;
         try {
-            const userIds = getAllConnectedCalendarUserIds();
+            const userIds = await getAllConnectedCalendarUserIds();
             for (const userId of userIds) {
                 try {
                     const imported = await syncEventsToScheduledMessages(userId);

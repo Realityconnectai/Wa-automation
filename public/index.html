@@ -6,7 +6,7 @@
     <title>WhatsApp Automation — Dashboard</title>
     <meta name="description" content="Manage your WhatsApp Business automation — chatbot rules, contacts, scheduled messages and analytics.">
     <meta name="theme-color" content="#0D4530">
-    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/style.css?v=20260917_4">
 </head>
 <body>
 
@@ -264,25 +264,7 @@
 
             <div id="messagesError" style="display:none"></div>
 
-            <!-- Quick Send -->
-            <div class="card quick-send-card">
-                <h2 class="card-title"><span data-icon="send" data-icon-class="icon-inline" aria-hidden="true"></span>Quick Send</h2>
-                <form id="quickSendForm" class="quick-send-form" novalidate>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="qsPhone">Phone Number</label>
-                            <input type="tel" id="qsPhone" placeholder="e.g. 919876543210" required autocomplete="tel">
-                        </div>
-                        <div class="form-group">
-                            <label for="qsMessage">Message</label>
-                            <textarea id="qsMessage" rows="2" placeholder="Type your message…" required></textarea>
-                        </div>
-                    </div>
-                    <button type="submit" class="btn btn-primary" id="quickSendBtn">
-                        <span class="btn-icon" data-icon="send" aria-hidden="true"></span> Send Message
-                    </button>
-                </form>
-            </div>
+
 
             <div class="toolbar">
                 <div class="search-box">
@@ -1014,9 +996,55 @@
                         </div>
 
                         <div class="form-group">
-                            <label for="settGeminiApiKey">Google Gemini API Key</label>
-                            <input type="password" id="settGeminiApiKey" placeholder="Enter your Gemini API Key" autocomplete="new-password">
-                            <p class="form-text">Get a free key from <a href="https://aistudio.google.com/" target="_blank" rel="noopener noreferrer">Google AI Studio</a>.</p>
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                                <label for="settGeminiApiKey" style="margin-bottom:0">Google Gemini API Key</label>
+                                <span id="settGeminiApiKeyStatus" class="badge" style="display:none;font-size:0.75rem;padding:2px 8px;border-radius:12px;"></span>
+                            </div>
+                            <div style="display:flex;gap:8px;align-items:center;">
+                                <input type="password" id="settGeminiApiKey" placeholder="Enter your Gemini API Key" autocomplete="new-password" style="flex:1;">
+                                <button type="button" class="btn btn-sm btn-secondary" id="testGeminiApiKeyBtn" style="white-space:nowrap;">Test Key</button>
+                                <button type="button" class="btn btn-sm btn-danger" id="removeGeminiApiKeyBtn" style="white-space:nowrap;display:none;">Remove</button>
+                            </div>
+                            <p class="form-text" id="settGeminiApiKeyHelp">Get a free key from <a href="https://aistudio.google.com/" target="_blank" rel="noopener noreferrer">Google AI Studio</a>.</p>
+                        </div>
+
+                        <div class="form-group" style="margin-top:12px;">
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                                <label for="settGeminiModel" style="margin-bottom:0">Gemini AI Model</label>
+                                <span class="badge" style="background:rgba(16,185,129,0.15);color:#10b981;font-size:0.75rem;padding:2px 8px;border-radius:12px;">Auto-Fallback Protected</span>
+                            </div>
+                            <select id="settGeminiModel" style="width:100%;">
+                                <option value="auto">Auto (Recommended — Best Speed &amp; Automatic Fallback)</option>
+                                <optgroup label="Fast &amp; Efficient (WhatsApp Chatbot Recommended)">
+                                    <option value="gemini-3.8-flash">Gemini 3.8 Flash (Latest Flagship Fast &amp; Agentic)</option>
+                                    <option value="gemini-3.7-flash">Gemini 3.7 Flash (High Performance)</option>
+                                    <option value="gemini-3.6-flash">Gemini 3.6 Flash (Complex Workflows &amp; Reasoning)</option>
+                                    <option value="gemini-3.5-flash">Gemini 3.5 Flash (Fast &amp; Capable)</option>
+                                    <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite (High Throughput &amp; Ultra-low Latency)</option>
+                                    <option value="gemini-2.5-flash">Gemini 2.5 Flash (Next-Gen Fast)</option>
+                                    <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite (Cost-efficient Fast)</option>
+                                    <option value="gemini-2.0-flash">Gemini 2.0 Flash (Default — High Speed &amp; Reliability)</option>
+                                    <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash Lite (Cost-efficient &amp; Low Latency)</option>
+                                    <option value="gemini-1.5-flash">Gemini 1.5 Flash (Stable)</option>
+                                    <option value="gemini-1.5-flash-8b">Gemini 1.5 Flash 8B (High Throughput)</option>
+                                </optgroup>
+                                <optgroup label="Advanced Reasoning &amp; Deep Intelligence">
+                                    <option value="gemini-3.1-pro">Gemini 3.1 Pro (Frontier Reasoning &amp; Complex Code)</option>
+                                    <option value="gemini-2.5-pro">Gemini 2.5 Pro (Next-Gen Frontier Reasoning)</option>
+                                    <option value="gemini-2.0-pro-exp-02-05">Gemini 2.0 Pro Experimental</option>
+                                    <option value="gemini-1.5-pro">Gemini 1.5 Pro (2M Token Context)</option>
+                                    <option value="gemini-3.8-live">Gemini 3.8 Live (Multimodal Real-Time)</option>
+                                    <option value="gemini-2.0-flash-thinking-exp-01-21">Gemini 2.0 Flash Thinking Exp</option>
+                                </optgroup>
+                                <optgroup label="Future-Proof / Custom">
+                                    <option value="custom">Custom Model Name...</option>
+                                </optgroup>
+                            </select>
+                            <div id="customModelWrapper" style="display:none;margin-top:8px;">
+                                <input type="text" id="settGeminiCustomModel" placeholder="e.g. gemini-3.0-flash or gemini-3.5-pro" style="width:100%;">
+                                <p class="form-text">Type any future model name from Google AI Studio. It will be prioritized first.</p>
+                            </div>
+                            <p class="form-text">If a model is busy, rate-limited, or unavailable, the system automatically falls back down the list to maintain service availability for WhatsApp replies.</p>
                         </div>
 
                         <button type="submit" class="btn btn-primary" id="saveAiBtn">Save AI Persona Settings</button>
@@ -1250,6 +1278,6 @@
 
 <script src="js/chart.umd.min.js"></script>
 <script src="js/icons.js"></script>
-<script src="js/app.js"></script>
+<script src="js/app.js?v=20260919_4"></script>
 </body>
 </html>

@@ -34,6 +34,8 @@ coverage/
 # Logs & Debugging
 logs
 *.log
+*.err
+server.err
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -49,11 +51,40 @@ Thumbs.db
 *.swo
 *~
 
-# Private Keys & Certificates
+# Private Keys, Certificates & Credentials
 *.pem
-keys/*.pem
-!keys/id_rsa.pem
-!keys/id_rsa.pub
+*.key
+*.pkcs12
+*.pfx
+*.p12
+id_rsa*
+keys/
+
+# Database Backups & Dumps
+backups/
+*.bak
+
+# Authentication Cookies & Test Tokens
+*.cookie
+*.cookies
+*cookies.txt
+
+# Local Operational & Test Scripts
+test_*.sh
+check_users.sh
+deploy.sh
+deploy.ps1
+scripts/admin-test.sh
+scripts/reset-pending.sh
+
+# Archives & Bundles
+dist/
+scratch/
+*.zip
+*.tar.gz
+*.tgz
+deploy.zip
+inboxforge.zip
 
 # Runtime & Generated Media
 media_*.png
@@ -61,8 +92,12 @@ media_*.png
 # Scratch scripts & foreign project artifacts
 patch_csp.py
 check_db.js
+create-demo-admin.js
+inboxforge*
+*inboxforge*
 gmail-src/
 *_gmail.*
 *-deploy-aws.sh
 deploy-*.sh
-AWS_DEPLOYMENT.md
+AWS_DEPLOYMENT.md
+

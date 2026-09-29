@@ -7,13 +7,37 @@ const API = '';
 // ─── State ──────────────────────────────────────────────────
 let currentSection = 'dashboard';
 let CURRENT_USER = null;
+let CURRENT_ACCESS_TOKEN = null;
+
+async function refreshSession() {
+    try {
+        const res = await fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' });
+        if (res.ok) {
+            const data = await res.json();
+            if (data.accessToken) {
+                CURRENT_ACCESS_TOKEN = data.accessToken;
+                return true;
+            }
+        }
+    } catch (e) {}
+    return false;
+}
 
 // ─── Auth gate ──────────────────────────────────────────────
 // Every page under /app requires a logged-in session. If the cookie is
 // missing/expired the API returns 401 and we bounce to the login page.
 async function checkAuth() {
     try {
-        const res = await fetch('/api/auth/me');
+        if (!CURRENT_ACCESS_TOKEN) {
+            const ok = await refreshSession();
+            if (!ok) {
+                window.location.href = '/login';
+                return false;
+            }
+        }
+        const res = await fetch('/api/auth/me', {
+            headers: { 'Authorization': `Bearer ${CURRENT_ACCESS_TOKEN}` }
+        });
         if (!res.ok) {
             window.location.href = '/login';
             return false;
@@ -44,14 +68,28 @@ async function logout() {
 // ─── API Client ─────────────────────────────────────────────
 async function api(endpoint, options = {}) {
     try {
-        const res = await fetch(`${API}${endpoint}`, {
-            headers: { 'Content-Type': 'application/json', ...options.headers },
-            ...options
+        let headers = { 'Content-Type': 'application/json', ...options.headers };
+        if (CURRENT_ACCESS_TOKEN) {
+            headers['Authorization'] = `Bearer ${CURRENT_ACCESS_TOKEN}`;
+        }
+        
+        let res = await fetch(`${API}${endpoint}`, {
+            ...options,
+            headers
         });
+        
         if (res.status === 401) {
-            // Session expired or account signed out elsewhere — send them back to login.
-            window.location.href = '/login';
-            throw new Error('Not authenticated');
+            const ok = await refreshSession();
+            if (ok) {
+                headers['Authorization'] = `Bearer ${CURRENT_ACCESS_TOKEN}`;
+                res = await fetch(`${API}${endpoint}`, {
+                    ...options,
+                    headers
+                });
+            } else {
+                window.location.href = '/login';
+                throw new Error('Not authenticated');
+            }
         }
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'API request failed');
@@ -1632,7 +1670,54 @@ async function loadSettings() {
         set('settOwnerName',      settings.owner_name);
         set('settAiMode',         settings.ai_mode || 'ai_first');
         set('settAiSystemPrompt', settings.ai_system_prompt);
-        set('settGeminiApiKey',   settings.gemini_api_key);
+        const keyInput = document.getElementById('settGeminiApiKey');
+        const statusBadge = document.getElementById('settGeminiApiKeyStatus');
+        const removeBtn = document.getElementById('removeGeminiApiKeyBtn');
+        const helpText = document.getElementById('settGeminiApiKeyHelp');
+
+        if (keyInput) {
+            keyInput.value = '';
+            if (settings.gemini_api_key_set) {
+                keyInput.placeholder = '•••••••••••••••• (Key saved — leave blank to keep)';
+                if (statusBadge) {
+                    statusBadge.style.display = 'inline-block';
+                    statusBadge.style.backgroundColor = 'rgba(34, 197, 94, 0.15)';
+                    statusBadge.style.color = '#22c55e';
+                    statusBadge.textContent = 'Active ✓';
+                }
+                if (removeBtn) removeBtn.style.display = 'inline-block';
+                if (helpText) helpText.innerHTML = 'Key is securely configured. Leave blank to keep current key, or enter a new key to update. Get a key from <a href="https://aistudio.google.com/" target="_blank" rel="noopener noreferrer">Google AI Studio</a>.';
+            } else {
+                keyInput.placeholder = 'Enter your Gemini API Key';
+                if (statusBadge) {
+                    statusBadge.style.display = 'inline-block';
+                    statusBadge.style.backgroundColor = 'rgba(239, 68, 68, 0.15)';
+                    statusBadge.style.color = '#ef4444';
+                    statusBadge.textContent = 'Not Set';
+                }
+                if (removeBtn) removeBtn.style.display = 'none';
+                if (helpText) helpText.innerHTML = 'Get a free key from <a href="https://aistudio.google.com/" target="_blank" rel="noopener noreferrer">Google AI Studio</a>.';
+            }
+        }
+
+        const savedModel = settings.gemini_model || 'auto';
+        const modelSelect = document.getElementById('settGeminiModel');
+        const customWrapper = document.getElementById('customModelWrapper');
+        const customInput = document.getElementById('settGeminiCustomModel');
+
+        if (modelSelect) {
+            const knownOptions = Array.from(modelSelect.options).map(o => o.value);
+            if (knownOptions.includes(savedModel)) {
+                modelSelect.value = savedModel;
+                if (customWrapper) customWrapper.style.display = 'none';
+            } else {
+                modelSelect.value = 'custom';
+                if (customWrapper) {
+                    customWrapper.style.display = 'block';
+                    if (customInput) customInput.value = savedModel;
+                }
+            }
+        }
 
         // Business Setup tab data
         loadBusiness();
@@ -2097,7 +2182,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // ── Quick send form ─────────────────────────────────────
-    document.getElementById('quickSendForm').addEventListener('submit', async (e) => {
+    document.getElementById('quickSendForm')?.addEventListener('submit', async (e) => {
         e.preventDefault();
         const phone   = document.getElementById('qsPhone').value.trim();
         const message = document.getElementById('qsMessage').value.trim();
@@ -2515,22 +2600,109 @@ document.addEventListener('DOMContentLoaded', async () => {
         btn.disabled = true;
         btn.textContent = 'Saving…';
         try {
+            const payload = {
+                ai_enabled:       document.getElementById('settAiEnabled')?.checked   ? 'true' : 'false',
+                owner_name:       document.getElementById('settOwnerName')?.value     || '',
+                ai_mode:          document.getElementById('settAiMode')?.value        || 'ai_first',
+                ai_system_prompt: document.getElementById('settAiSystemPrompt')?.value || ''
+            };
+
+            // If AI is enabled, ensure chatbot auto-replies are enabled
+            if (payload.ai_enabled === 'true') {
+                payload.chatbot_enabled = 'true';
+                const cb = document.getElementById('settChatbotEnabled');
+                if (cb) cb.checked = true;
+            }
+
+            const newKey = document.getElementById('settGeminiApiKey')?.value?.trim();
+            // Only send gemini_api_key if user typed something new. Leaving blank keeps current key!
+            if (newKey) {
+                payload.gemini_api_key = newKey;
+            }
+
+            const modelSelect = document.getElementById('settGeminiModel');
+            let chosenModel = modelSelect?.value || 'auto';
+            if (chosenModel === 'custom') {
+                chosenModel = document.getElementById('settGeminiCustomModel')?.value?.trim() || 'auto';
+            }
+            payload.gemini_model = chosenModel;
+
             await api('/api/settings', {
                 method: 'PUT',
-                body: JSON.stringify({
-                    ai_enabled:       document.getElementById('settAiEnabled')?.checked   ? 'true' : 'false',
-                    owner_name:       document.getElementById('settOwnerName')?.value     || '',
-                    ai_mode:          document.getElementById('settAiMode')?.value        || 'ai_first',
-                    ai_system_prompt: document.getElementById('settAiSystemPrompt')?.value || '',
-                    gemini_api_key:   document.getElementById('settGeminiApiKey')?.value  || ''
-                })
+                body: JSON.stringify(payload)
             });
             showToast('AI Persona Settings saved!', 'success');
+            loadSettings();
+            loadDashboard();
         } catch (err) {
             showToast('Failed to save AI settings', 'error');
         } finally {
             btn.disabled = false;
             btn.textContent = 'Save AI Persona Settings';
+        }
+    });
+
+    // ── Gemini Model Custom Toggle ───────────────────────────
+    document.getElementById('settGeminiModel')?.addEventListener('change', (e) => {
+        const customWrapper = document.getElementById('customModelWrapper');
+        if (customWrapper) {
+            customWrapper.style.display = e.target.value === 'custom' ? 'block' : 'none';
+        }
+    });
+
+    // ── Test Gemini API Key ─────────────────────────────────
+    document.getElementById('testGeminiApiKeyBtn')?.addEventListener('click', async () => {
+        const btn = document.getElementById('testGeminiApiKeyBtn');
+        const keyInput = document.getElementById('settGeminiApiKey');
+        const keyVal = keyInput?.value?.trim();
+        const modelSelect = document.getElementById('settGeminiModel');
+        let preferredModel = modelSelect?.value || 'auto';
+        if (preferredModel === 'custom') {
+            preferredModel = document.getElementById('settGeminiCustomModel')?.value?.trim() || '';
+        }
+
+        btn.disabled = true;
+        btn.textContent = 'Testing…';
+        try {
+            const resp = await fetch('/api/settings/test-gemini', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: keyVal || '', model: preferredModel || '' })
+            });
+            if (resp.status === 401) {
+                window.location.href = '/login';
+                return;
+            }
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data.success) {
+                throw new Error(data.error || 'Gemini connection test failed');
+            }
+            const modelName = data.model || data.data?.model || 'Gemini';
+            showToast(`Gemini connected successfully! (Model: ${modelName})`, 'success');
+            if (keyVal) {
+                showToast('Key is valid! Click "Save AI Persona Settings" to save it.', 'info');
+            }
+        } catch (err) {
+            showToast(err.message || 'Gemini test failed', 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Test Key';
+        }
+    });
+
+    // ── Remove Gemini API Key ───────────────────────────────
+    document.getElementById('removeGeminiApiKeyBtn')?.addEventListener('click', async () => {
+        if (!confirm('Are you sure you want to remove your Gemini API key? AI auto-replies will stop working until a new key is provided.')) return;
+        try {
+            await api('/api/settings', {
+                method: 'PUT',
+                body: JSON.stringify({ gemini_api_key: '' })
+            });
+            showToast('Gemini API key removed', 'success');
+            loadSettings();
+            loadDashboard();
+        } catch (err) {
+            showToast('Failed to remove API key', 'error');
         }
     });
 

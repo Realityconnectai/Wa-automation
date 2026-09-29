@@ -178,10 +178,15 @@ app.get('/health', (req, res) => {
     // app would accept work it silently cannot keep — a load balancer should
     // stop sending traffic here. Public, so it exposes booleans only, no
     // paths, versions, or error text.
-    app.get('/ready', (req, res) => {
+    app.get('/ready', async (req, res) => {
         const persist = getPersistHealth();
         let dbReadable = false;
-        try { countUsers(); dbReadable = true; } catch (e) { dbReadable = false; }
+        try {
+            await countUsers();
+            dbReadable = true;
+        } catch (e) {
+            dbReadable = false;
+        }
 
         const ready = dbReadable && persist.ok;
         // Only return a plain boolean — internal check details (databaseReadable,
@@ -194,13 +199,13 @@ app.get('/health', (req, res) => {
     // Detailed metrics are admin-only: session counts, memory, and failure
     // counters are exactly the reconnaissance an attacker wants, and event
     // loop lag tells them when the server is under strain.
-    app.get('/api/metrics', requireAdmin, (req, res) => {
+    app.get('/api/metrics', requireAdmin, async (req, res) => {
         res.json({
             success: true,
             data: {
                 ...snapshot(),
                 whatsapp: getSessionMetrics(),
-                database: { ...getPersistHealth(), schemaVersion: getSchemaVersion() },
+                database: { ...getPersistHealth(), schemaVersion: await getSchemaVersion() },
                 sessionSecretSource: SESSION_SECRET_SOURCE
             }
         });

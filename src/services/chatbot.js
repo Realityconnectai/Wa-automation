@@ -57,10 +57,10 @@ function isRateLimited(userId, phone) {
 }
 
 /** True if this account has hit its plan's monthly outgoing-message cap (0 = unlimited). */
-function isOverPlanLimit(userId) {
-    const account = getUserById(userId);
+async function isOverPlanLimit(userId) {
+    const account = await getUserById(userId);
     if (!account || !account.message_limit) return false;
-    return getMonthlyOutgoingCount(userId) >= account.message_limit;
+    return (await getMonthlyOutgoingCount(userId)) >= account.message_limit;
 }
 
 /**
@@ -138,7 +138,7 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
 
     // Always log incoming message to database
     try {
-        logMessage(userId, {
+        await logMessage(userId, {
             phone,
             contactName,
             direction: 'incoming',
@@ -160,28 +160,28 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
         return { replied: false, reason: 'rate_limit' };
     }
 
-    if (isOverPlanLimit(userId)) {
+    if (await isOverPlanLimit(userId)) {
         console.log(`⚠️ Account ${userId} has hit its monthly message limit — skipping auto-reply.`);
         return { replied: false, reason: 'plan_limit_reached' };
     }
 
-    const chatbotEnabled = getSetting(userId, 'chatbot_enabled');
+    const chatbotEnabled = await getSetting(userId, 'chatbot_enabled');
     if (chatbotEnabled !== 'true') {
         return { replied: false, reason: 'chatbot_disabled' };
     }
 
-    const aiEnabled = getSetting(userId, 'ai_enabled');
-    const aiMode = getSetting(userId, 'ai_mode') || 'ai_first';
+    const aiEnabled = await getSetting(userId, 'ai_enabled');
+    const aiMode = (await getSetting(userId, 'ai_mode')) || 'ai_first';
 
     // ── 1. AI-FIRST PERSONA MODE ──────
     if (aiEnabled === 'true' && aiMode === 'ai_first') {
-        const aiSystemPrompt = getSetting(userId, 'ai_system_prompt');
-        const recentHistory = getConversation(userId, phone, { limit: AI_CONTEXT_MESSAGES });
+        const aiSystemPrompt = await getSetting(userId, 'ai_system_prompt');
+        const recentHistory = await getConversation(userId, phone, { limit: AI_CONTEXT_MESSAGES });
 
         try {
             const aiResponse = await generateReply(userId, aiSystemPrompt, recentHistory, contactName, phone);
             await safeReply(client, phone, aiResponse, msg);
-            logMessage(userId, { phone, contactName, direction: 'outgoing', body: aiResponse });
+            await logMessage(userId, { phone, contactName, direction: 'outgoing', body: aiResponse });
             return { replied: true, rule: 'ai_persona', response: aiResponse };
         } catch (aiErr) {
             console.warn('⚠️ AI Persona Mode failed (falling back to rules/default reply):', aiErr.message?.split('\n')[0]);
@@ -189,19 +189,19 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
     }
 
     // ── 2. STATIC AWAY MODE ───────
-    const awayMode = getSetting(userId, 'away_mode');
+    const awayMode = await getSetting(userId, 'away_mode');
     if (awayMode === 'true') {
-        const awayMessage = getSetting(userId, 'away_message');
+        const awayMessage = await getSetting(userId, 'away_message');
         if (awayMessage) {
             await safeReply(client, phone, awayMessage, msg);
-            logMessage(userId, { phone, contactName, direction: 'outgoing', body: awayMessage });
+            await logMessage(userId, { phone, contactName, direction: 'outgoing', body: awayMessage });
             return { replied: true, rule: 'away_mode', response: awayMessage };
         }
     }
 
     // ── 3. KEYWORD RULES ──
     const text = messageText.trim().toLowerCase();
-    const rules = getChatbotRules(userId, true);
+    const rules = await getChatbotRules(userId, true);
 
     for (const rule of rules) {
         if (!ruleMatches(rule, text)) continue;
@@ -211,8 +211,8 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
         response = response.replace(/\{phone\}/gi, phone);
 
         await safeReply(client, phone, response, msg);
-        logMessage(userId, { phone, contactName, direction: 'outgoing', body: response });
-        incrementRuleHitCount(userId, rule.id);
+        await logMessage(userId, { phone, contactName, direction: 'outgoing', body: response });
+        await incrementRuleHitCount(userId, rule.id);
 
         return {
             replied: true,
@@ -225,13 +225,13 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
 
     // ── 4. AI Fallback (rules_first mode, nothing matched) ──
     if (aiEnabled === 'true') {
-        const aiSystemPrompt = getSetting(userId, 'ai_system_prompt');
-        const recentHistory = getConversation(userId, phone, { limit: AI_CONTEXT_MESSAGES });
+        const aiSystemPrompt = await getSetting(userId, 'ai_system_prompt');
+        const recentHistory = await getConversation(userId, phone, { limit: AI_CONTEXT_MESSAGES });
 
         try {
             const aiResponse = await generateReply(userId, aiSystemPrompt, recentHistory, contactName, phone);
             await safeReply(client, phone, aiResponse, msg);
-            logMessage(userId, { phone, contactName, direction: 'outgoing', body: aiResponse });
+            await logMessage(userId, { phone, contactName, direction: 'outgoing', body: aiResponse });
             return { replied: true, rule: 'ai_fallback', response: aiResponse };
         } catch (aiErr) {
             console.warn('⚠️ AI Fallback failed (falling back to default reply):', aiErr.message?.split('\n')[0]);
@@ -239,10 +239,10 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
     }
 
     // ── 5. Static Default Reply ──
-    const defaultReply = getSetting(userId, 'default_reply');
+    const defaultReply = await getSetting(userId, 'default_reply');
     if (defaultReply) {
         await safeReply(client, phone, defaultReply, msg);
-        logMessage(userId, { phone, contactName, direction: 'outgoing', body: defaultReply });
+        await logMessage(userId, { phone, contactName, direction: 'outgoing', body: defaultReply });
         return { replied: true, rule: 'default', response: defaultReply };
     }
 
@@ -257,9 +257,9 @@ function maskPhone(phone) {
 }
 
 // ─── Test a message against rules without sending ───────────
-function testMessage(userId, messageText) {
-    const aiEnabled = getSetting(userId, 'ai_enabled');
-    const aiMode = getSetting(userId, 'ai_mode') || 'ai_first';
+async function testMessage(userId, messageText) {
+    const aiEnabled = await getSetting(userId, 'ai_enabled');
+    const aiMode = (await getSetting(userId, 'ai_mode')) || 'ai_first';
 
     if (aiEnabled === 'true' && aiMode === 'ai_first') {
         return {
@@ -272,7 +272,7 @@ function testMessage(userId, messageText) {
     }
 
     const text = String(messageText).trim().toLowerCase();
-    const rules = getChatbotRules(userId, true);
+    const rules = await getChatbotRules(userId, true);
 
     // Same matcher as the live path — see ruleMatches.
     for (const rule of rules) {
@@ -295,7 +295,7 @@ function testMessage(userId, messageText) {
         };
     }
 
-    const defaultReply = getSetting(userId, 'default_reply');
+    const defaultReply = await getSetting(userId, 'default_reply');
     return {
         matched: false,
         willSendDefault: !!defaultReply,

@@ -113,7 +113,7 @@ describe('Authentication & session security', () => {
             expect(results.filter(r => r.status >= 500)).toHaveLength(0);
 
             const { countUsers } = require('../src/services/database');
-            expect(countUsers()).toBe(1);
+            expect(await countUsers()).toBe(1);
         });
 
         test('never returns the password hash', async () => {
@@ -123,8 +123,13 @@ describe('Authentication & session security', () => {
             expect(res.body.data.password_hash).toBeUndefined();
             expect(JSON.stringify(res.body)).not.toMatch(/\$2[aby]\$/);
 
+            // Once approved and logged in, /me also never returns hash
+            const { updateUser } = require('../src/services/database');
+            updateUser(res.body.data.id, { status: 'active' });
+            const loginRes = await request(app).post('/api/auth/login')
+                .send({ email: 'nohash@example.com', password: 'ValidPass123!' });
             const me = await request(app).get('/api/auth/me')
-                .set('Cookie', res.headers['set-cookie'][0]);
+                .set('Cookie', loginRes.headers['set-cookie'][0]);
             expect(me.body.data.password_hash).toBeUndefined();
         });
 
@@ -137,8 +142,19 @@ describe('Authentication & session security', () => {
             expect(res.status).toBe(400);
         });
 
-        test('sets a hardened session cookie', async () => {
+        test('signup requires admin approval and does not set session cookie', async () => {
             const res = await request(app).post('/api/auth/signup')
+                .send({ email: 'approval@example.com', password: 'ValidPass123!' });
+
+            expect(res.status).toBe(200);
+            expect(res.body.pendingApproval).toBe(true);
+            expect(res.body.data.status).toBe('pending');
+            expect(res.headers['set-cookie']).toBeUndefined();
+        });
+
+        test('sets a hardened session cookie on login', async () => {
+            await signup(app, { email: 'cookie@example.com', password: 'ValidPass123!' });
+            const res = await request(app).post('/api/auth/login')
                 .send({ email: 'cookie@example.com', password: 'ValidPass123!' });
 
             const cookie = res.headers['set-cookie'][0];
@@ -209,7 +225,8 @@ describe('Authentication & session security', () => {
 
         test('rejects a suspended account with 403', async () => {
             const { getUserByEmail, updateUser } = require('../src/services/database');
-            updateUser(getUserByEmail('login@test.com').id, { status: 'suspended' });
+            const user = await getUserByEmail('login@test.com');
+            await updateUser(user.id, { status: 'suspended' });
 
             const res = await request(app).post('/api/auth/login')
                 .send({ email: 'login@test.com', password: 'ValidPass123!' });
@@ -601,6 +618,62 @@ describe('Authentication & session security', () => {
                     process.env.SESSION_SECRET = prevSecret;
                 }
             });
+        });
+    });
+
+    // ─────────────────────────────────────────────────────────
+    describe('Admin approval workflow', () => {
+        test('pending user cannot log in and receives 403 ACCOUNT_PENDING', async () => {
+            await request(app).post('/api/auth/signup')
+                .send({ email: 'waiting@example.com', password: 'ValidPass123!' });
+
+            const login = await request(app).post('/api/auth/login')
+                .send({ email: 'waiting@example.com', password: 'ValidPass123!' });
+
+            expect(login.status).toBe(403);
+            expect(login.body.code).toBe('ACCOUNT_PENDING');
+            expect(login.body.error).toMatch(/pending administrator approval/i);
+        });
+
+        test('admin can approve a pending user, allowing them to log in', async () => {
+            const admin = await createUserDirect({ email: 'admin@approve.test' });
+            const { updateUser } = require('../src/services/database');
+            await updateUser(admin.user.id, { role: 'admin' });
+
+            const signupRes = await request(app).post('/api/auth/signup')
+                .send({ email: 'candidate@example.com', password: 'ValidPass123!' });
+            const candidateId = signupRes.body.data.id;
+
+            const approveRes = await request(app).post(`/api/admin/users/${candidateId}/approve`)
+                .set('Cookie', admin.cookie);
+            expect(approveRes.status).toBe(200);
+            expect(approveRes.body.data.status).toBe('active');
+
+            const loginRes = await request(app).post('/api/auth/login')
+                .send({ email: 'candidate@example.com', password: 'ValidPass123!' });
+            expect(loginRes.status).toBe(200);
+            expect(loginRes.body.data.status).toBe('active');
+            expect(loginRes.headers['set-cookie']).toBeDefined();
+        });
+
+        test('admin can reject a pending user, blocking their login', async () => {
+            const admin = await createUserDirect({ email: 'admin2@approve.test' });
+            const { updateUser } = require('../src/services/database');
+            await updateUser(admin.user.id, { role: 'admin' });
+
+            const signupRes = await request(app).post('/api/auth/signup')
+                .send({ email: 'declined@example.com', password: 'ValidPass123!' });
+            const candidateId = signupRes.body.data.id;
+
+            const rejectRes = await request(app).post(`/api/admin/users/${candidateId}/reject`)
+                .set('Cookie', admin.cookie);
+            expect(rejectRes.status).toBe(200);
+            expect(rejectRes.body.data.status).toBe('rejected');
+
+            const loginRes = await request(app).post('/api/auth/login')
+                .send({ email: 'declined@example.com', password: 'ValidPass123!' });
+            expect(loginRes.status).toBe(403);
+            expect(loginRes.body.code).toBe('ACCOUNT_REJECTED');
         });
     });
 });

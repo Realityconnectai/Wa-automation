@@ -5,17 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Admin — WA Automation</title>
 <meta name="theme-color" content="#0A3325">
-<link rel="stylesheet" href="css/landing.css">
+<link rel="stylesheet" href="css/landing.css?v=20260919_5">
 </head>
 <body>
 
 <div class="admin-shell">
     <header class="admin-topbar">
-        <span class="brand"><span class="brand-mark"><span data-icon="message-circle" aria-hidden="true"></span></span> WA Automation <span class="admin-badge"><span data-icon="crown" aria-hidden="true"></span> Admin</span></span>
+        <span class="brand">
+            <span class="brand-mark"><span data-icon="message-circle" aria-hidden="true"></span></span>
+            <span>WA Automation</span>
+            <span class="admin-badge"><span data-icon="crown" aria-hidden="true"></span> Admin</span>
+        </span>
         <div class="admin-topbar-actions">
-            <span id="adminWhoami" style="color:var(--text-on-dark-muted);font-size:.85rem;font-weight:600;"></span>
-            <a href="/app" class="btn btn-ghost"><span data-icon="layout-dashboard" aria-hidden="true"></span> My Dashboard</a>
-            <button class="btn btn-ghost" id="logoutBtn"><span data-icon="log-out" aria-hidden="true"></span> Log Out</button>
+            <span id="adminWhoami"></span>
+            <a href="/app" class="btn btn-ghost"><span data-icon="layout-dashboard" aria-hidden="true"></span> <span class="topbar-btn-text">Dashboard</span></a>
+            <button class="btn btn-ghost" id="logoutBtn"><span data-icon="log-out" aria-hidden="true"></span> <span class="topbar-btn-text">Log Out</span></button>
         </div>
     </header>
 
@@ -24,27 +28,41 @@
             <!-- filled by admin.js -->
         </div>
 
+        <div class="approval-alert-banner" id="approvalAlertBanner" style="display:none">
+            <div class="banner-content">
+                <span data-icon="alert-circle" class="icon" aria-hidden="true"></span>
+                <span><strong id="pendingAlertCount">0</strong> new account registration(s) waiting for your approval.</span>
+            </div>
+            <button class="btn btn-warning-sm" id="viewPendingBtn" type="button">Review Pending Requests</button>
+        </div>
+
         <div class="admin-panel">
             <div class="admin-panel-head">
-                <h2><span data-icon="users" aria-hidden="true"></span> All Accounts</h2>
+                <h2><span data-icon="users" aria-hidden="true"></span> Accounts Management</h2>
                 <div class="admin-search">
                     <span data-icon="search" aria-hidden="true"></span>
                     <input type="search" id="userSearch" placeholder="Search by business or email…">
                 </div>
             </div>
-            <div style="overflow-x:auto">
+            <div class="admin-filter-bar" id="adminFilterBar">
+                <button type="button" class="filter-btn active" data-filter="all">All Accounts <span class="filter-badge" id="filterAllCount">0</span></button>
+                <button type="button" class="filter-btn filter-btn-pending" data-filter="pending">⏳ Pending Approval <span class="filter-badge" id="filterPendingCount">0</span></button>
+                <button type="button" class="filter-btn" data-filter="active">Active <span class="filter-badge" id="filterActiveCount">0</span></button>
+                <button type="button" class="filter-btn" data-filter="suspended">Suspended <span class="filter-badge" id="filterSuspendedCount">0</span></button>
+            </div>
+            <div class="admin-table-wrap" id="usersTableWrap">
                 <table class="admin-table" id="usersTable">
                     <thead>
                         <tr>
                             <th>Account</th>
                             <th>Role</th>
                             <th>Status</th>
-                            <th>WA Access</th>
                             <th>WhatsApp</th>
+                            <th style="text-align:center">WA Access</th>
                             <th>Usage</th>
                             <th>Plan / Limits</th>
                             <th>Joined</th>
-                            <th></th>
+                            <th class="th-actions">Actions</th>
                         </tr>
                     </thead>
                     <tbody id="usersBody"></tbody>
@@ -70,6 +88,15 @@
         <div class="form-field">
             <label>Owner Name</label>
             <input type="text" id="editOwnerName">
+        </div>
+        <div class="form-field">
+            <label>Status</label>
+            <select id="editStatus">
+                <option value="pending">Pending Approval</option>
+                <option value="active">Active</option>
+                <option value="suspended">Suspended</option>
+                <option value="rejected">Rejected</option>
+            </select>
         </div>
         <div class="form-field">
             <label>Role</label>
@@ -99,7 +126,7 @@
 
 <div class="toast-host" id="toastHost"></div>
 
-<script src="js/icons.js"></script>
-<script src="js/admin.js"></script>
+<script src="js/icons.js?v=20260919_1"></script>
+<script src="js/admin.js?v=20260919_1"></script>
 </body>
 </html>

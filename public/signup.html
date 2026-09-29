@@ -27,47 +27,66 @@
         <div class="auth-card">
             <a href="/" class="back-home"><span data-icon="chevron-right" style="transform:rotate(180deg)" aria-hidden="true"></span> Back to home</a>
             <span class="brand"><span class="brand-mark"><span data-icon="message-circle" aria-hidden="true"></span></span> WA Automation</span>
-            <h1>Create your free account</h1>
-            <p class="sub">Already have an account? <a href="/login">Log in</a></p>
 
-            <div class="form-error" id="formError"><span data-icon="triangle-alert" aria-hidden="true"></span><span id="formErrorText"></span></div>
+            <div id="signupFormSection">
+                <h1>Create your free account</h1>
+                <p class="sub">Already have an account? <a href="/login">Log in</a></p>
 
-            <form id="signupForm" novalidate>
-                <div class="form-field">
-                    <label for="businessName">Business name</label>
-                    <div class="input-wrap">
-                        <span class="icon-left" data-icon="building-2" aria-hidden="true"></span>
-                        <input type="text" id="businessName" name="businessName" placeholder="PixelCraft Studio" autocomplete="organization">
-                    </div>
-                </div>
-                <div class="form-field">
-                    <label for="ownerName">Your name</label>
-                    <div class="input-wrap">
-                        <span class="icon-left" data-icon="user" aria-hidden="true"></span>
-                        <input type="text" id="ownerName" name="ownerName" placeholder="Aman" autocomplete="name">
-                    </div>
-                </div>
-                <div class="form-field">
-                    <label for="email">Email address</label>
-                    <div class="input-wrap">
-                        <span class="icon-left" data-icon="mail" aria-hidden="true"></span>
-                        <input type="email" id="email" name="email" placeholder="you@business.com" autocomplete="email" required>
-                    </div>
-                </div>
-                <div class="form-field">
-                    <label for="password">Password</label>
-                    <div class="input-wrap">
-                        <span class="icon-left" data-icon="lock" aria-hidden="true"></span>
-                        <input type="password" id="password" name="password" placeholder="At least 6 characters" autocomplete="new-password" required minlength="6">
-                        <button type="button" class="pw-toggle" id="pwToggle" aria-label="Show password"><span data-icon="eye" aria-hidden="true"></span></button>
-                    </div>
-                </div>
-                <button type="submit" class="btn btn-primary btn-block btn-lg" id="submitBtn">
-                    <span data-icon="rocket" aria-hidden="true"></span> Create Free Account
-                </button>
-            </form>
+                <div class="form-error" id="formError"><span data-icon="triangle-alert" aria-hidden="true"></span><span id="formErrorText"></span></div>
 
-            <p class="auth-switch">By signing up you agree this is your own private workspace — your WhatsApp number and data are never shared with other accounts.</p>
+                <form id="signupForm" novalidate>
+                    <div class="form-field">
+                        <label for="businessName">Business name</label>
+                        <div class="input-wrap">
+                            <span class="icon-left" data-icon="building-2" aria-hidden="true"></span>
+                            <input type="text" id="businessName" name="businessName" placeholder="PixelCraft Studio" autocomplete="organization">
+                        </div>
+                    </div>
+                    <div class="form-field">
+                        <label for="ownerName">Your name</label>
+                        <div class="input-wrap">
+                            <span class="icon-left" data-icon="user" aria-hidden="true"></span>
+                            <input type="text" id="ownerName" name="ownerName" placeholder="Aman" autocomplete="name">
+                        </div>
+                    </div>
+                    <div class="form-field">
+                        <label for="email">Email address</label>
+                        <div class="input-wrap">
+                            <span class="icon-left" data-icon="mail" aria-hidden="true"></span>
+                            <input type="email" id="email" name="email" placeholder="you@business.com" autocomplete="email" required>
+                        </div>
+                    </div>
+                    <div class="form-field">
+                        <label for="password">Password</label>
+                        <div class="input-wrap">
+                            <span class="icon-left" data-icon="lock" aria-hidden="true"></span>
+                            <input type="password" id="password" name="password" placeholder="At least 6 characters" autocomplete="new-password" required minlength="6">
+                            <button type="button" class="pw-toggle" id="pwToggle" aria-label="Show password"><span data-icon="eye" aria-hidden="true"></span></button>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block btn-lg" id="submitBtn">
+                        <span data-icon="rocket" aria-hidden="true"></span> Create Free Account
+                    </button>
+                </form>
+
+                <p class="auth-switch">By signing up you agree this is your own private workspace — your WhatsApp number and data are never shared with other accounts.</p>
+            </div>
+
+            <div id="pendingApprovalNotice" style="display:none; text-align:center; padding: 10px 0 20px;">
+                <div style="width:68px; height:68px; border-radius:50%; background:#FEF3C7; color:#D97706; display:inline-flex; align-items:center; justify-content:center; margin-bottom: 18px;">
+                    <span data-icon="clock" style="width:36px; height:36px;" aria-hidden="true"></span>
+                </div>
+                <h1 style="font-size:1.6rem; margin-bottom:8px;">Approval Required</h1>
+                <p style="color:var(--text-secondary); line-height:1.6; margin-bottom: 20px;">
+                    Your account has been created and submitted to the administrator for approval. You will be able to log in once an admin approves your account.
+                </p>
+                <div style="background:var(--cream-subtle); border:1px solid var(--border-color); border-radius:10px; padding:12px; margin-bottom:24px; font-size:0.9rem;">
+                    Account Email: <strong id="registeredEmailText"></strong>
+                </div>
+                <a href="/login" class="btn btn-primary btn-block btn-lg">
+                    <span data-icon="log-out" style="transform:rotate(180deg)" aria-hidden="true"></span> Go to Login
+                </a>
+            </div>
         </div>
     </div>
 </div>

@@ -473,6 +473,7 @@ const SETTINGS_SCHEMA = {
     away_message:                 { max: 4096 },
     ai_system_prompt:             { max: 8000 },
     gemini_api_key:               { max: 200, secret: true },
+    gemini_model:                 { max: 100 },
     business_name:                { max: 200 },
     owner_name:                   { max: 200 },
     business_website:             { max: 500 },

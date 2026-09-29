@@ -125,14 +125,14 @@ function clampText(value, max) {
  * @returns {Promise<string>} the reply text
  */
 async function generateReply(userId, systemPrompt, conversationHistory, contactName = '', phone = '') {
-    const ownerName = getSetting(userId, 'owner_name') || 'the account owner';
-    const businessName = getSetting(userId, 'business_name') || '';
+    const ownerName = (await getSetting(userId, 'owner_name')) || 'the account owner';
+    const businessName = (await getSetting(userId, 'business_name')) || '';
 
     let businessContext = '';
     try {
         // Scoped to userId — this is what makes cross-tenant extraction
         // impossible rather than merely discouraged.
-        businessContext = getBusinessContext(userId);
+        businessContext = await getBusinessContext(userId);
     } catch (e) {
         console.warn('   ⚠️ Could not load business context (non-fatal):', e.message);
     }
@@ -141,7 +141,8 @@ async function generateReply(userId, systemPrompt, conversationHistory, contactN
     // appointment needs someone to belong to), so the tool is only offered
     // when the caller has one — chatbot.js always does; the /chatbot/test
     // preview in the dashboard doesn't, and shouldn't try to book anything.
-    const bookingEnabled = !!phone && getAvailabilitySettings(userId).bookingEnabled;
+    const availSettings = await getAvailabilitySettings(userId);
+    const bookingEnabled = !!phone && availSettings.bookingEnabled;
 
     const systemInstruction = buildSystemInstruction({
         systemPrompt, ownerName, businessName, businessContext, contactName, phone, bookingEnabled

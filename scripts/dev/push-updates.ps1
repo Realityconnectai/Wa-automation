@@ -42,7 +42,15 @@ Write-Host ""
 # would keep going up. data/.session_secret signs every login cookie, so this
 # check matters more than it looks.
 $tracked = git ls-files
-$leaks = @($tracked | Where-Object { $_ -eq ".env" -or $_ -like "data/*" -or $_ -like ".wwebjs_auth/*" })
+$leaks = @($tracked | Where-Object {
+    ($_ -eq ".env" -or $_ -like ".env.*" -and $_ -ne ".env.example") -or
+    ($_ -like "data/*") -or
+    ($_ -like ".wwebjs_auth/*") -or
+    ($_ -like "keys/*.pem" -or $_ -like "keys/*.key") -or
+    ($_ -like "*.pem" -or $_ -like "*.key") -or
+    ($_ -like "backups/*") -or
+    ($_ -like "*cookies.txt")
+})
 
 if ($leaks.Count -gt 0) {
     Write-Host "These files are tracked by git but should never be committed:" -ForegroundColor Yellow
@@ -65,6 +73,18 @@ if ($LASTEXITCODE -ne 0) { Fail "Could not switch to '$branch'. Nothing has been
 
 # ─── Stage and review ─────────────────────────────────────────
 git add -A
+
+# ─── Scan staged files for secrets before committing ──────────
+Write-Host "Running secret scan on staged files..." -ForegroundColor Cyan
+if (Get-Command node -ErrorAction SilentlyContinue) {
+    node scripts/check-secrets.js
+    if ($LASTEXITCODE -ne 0) {
+        git reset
+        Fail "❌ Pre-commit scan failed: Potential secrets or forbidden files are staged. Staged files have been un-staged. Commit aborted."
+    }
+} else {
+    Write-Warning "Node.js not found on PATH; skipping staged secret scan."
+}
 
 $staged = git diff --cached --name-only
 if (-not $staged) {

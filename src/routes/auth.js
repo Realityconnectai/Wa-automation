@@ -3,7 +3,8 @@ const router = express.Router();
 
 const {
     hashPassword, verifyPassword, burnPasswordVerification, createSessionToken,
-    setSessionCookie, revokeSession, revokeAllSessionsForUser,
+    verifySessionToken, getTokenFromRequest,
+    setSessionCookie, clearSessionCookie, revokeSession, revokeAllSessionsForUser,
     isValidEmail, isValidPassword, normalizeEmail, MIN_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH
 } = require('../config/auth');
 const {
@@ -79,7 +80,7 @@ router.post('/signup', signupLimiter, asyncHandler(async (req, res) => {
     const safeBusinessName = optionalString(businessName, 'businessName', LIMITS.CONTACT_NAME).trim();
     const safeOwnerName = optionalString(ownerName, 'ownerName', LIMITS.CONTACT_NAME).trim();
 
-    const existing = getUserByEmail(normalizedEmail);
+    const existing = await getUserByEmail(normalizedEmail);
     if (existing) {
         return res.status(409).json({ success: false, error: 'An account with this email already exists. Try logging in instead.' });
     }
@@ -88,7 +89,7 @@ router.post('/signup', signupLimiter, asyncHandler(async (req, res) => {
 
     let user;
     try {
-        user = createUser({
+        user = await createUser({
             email: normalizedEmail,
             passwordHash,
             businessName: safeBusinessName,
@@ -105,12 +106,16 @@ router.post('/signup', signupLimiter, asyncHandler(async (req, res) => {
         throw err;
     }
 
-    touchLastLogin(user.id);
+    // Admin approval required: new signups are created with status 'pending'
+    // and are NOT automatically logged in with a session cookie.
+    const createdUser = await getUserById(user.id);
 
-    const token = createSessionToken(user);
-    setSessionCookie(res, token);
-
-    res.json({ success: true, data: publicUser(getUserById(user.id)) });
+    res.json({
+        success: true,
+        pendingApproval: true,
+        message: 'Your account has been created and is pending administrator approval. You will be able to log in once an admin approves your request.',
+        data: publicUser(createdUser)
+    });
 }));
 
 // ─── Log in ───────────────────────────────────────────────────
@@ -127,7 +132,7 @@ router.post('/login', loginIpLimiter, loginAccountLimiter, asyncHandler(async (r
         return res.status(401).json({ success: false, error: 'Invalid email or password.' });
     }
 
-    const user = getUserByEmail(normalizedEmail);
+    const user = await getUserByEmail(normalizedEmail);
 
     // Same response, same status, and — via burnPasswordVerification — the
     // same amount of CPU whether or not the account exists. Skipping the
@@ -143,15 +148,64 @@ router.post('/login', loginIpLimiter, loginAccountLimiter, asyncHandler(async (r
         return res.status(401).json({ success: false, error: 'Invalid email or password.' });
     }
 
-    if (user.status === 'suspended') {
-        return res.status(403).json({ success: false, error: 'Your account has been suspended. Contact your administrator.' });
+    if (user.status === 'pending') {
+        return res.status(403).json({
+            success: false,
+            error: 'Your account is pending administrator approval. Please wait for an admin to approve your account before logging in.',
+            code: 'ACCOUNT_PENDING'
+        });
     }
 
-    touchLastLogin(user.id);
-    const token = createSessionToken(user);
-    setSessionCookie(res, token);
+    if (user.status === 'rejected') {
+        return res.status(403).json({
+            success: false,
+            error: 'Your account registration was declined by the administrator.',
+            code: 'ACCOUNT_REJECTED'
+        });
+    }
 
-    res.json({ success: true, data: publicUser(getUserById(user.id)) });
+    if (user.status === 'suspended') {
+        return res.status(403).json({
+            success: false,
+            error: 'Your account has been suspended. Contact your administrator.',
+            code: 'ACCOUNT_SUSPENDED'
+        });
+    }
+
+    await touchLastLogin(user.id);
+    const refreshToken = createSessionToken(user, 'refresh');
+    setSessionCookie(res, refreshToken);
+    
+    const accessToken = createSessionToken(user, 'access');
+
+    const loggedInUser = await getUserById(user.id);
+    res.json({ success: true, data: publicUser(loggedInUser), accessToken });
+}));
+
+// ─── Refresh token ────────────────────────────────────────────
+// Called when the frontend's access token expires.
+router.post('/refresh', asyncHandler(async (req, res) => {
+    const token = getTokenFromRequest(req);
+    if (!token) return res.status(401).json({ success: false, error: 'No refresh token provided', code: 'AUTH_REQUIRED' });
+
+    const payload = verifySessionToken(token, 'refresh');
+    if (!payload) {
+        clearSessionCookie(res);
+        return res.status(401).json({ success: false, error: 'Refresh token expired or invalid', code: 'AUTH_REQUIRED' });
+    }
+
+    const user = await getUserById(payload.id);
+    if (!user || user.status !== 'active') {
+        clearSessionCookie(res);
+        return res.status(401).json({ success: false, error: 'Account inactive', code: 'AUTH_REQUIRED' });
+    }
+
+    // Issue new tokens (rotation)
+    const newRefreshToken = createSessionToken(user, 'refresh');
+    setSessionCookie(res, newRefreshToken);
+    const newAccessToken = createSessionToken(user, 'access');
+
+    res.json({ success: true, accessToken: newAccessToken });
 }));
 
 // ─── Log out ──────────────────────────────────────────────────
@@ -180,21 +234,23 @@ router.post('/change-password', requireAuth, passwordChangeLimiter, asyncHandler
         return res.status(400).json({ success: false, error: 'Your new password must be different from the current one.' });
     }
 
-    const fresh = getUserById(req.user.id);
+    const fresh = await getUserById(req.user.id);
     const ok = await verifyPassword(currentPassword, fresh.password_hash);
     if (!ok) {
         return res.status(401).json({ success: false, error: 'That is not your current password.' });
     }
 
     const passwordHash = await hashPassword(newPassword);
-    updateUser(req.user.id, { password_hash: passwordHash });
+    await updateUser(req.user.id, { password_hash: passwordHash });
 
-    // Every existing token for this account becomes invalid, including any an
-    // attacker holds. Then issue a fresh one so the caller stays logged in.
     revokeAllSessionsForUser(req.user.id);
-    setSessionCookie(res, createSessionToken(getUserById(req.user.id)));
+    const updatedUser = await getUserById(req.user.id);
+    
+    const newRefreshToken = createSessionToken(updatedUser, 'refresh');
+    setSessionCookie(res, newRefreshToken);
+    const newAccessToken = createSessionToken(updatedUser, 'access');
 
-    res.json({ success: true, data: { message: 'Password changed. Other devices have been signed out.' } });
+    res.json({ success: true, accessToken: newAccessToken, data: { message: 'Password changed. Other devices have been signed out.' } });
 }));
 
 // ─── Current session ────────────────────────────────────────

@@ -47,19 +47,21 @@ describe('Multi-tenant isolation', () => {
 
         // Messages have no create route (they come from WhatsApp), so insert
         // directly — the read paths are what we're testing.
-        const { logMessage, saveLeadAnalysis } = require('../src/services/database');
-        logMessage(tenant.user.id, {
+        const { logMessage, saveLeadAnalysis, getLeadAnalysis } = require('../src/services/database');
+        await logMessage(tenant.user.id, {
             phone: tag.phone, contactName: `${tag.name} Contact`,
             direction: 'incoming', body: `${tag.name} incoming secret`
         });
-        logMessage(tenant.user.id, {
+        await logMessage(tenant.user.id, {
             phone: tag.phone, contactName: `${tag.name} Contact`,
             direction: 'outgoing', body: `${tag.name} outgoing secret`
         });
-        saveLeadAnalysis(tenant.user.id, tag.phone, {
+        await saveLeadAnalysis(tenant.user.id, tag.phone, {
             contactName: `${tag.name} Contact`, summary: `${tag.name} lead summary`,
             interestStatus: 'interested', interestScore: 90, priority: 'high', messageCount: 2
         });
+
+        const leadRow = await getLeadAnalysis(tenant.user.id, tag.phone);
 
         return {
             phone: tag.phone,
@@ -68,7 +70,7 @@ describe('Multi-tenant isolation', () => {
             productId: product.body.data.id,
             scheduledId: scheduled.body.data.id,
             dealId: deal.body.data.id,
-            leadId: require('../src/services/database').getLeadAnalysis(tenant.user.id, tag.phone).id
+            leadId: leadRow ? leadRow.id : null
         };
     }
 
@@ -76,9 +78,11 @@ describe('Multi-tenant isolation', () => {
         await freshDatabase();
         app = createTestApp();
         admin = await signup(app, { email: 'admin@iso.test' });
-        require('../src/services/database').updateUser(admin.user.id, { role: 'admin' });
+        await require('../src/services/database').updateUser(admin.user.id, { role: 'admin' });
         alice = await signup(app, { email: 'alice@iso.test' });
         bob   = await signup(app, { email: 'bob@iso.test' });
+        await require('../src/services/database').updateUser(alice.user.id, { wa_enabled: 1 });
+        await require('../src/services/database').updateUser(bob.user.id, { wa_enabled: 1 });
         alice.data = await seed(alice, { name: 'alice', phone: '911111111111' });
         bob.data    = await seed(bob,   { name: 'bob',   phone: '922222222222' });
     });
@@ -122,7 +126,7 @@ describe('Multi-tenant isolation', () => {
         test('dashboard statistics are computed per tenant', async () => {
             const { logMessage } = require('../src/services/database');
             for (let i = 0; i < 5; i++) {
-                logMessage(alice.user.id, { phone: '911111111111', direction: 'incoming', body: `extra ${i}` });
+                await logMessage(alice.user.id, { phone: '911111111111', direction: 'incoming', body: `extra ${i}` });
             }
 
             const a = await request(app).get('/api/dashboard/stats').set('Cookie', alice.cookie);
@@ -173,8 +177,8 @@ describe('Multi-tenant isolation', () => {
             // Reached through the deal detail route, which 404s first — assert
             // the underlying query is scoped too, not just the wrapper.
             const { getCrmActivities } = require('../src/services/database');
-            expect(getCrmActivities(bob.user.id, alice.data.phone)).toEqual([]);
-            expect(getCrmActivities(alice.user.id, alice.data.phone).length).toBeGreaterThan(0);
+            expect(await getCrmActivities(bob.user.id, alice.data.phone)).toEqual([]);
+            expect((await getCrmActivities(alice.user.id, alice.data.phone)).length).toBeGreaterThan(0);
         });
     });
 
@@ -189,7 +193,8 @@ describe('Multi-tenant isolation', () => {
             expect(res.status).toBe(404);
 
             const { getChatbotRules } = require('../src/services/database');
-            const rule = getChatbotRules(alice.user.id).find(r => r.id === alice.data.ruleId);
+            const rules = await getChatbotRules(alice.user.id);
+            const rule = rules.find(r => r.id === alice.data.ruleId);
             expect(rule.response_text).toBe('alice private response');
         });
 
@@ -202,7 +207,8 @@ describe('Multi-tenant isolation', () => {
             expect(res.status).toBe(404);
 
             const { getProducts } = require('../src/services/database');
-            const product = getProducts(alice.user.id).find(p => p.id === alice.data.productId);
+            const products = await getProducts(alice.user.id);
+            const product = products.find(p => p.id === alice.data.productId);
             expect(product.name).toBe('alice Product');
         });
 
@@ -215,7 +221,7 @@ describe('Multi-tenant isolation', () => {
             expect(res.status).toBe(404);
 
             const { getCrmDealById } = require('../src/services/database');
-            const deal = getCrmDealById(alice.user.id, alice.data.dealId);
+            const deal = await getCrmDealById(alice.user.id, alice.data.dealId);
             expect(deal.notes).toBe('alice deal notes');
             expect(deal.deal_value).toBe(5000);
         });
@@ -250,20 +256,20 @@ describe('Multi-tenant isolation', () => {
             }
 
             const db = require('../src/services/database');
-            expect(db.getContacts(alice.user.id)).toHaveLength(1);
-            expect(db.getChatbotRules(alice.user.id)).toHaveLength(1);
-            expect(db.getProducts(alice.user.id)).toHaveLength(1);
-            expect(db.getCrmDeals(alice.user.id)).toHaveLength(1);
-            expect(db.getLeadAnalyses(alice.user.id)).toHaveLength(1);
-            expect(db.getScheduledMessages(alice.user.id, 'pending')).toHaveLength(1);
+            expect(await db.getContacts(alice.user.id)).toHaveLength(1);
+            expect(await db.getChatbotRules(alice.user.id)).toHaveLength(1);
+            expect(await db.getProducts(alice.user.id)).toHaveLength(1);
+            expect(await db.getCrmDeals(alice.user.id)).toHaveLength(1);
+            expect(await db.getLeadAnalyses(alice.user.id)).toHaveLength(1);
+            expect(await db.getScheduledMessages(alice.user.id, 'pending')).toHaveLength(1);
         });
 
         test('clearing message history only clears the caller\'s messages', async () => {
             await request(app).delete('/api/messages').set('Cookie', bob.cookie).expect(200);
 
             const { countMessages } = require('../src/services/database');
-            expect(countMessages(bob.user.id)).toBe(0);
-            expect(countMessages(alice.user.id)).toBe(2);
+            expect(await countMessages(bob.user.id)).toBe(0);
+            expect(await countMessages(alice.user.id)).toBe(2);
         });
     });
 
@@ -279,8 +285,8 @@ describe('Multi-tenant isolation', () => {
             expect(res.status).toBe(200);
 
             const { getContactByPhone } = require('../src/services/database');
-            expect(getContactByPhone(alice.user.id, '933333333333')).toBeNull();
-            expect(getContactByPhone(bob.user.id, '933333333333')).not.toBeNull();
+            expect(await getContactByPhone(alice.user.id, '933333333333')).toBeNull();
+            expect(await getContactByPhone(bob.user.id, '933333333333')).not.toBeNull();
         });
 
         test('a user_id in the body is ignored when creating a deal', async () => {
@@ -290,8 +296,8 @@ describe('Multi-tenant isolation', () => {
                 .expect(200);
 
             const { getCrmDealByPhone } = require('../src/services/database');
-            expect(getCrmDealByPhone(alice.user.id, '944444444444')).toBeNull();
-            expect(getCrmDealByPhone(bob.user.id, '944444444444')).not.toBeNull();
+            expect(await getCrmDealByPhone(alice.user.id, '944444444444')).toBeNull();
+            expect(await getCrmDealByPhone(bob.user.id, '944444444444')).not.toBeNull();
         });
 
         test('settings written by one tenant do not appear for another', async () => {
@@ -315,8 +321,8 @@ describe('Multi-tenant isolation', () => {
                 .send({ phone: shared, name: 'Bob version' }).expect(200);
 
             const { getContactByPhone } = require('../src/services/database');
-            expect(getContactByPhone(alice.user.id, shared).name).toBe('Alice version');
-            expect(getContactByPhone(bob.user.id, shared).name).toBe('Bob version');
+            expect((await getContactByPhone(alice.user.id, shared)).name).toBe('Alice version');
+            expect((await getContactByPhone(bob.user.id, shared)).name).toBe('Bob version');
         });
     });
 
@@ -328,7 +334,8 @@ describe('Multi-tenant isolation', () => {
 
             // Start a job as Alice directly (the route requires a live
             // WhatsApp connection; the ownership check is what's under test).
-            const job = startOutreachJob(alice.user, getContacts(alice.user.id), 'hello {{name}}');
+            const aliceContacts = await getContacts(alice.user.id);
+            const job = startOutreachJob(alice.user, aliceContacts, 'hello {{name}}');
 
             const asBob = await request(app)
                 .get(`/api/contacts/outreach/${job.id}`)
@@ -346,7 +353,8 @@ describe('Multi-tenant isolation', () => {
         test('one tenant cannot cancel another tenant\'s job', async () => {
             const { startOutreachJob, getOutreachJob } = require('../src/services/outreach');
             const { getContacts } = require('../src/services/database');
-            const job = startOutreachJob(alice.user, getContacts(alice.user.id), 'hi');
+            const aliceContacts = await getContacts(alice.user.id);
+            const job = startOutreachJob(alice.user, aliceContacts, 'hi');
 
             const res = await request(app)
                 .post(`/api/contacts/outreach/${job.id}/cancel`)
@@ -360,8 +368,8 @@ describe('Multi-tenant isolation', () => {
         test('outreach only ever resolves contacts belonging to the caller', async () => {
             const { getContactsByIds } = require('../src/services/database');
             // Bob asks for Alice's contact id explicitly.
-            expect(getContactsByIds(bob.user.id, [alice.data.contactId])).toEqual([]);
-            expect(getContactsByIds(alice.user.id, [alice.data.contactId])).toHaveLength(1);
+            expect(await getContactsByIds(bob.user.id, [alice.data.contactId])).toEqual([]);
+            expect(await getContactsByIds(alice.user.id, [alice.data.contactId])).toHaveLength(1);
         });
     });
 
@@ -372,7 +380,7 @@ describe('Multi-tenant isolation', () => {
             const lib = require('whatsapp-web.js');
             lib.__reset();
 
-            wa.initWhatsAppClient(alice.user.id);
+            await wa.initWhatsAppClient(alice.user.id);
             lib.__last().becomeReady('918888888888');
 
             const aliceStatus = await request(app).get('/api/status').set('Cookie', alice.cookie);
@@ -401,7 +409,7 @@ describe('Multi-tenant isolation', () => {
 
             const aliceEvents = [];
             const bobEvents = [];
-const fakeRes = (sink) => ({
+            const fakeRes = (sink) => ({
                 setHeader() {}, flushHeaders() {}, status() { return this; }, json() {},
                 write(chunk) { sink.push(chunk); }, end() {}, on() {}
             });
@@ -411,6 +419,9 @@ const fakeRes = (sink) => ({
                 req.headers = { origin: 'http://localhost:3000', 'sec-fetch-site': 'same-origin' };
                 return req;
             };
+
+            await wa.initWhatsAppClient(alice.user.id);
+            await wa.initWhatsAppClient(bob.user.id);
 
             wa.addSSEClient(alice.user.id, fakeReq(), fakeRes(aliceEvents));
             wa.addSSEClient(bob.user.id, fakeReq(), fakeRes(bobEvents));
@@ -455,19 +466,19 @@ const fakeRes = (sink) => ({
                 .expect(200);
 
             // Nothing of Alice's survives anywhere...
-            const orphans = db.countOrphanedRows(alice.user.id);
+            const orphans = await db.countOrphanedRows(alice.user.id);
             expect(orphans.total).toBe(0);
-            expect(db.getUserById(alice.user.id)).toBeNull();
+            expect(await db.getUserById(alice.user.id)).toBeNull();
 
             // ...and Bob is completely untouched.
-            expect(db.getContacts(bob.user.id)).toHaveLength(1);
-            expect(db.getChatbotRules(bob.user.id)).toHaveLength(1);
-            expect(db.getProducts(bob.user.id)).toHaveLength(1);
-            expect(db.getCrmDeals(bob.user.id)).toHaveLength(1);
-            expect(db.getLeadAnalyses(bob.user.id)).toHaveLength(1);
-            expect(db.countMessages(bob.user.id)).toBe(2);
-            expect(Object.keys(db.getAllSettings(bob.user.id)).length).toBeGreaterThan(0);
-            expect(db.getUserById(bob.user.id)).not.toBeNull();
+            expect(await db.getContacts(bob.user.id)).toHaveLength(1);
+            expect(await db.getChatbotRules(bob.user.id)).toHaveLength(1);
+            expect(await db.getProducts(bob.user.id)).toHaveLength(1);
+            expect(await db.getCrmDeals(bob.user.id)).toHaveLength(1);
+            expect(await db.getLeadAnalyses(bob.user.id)).toHaveLength(1);
+            expect(await db.countMessages(bob.user.id)).toBe(2);
+            expect(Object.keys(await db.getAllSettings(bob.user.id)).length).toBeGreaterThan(0);
+            expect(await db.getUserById(bob.user.id)).not.toBeNull();
         });
 
         test('deleting a tenant tears down only that tenant\'s WhatsApp session', async () => {
@@ -475,8 +486,8 @@ const fakeRes = (sink) => ({
             const lib = require('whatsapp-web.js');
             lib.__reset();
 
-            wa.initWhatsAppClient(alice.user.id);
-            wa.initWhatsAppClient(bob.user.id);
+            await wa.initWhatsAppClient(alice.user.id);
+            await wa.initWhatsAppClient(bob.user.id);
             for (const c of lib.__instances) c.becomeReady();
 
             expect(wa.getStatus(alice.user.id).connected).toBe(true);
@@ -496,8 +507,8 @@ const fakeRes = (sink) => ({
             const lib = require('whatsapp-web.js');
             lib.__reset();
 
-            wa.initWhatsAppClient(alice.user.id);
-            wa.initWhatsAppClient(bob.user.id);
+            await wa.initWhatsAppClient(alice.user.id);
+            await wa.initWhatsAppClient(bob.user.id);
             for (const c of lib.__instances) c.becomeReady();
 
             await request(app).patch(`/api/admin/users/${alice.user.id}`)
@@ -557,8 +568,8 @@ const fakeRes = (sink) => ({
 
             // And the final state is correctly partitioned.
             const db = require('../src/services/database');
-            const aliceContacts = db.getContacts(alice.user.id);
-            const bobContacts = db.getContacts(bob.user.id);
+            const aliceContacts = await db.getContacts(alice.user.id);
+            const bobContacts = await db.getContacts(bob.user.id);
             expect(aliceContacts.every(c => c.phone.startsWith('9111111'))).toBe(true);
             expect(bobContacts.every(c => c.phone.startsWith('9222222'))).toBe(true);
         });
@@ -568,39 +579,39 @@ const fakeRes = (sink) => ({
     describe('Database-layer invariants', () => {
         // Belt and braces: even if a future route forgets its scoping, these
         // assert the data-access functions themselves are tenant-safe.
-        test('every tenant-scoped getter returns nothing for a foreign id', () => {
+        test('every tenant-scoped getter returns nothing for a foreign id', async () => {
             const db = require('../src/services/database');
             const a = alice.user.id;
             const b = bob.user.id;
 
-            expect(db.getContactByPhone(b, alice.data.phone)).toBeNull();
-            expect(db.getCrmDealByPhone(b, alice.data.phone)).toBeNull();
-            expect(db.getCrmDealById(b, alice.data.dealId)).toBeNull();
-            expect(db.getLeadAnalysis(b, alice.data.phone)).toBeNull();
-            expect(db.getConversation(b, alice.data.phone)).toEqual([]);
-            expect(db.getCrmActivities(b, alice.data.phone)).toEqual([]);
-            expect(db.getContactsByIds(b, [alice.data.contactId])).toEqual([]);
-            expect(db.getMessages(b, { phone: alice.data.phone })).toEqual([]);
+            expect(await db.getContactByPhone(b, alice.data.phone)).toBeNull();
+            expect(await db.getCrmDealByPhone(b, alice.data.phone)).toBeNull();
+            expect(await db.getCrmDealById(b, alice.data.dealId)).toBeNull();
+            expect(await db.getLeadAnalysis(b, alice.data.phone)).toBeNull();
+            expect(await db.getConversation(b, alice.data.phone)).toEqual([]);
+            expect(await db.getCrmActivities(b, alice.data.phone)).toEqual([]);
+            expect(await db.getContactsByIds(b, [alice.data.contactId])).toEqual([]);
+            expect(await db.getMessages(b, { phone: alice.data.phone })).toEqual([]);
 
             // Sanity: the same calls DO work for the owner, so these
             // assertions aren't passing because the functions are broken.
-            expect(db.getContactByPhone(a, alice.data.phone)).not.toBeNull();
-            expect(db.getCrmDealByPhone(a, alice.data.phone)).not.toBeNull();
-            expect(db.getConversation(a, alice.data.phone).length).toBe(2);
+            expect(await db.getContactByPhone(a, alice.data.phone)).not.toBeNull();
+            expect(await db.getCrmDealByPhone(a, alice.data.phone)).not.toBeNull();
+            expect((await db.getConversation(a, alice.data.phone)).length).toBe(2);
         });
 
-        test('mutation helpers refuse a foreign id', () => {
+        test('mutation helpers refuse a foreign id', async () => {
             const db = require('../src/services/database');
             const b = bob.user.id;
 
-            expect(db.deleteContact(b, alice.data.contactId).changes).toBe(0);
-            expect(db.deleteChatbotRule(b, alice.data.ruleId).changes).toBe(0);
-            expect(db.deleteProduct(b, alice.data.productId).changes).toBe(0);
-            expect(db.deleteCrmDeal(b, alice.data.dealId).changes).toBe(0);
-            expect(db.deleteLeadAnalysis(b, alice.data.leadId).changes).toBe(0);
-            expect(db.cancelScheduledMessage(b, alice.data.scheduledId).changes).toBe(0);
-            expect(db.updateChatbotRule(b, alice.data.ruleId, { response_text: 'x' }).changes).toBe(0);
-            expect(db.markContactOutreached(b, alice.data.phone).changes).toBe(0);
+            expect((await db.deleteContact(b, alice.data.contactId)).changes).toBe(0);
+            expect((await db.deleteChatbotRule(b, alice.data.ruleId)).changes).toBe(0);
+            expect((await db.deleteProduct(b, alice.data.productId)).changes).toBe(0);
+            expect((await db.deleteCrmDeal(b, alice.data.dealId)).changes).toBe(0);
+            expect((await db.deleteLeadAnalysis(b, alice.data.leadId)).changes).toBe(0);
+            expect((await db.cancelScheduledMessage(b, alice.data.scheduledId)).changes).toBe(0);
+            expect((await db.updateChatbotRule(b, alice.data.ruleId, { response_text: 'x' })).changes).toBe(0);
+            expect((await db.markContactOutreached(b, alice.data.phone)).changes).toBe(0);
         });
     });
 });

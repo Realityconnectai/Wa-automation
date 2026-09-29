@@ -46,13 +46,13 @@ const SEND_TIMEOUT_MS = 20000;
 const INTER_SEND_DELAY_MS = 1200;
 
 // ─── Initialize the scheduler ────────────────────────────────
-function initScheduler() {
+async function initScheduler() {
     // On boot, deal with anything left in 'sending' by a process that died
     // mid-send. These are marked failed rather than retried: we cannot know
     // whether WhatsApp accepted the message before the crash, and re-sending
     // something the recipient already got is worse than surfacing a failure.
     try {
-        const stuck = reclaimStuckScheduledMessages(15);
+        const stuck = await reclaimStuckScheduledMessages(15);
         if (stuck.length) {
             console.warn(`⚠️ Scheduler: ${stuck.length} scheduled message(s) were interrupted mid-send and marked failed (delivery unconfirmed).`);
         }
@@ -83,7 +83,7 @@ async function processPendingMessages() {
     try {
         let pending = [];
         try {
-            pending = getPendingScheduledMessages();
+            pending = await getPendingScheduledMessages();
         } catch (dbErr) {
             console.error('❌ Scheduler: failed to query pending messages:', dbErr.message);
             return summary;
@@ -98,7 +98,7 @@ async function processPendingMessages() {
             // Atomic claim — this is the line that prevents double sends.
             let claimed = false;
             try {
-                claimed = claimScheduledMessage(msg.id);
+                claimed = await claimScheduledMessage(msg.id);
             } catch (claimErr) {
                 console.error(`❌ Scheduler: could not claim #${msg.id}:`, claimErr.message);
                 continue;
@@ -113,19 +113,19 @@ async function processPendingMessages() {
 
             try {
                 // A suspended or deleted account must not keep sending.
-                const owner = getUserById(msg.user_id);
+                const owner = await getUserById(msg.user_id);
                 if (!owner) {
-                    updateScheduledMessageStatus(msg.id, 'cancelled', 'Account no longer exists');
+                    await updateScheduledMessageStatus(msg.id, 'cancelled', 'Account no longer exists');
                     continue;
                 }
-                if (owner.status === 'suspended') {
-                    updateScheduledMessageStatus(msg.id, 'cancelled', 'Account suspended');
+                if (owner.status !== 'active') {
+                    await updateScheduledMessageStatus(msg.id, 'cancelled', `Account is not active (${owner.status})`);
                     continue;
                 }
 
                 const phone = tryNormalizePhone(msg.phone);
                 if (!phone) {
-                    updateScheduledMessageStatus(msg.id, 'failed', 'Stored phone number is not valid');
+                    await updateScheduledMessageStatus(msg.id, 'failed', 'Stored phone number is not valid');
                     summary.failed++;
                     continue;
                 }
@@ -141,11 +141,11 @@ async function processPendingMessages() {
                 // the log — annoying. The other order risks a delivered
                 // message still marked 'sending', which a later reclaim
                 // reports as failed and a human may then re-send.
-                updateScheduledMessageStatus(msg.id, 'sent');
+                await updateScheduledMessageStatus(msg.id, 'sent');
                 summary.sent++;
 
                 try {
-                    logMessage(msg.user_id, {
+                    await logMessage(msg.user_id, {
                         waMessageId: result?.id?._serialized || result?.messageId || null,
                         phone,
                         direction: 'outgoing',
@@ -162,7 +162,7 @@ async function processPendingMessages() {
                 // (see google-calendar.js) logging back to the same calendar
                 // it came from is harmless — it's tagged so a resync never
                 // re-imports it as a new send.
-                logOutreachEvent(msg.user_id, { phone, name: '', message: msg.body });
+                await logOutreachEvent(msg.user_id, { phone, name: '', message: msg.body });
             } catch (error) {
                 const isTimeout = error.message === 'sendTextMessage timeout';
                 if (isTimeout) {
@@ -175,7 +175,7 @@ async function processPendingMessages() {
                     summary.failed++;
                     console.warn(`⏱️ Scheduled message #${msg.id} timed out — delivery unknown, will not auto-retry`);
                     try {
-                        updateScheduledMessageStatus(msg.id, 'unknown',
+                        await updateScheduledMessageStatus(msg.id, 'unknown',
                             'Send timed out — message may or may not have been delivered. Check with the recipient before retrying.');
                     } catch (dbErr) {
                         console.error('❌ Could not update unknown status:', dbErr.message);
@@ -189,7 +189,7 @@ async function processPendingMessages() {
                         const reason = /not connected/i.test(error.message)
                             ? 'WhatsApp was not connected at the scheduled time'
                             : String(error.message).split('\n')[0].slice(0, 300);
-                        updateScheduledMessageStatus(msg.id, 'failed', reason);
+                        await updateScheduledMessageStatus(msg.id, 'failed', reason);
                     } catch (dbErr) {
                         console.error('❌ Could not update failed status:', dbErr.message);
                     }

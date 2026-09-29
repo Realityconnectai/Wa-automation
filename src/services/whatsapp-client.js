@@ -298,7 +298,7 @@ function scheduleRestart(userId, baseDelayMs = 8000) {
         if (s.destroyed) return;
         await safeDestroyClient(s);
         s.isInitializing = false;
-        initWhatsAppClient(userId);
+        await initWhatsAppClient(userId);
     }, backoff);
     s.restartTimer.unref?.();
 }
@@ -345,7 +345,7 @@ async function processInitQueue() {
  * answer 503 when the server is at its session cap instead of reporting a
  * capacity limit as a 500.
  */
-function initWhatsAppClient(userId) {
+async function initWhatsAppClient(userId) {
     userId = Number(userId);
     if (!Number.isSafeInteger(userId) || userId <= 0) {
         throw new Error('initWhatsAppClient requires a positive integer userId');
@@ -353,7 +353,7 @@ function initWhatsAppClient(userId) {
 
     try {
         const { getUserById } = require('./database');
-        const user = getUserById(userId);
+        const user = await getUserById(userId);
         if (!user || user.status !== 'active' || (user.role !== 'admin' && !user.wa_enabled)) {
             console.warn(`⚠️ [user ${userId}] Denying WhatsApp client start — wa_enabled is 0 or account is not active.`);
             return { accepted: false, reason: 'WhatsApp access is not enabled for this account.' };
@@ -770,8 +770,11 @@ function addSSEClient(userId, req, res) {
         //   1. Nothing started yet (first visit after signup)
         //   2. Session was hibernated — silently revive Chrome without a new QR.
         if (!s.isInitializing && !s.client) {
-            const result = initWhatsAppClient(userId);
-            if (result && result.accepted === false) send({ type: 'error', data: result.reason });
+            initWhatsAppClient(userId).then(result => {
+                if (result && result.accepted === false) send({ type: 'error', data: result.reason });
+            }).catch(e => {
+                send({ type: 'error', data: e.message });
+            });
         }
     }
 

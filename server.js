@@ -19,7 +19,7 @@
 require('dotenv').config();
 
 const { createApp } = require('./src/config/app');
-const { initDatabase, forcePersist, getPersistHealth, listUsers } = require('./src/services/database');
+const { initDatabase, closeDatabase, getPersistHealth, listUsers } = require('./src/services/database');
 const { initScheduler, stopScheduler, isSchedulerBusy } = require('./src/services/scheduler');
 const { initCalendarSync, stopCalendarSync } = require('./src/services/calendar-sync');
 const { initWhatsAppClient, destroyAllClients } = require('./src/services/whatsapp-client');
@@ -93,10 +93,7 @@ function validateEnvironment() {
 function fatal(label, err) {
     console.error(`❌ ${label}:`, err && err.message ? err.message : err);
     if (err && err.stack) console.error(err.stack);
-    // Try to flush the in-memory database. It may fail (the process state is
-    // by definition suspect), which is why it's wrapped and why the exit
-    // happens regardless.
-    try { forcePersist(); } catch (e) { console.error('   Could not flush database on crash:', e.message); }
+    try { closeDatabase().catch(() => {}); } catch (_) {}
     process.exit(1);
 }
 
@@ -113,10 +110,7 @@ process.on('unhandledRejection', (reason) => fatal('UNHANDLED REJECTION', reason
  *   3. cancel background jobs      — outreach loops and pending AI timers
  *   4. wait for in-flight sends    — bounded by SHUTDOWN_GRACE_MS
  *   5. tear down Chrome processes  — otherwise they outlive the container
- *   6. flush the database          — last, so it captures everything above
- *
- * Killing Chrome before waiting would abort a send that WhatsApp had already
- * accepted, leaving a message delivered but recorded as failed.
+ *   6. close database pool         — last, so it captures everything above
  */
 async function shutdown(signal) {
     if (shuttingDown) return;
@@ -150,11 +144,10 @@ async function shutdown(signal) {
     }
 
     try {
-        forcePersist();
-        console.log('   ✔ Database flushed to disk');
+        await closeDatabase();
+        console.log('   ✔ Database connections closed');
     } catch (e) {
-        // Worth shouting about: it means writes from this run are lost.
-        console.error('   ❌ Could not flush the database on shutdown:', e.message);
+        console.error('   ❌ Could not close database pool cleanly:', e.message);
     }
 
     console.log('👋 Shutdown complete');
@@ -176,13 +169,14 @@ process.on('SIGTERM', () => { shutdown('SIGTERM').catch(() => process.exit(1)); 
  */
 const RESUME_STAGGER_MS = parseInt(process.env.RESUME_STAGGER_MS, 10) || 4000;
 
-function resumeExistingSessions() {
+async function resumeExistingSessions() {
     try {
         const authRoot = path.join(process.env.PERSIST_ROOT || __dirname, '.wwebjs_auth');
         if (!fs.existsSync(authRoot)) return;
 
+        const users = await listUsers();
         const activeUserIds = new Set(
-            listUsers()
+            users
                 .filter(u => u.status === 'active' && (u.role === 'admin' || u.wa_enabled === 1))
                 .map(u => u.id)
         );
@@ -228,9 +222,6 @@ async function start() {
         await initDatabase();
         console.log('✅ Database initialized');
     } catch (dbErr) {
-        // Fatal on purpose. A corrupt database that we start "fresh" from
-        // looks healthy and empty, and the first successful write destroys
-        // the recoverable file. See openDatabaseFile in src/database.js.
         console.error('❌ Database init failed:', dbErr.message);
         process.exit(1);
     }
@@ -238,7 +229,7 @@ async function start() {
     const app = createApp();
 
     try {
-        initScheduler();
+        await initScheduler();
         console.log('✅ Scheduler initialized');
     } catch (schedErr) {
         console.error('⚠️ Scheduler init failed (non-fatal):', schedErr.message);
@@ -292,7 +283,7 @@ async function start() {
 
     // After the HTTP server is listening, so the site is reachable while
     // sessions come back.
-    resumeExistingSessions();
+    await resumeExistingSessions();
 }
 
 if (require.main === module) {

@@ -22,14 +22,59 @@
 const { GoogleGenAI } = require('@google/genai');
 const crypto = require('crypto');
 
-// Ordered by preference. Fewer entries than before on purpose: walking six
-// models on every failure multiplies the cost of an outage by six, and the
-// 1.5 generation is retired for new keys anyway.
-const MODELS_TO_TRY = [
-    'gemini-2.5-flash',
-    'gemini-2.0-flash',
-    'gemini-2.0-flash-lite'
+// Comprehensive list of Google Gemini models, ordered by speed, capability, and availability.
+// Fast/flash models come first for real-time chat responsiveness.
+const ALL_GEMINI_MODELS = [
+    // ── Flash & Efficient Models (Fast, Low Latency, WhatsApp Chatbot) ──
+    'gemini-3.8-flash',              // Latest flagship flash model
+    'gemini-3.7-flash',              // High-performance driver
+    'gemini-3.6-flash',              // Complex workflows & agentic reasoning
+    'gemini-3.5-flash',              // Fast & capable
+    'gemini-3.5-flash-lite',         // High throughput, ultra-low latency
+    'gemini-2.5-flash',              // Next-Gen fast model
+    'gemini-2.5-flash-lite',         // Cost-effective fast model
+    'gemini-2.0-flash',              // Standard production workhorse
+    'gemini-2.0-flash-lite',         // High quota, ultra-low latency
+    'gemini-1.5-flash',              // Standard fallback model
+    'gemini-1.5-flash-8b',           // High throughput compact model
+
+    // ── High Intelligence & Reasoning (Pro) ──
+    'gemini-3.1-pro',                // Frontier reasoning & complex code
+    'gemini-2.5-pro',                // Next-Gen frontier reasoning
+    'gemini-2.0-pro-exp-02-05',      // 2.0 Pro Experimental
+    'gemini-1.5-pro',                // Deep context & reasoning
+
+    // ── Extended Thinking & Specialized ──
+    'gemini-3.8-live',               // Multimodal real-time
+    'gemini-2.0-flash-thinking-exp-01-21',
+    'gemini-exp-1206'
 ];
+
+const MODELS_TO_TRY = ALL_GEMINI_MODELS;
+
+/**
+ * Returns prioritized model list. If a preferred model is given (or set in GEMINI_MODEL env),
+ * it is tried first, followed by all known Gemini models as seamless fallbacks.
+ */
+function getModelsList(preferredModel = null) {
+    const list = [];
+    if (preferredModel && typeof preferredModel === 'string' && preferredModel.trim()) {
+        const clean = preferredModel.trim().replace(/^models\//, '');
+        if (clean && clean.toLowerCase() !== 'auto') {
+            list.push(clean);
+        }
+    }
+    const envModel = process.env.GEMINI_MODEL?.trim();
+    if (envModel && envModel.toLowerCase() !== 'auto' && !list.includes(envModel)) {
+        list.push(envModel.replace(/^models\//, ''));
+    }
+    for (const m of ALL_GEMINI_MODELS) {
+        if (!list.includes(m)) {
+            list.push(m);
+        }
+    }
+    return list;
+}
 
 const GEMINI_TIMEOUT_MS = parseInt(process.env.GEMINI_TIMEOUT_MS, 10) || 30000;
 const MAX_RETRIES = 2;
@@ -98,9 +143,9 @@ function createGeminiClient(apiKey) {
  * operator's quota. That is why the per-account and global concurrency
  * limits in routes/api.js exist.
  */
-function getApiKey(userId) {
+async function getApiKey(userId) {
     const { getSetting } = require('./database');
-    const apiKey = getSetting(userId, 'gemini_api_key') || process.env.GEMINI_API_KEY;
+    const apiKey = (await getSetting(userId, 'gemini_api_key')) || process.env.GEMINI_API_KEY;
     if (apiKey && apiKey !== 'your_gemini_api_key_here' && String(apiKey).trim() !== '') {
         return String(apiKey).trim();
     }
@@ -163,7 +208,7 @@ async function withTimeout(promise, ms, label = 'operation') {
  * keyword rules; lead analysis surfaces an error).
  */
 async function callGeminiWithRetry(userId, requestFn, label = 'Gemini call') {
-    const apiKey = getApiKey(userId);
+    const apiKey = await getApiKey(userId);
     if (!apiKey) {
         const err = new Error('No Gemini API key is configured. Add one in Settings → AI Behavior.');
         err.code = 'NO_API_KEY';
@@ -180,8 +225,11 @@ async function callGeminiWithRetry(userId, requestFn, label = 'Gemini call') {
 
     const client = createGeminiClient(apiKey);
     let lastError = null;
+    const { getSetting } = require('./database');
+    const preferredModel = await getSetting(userId, 'gemini_model');
+    const modelsToTry = getModelsList(preferredModel);
 
-    for (const model of MODELS_TO_TRY) {
+    for (const model of modelsToTry) {
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             try {
                 const result = await withTimeout(requestFn(client, model), GEMINI_TIMEOUT_MS, `${label} (${model})`);
@@ -265,9 +313,41 @@ function parseJsonResponse(text) {
     }
 }
 
+async function testApiKey(candidateKey, preferredModel = null) {
+    if (!candidateKey || typeof candidateKey !== 'string' || candidateKey.trim() === '') {
+        throw new Error('API key is empty');
+    }
+    const key = candidateKey.trim();
+    const client = createGeminiClient(key);
+    const modelsToTry = getModelsList(preferredModel);
+    let lastErr = null;
+    for (const model of modelsToTry) {
+        try {
+            await withTimeout(
+                client.models.generateContent({
+                    model,
+                    contents: 'ping'
+                }),
+                10000,
+                `Test API key (${model})`
+            );
+            return { ok: true, model, availableModels: modelsToTry };
+        } catch (err) {
+            lastErr = err;
+            if (isFatalKeyError(err)) {
+                throw new Error('The Gemini API key was rejected as invalid by Google.');
+            }
+        }
+    }
+    throw new Error(`Gemini connection test failed: ${sanitizeError(lastErr)}`);
+}
+
 module.exports = {
     MODELS_TO_TRY,
+    ALL_GEMINI_MODELS,
+    getModelsList,
     getApiKey,
+    testApiKey,
     callGeminiWithRetry,
     extractText,
     parseJsonResponse,

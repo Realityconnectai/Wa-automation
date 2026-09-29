@@ -105,20 +105,20 @@ function getAuthUrl(state) {
 async function connectAccount(userId, code) {
     const client = newOAuthClient();
     const { tokens } = await client.getToken(code);
-    saveGoogleCalendarTokens(userId, tokens);
+    await saveGoogleCalendarTokens(userId, tokens);
     return true;
 }
 
-function isConnected(userId) {
-    return !!getGoogleCalendarAccount(userId);
+async function isConnected(userId) {
+    return !!(await getGoogleCalendarAccount(userId));
 }
 
-function disconnectAccount(userId) {
-    deleteGoogleCalendarAccount(userId);
+async function disconnectAccount(userId) {
+    await deleteGoogleCalendarAccount(userId);
 }
 
-function setAvailabilityCheck(userId, enabled) {
-    setCalendarAvailabilityCheck(userId, enabled);
+async function setAvailabilityCheck(userId, enabled) {
+    await setCalendarAvailabilityCheck(userId, enabled);
 }
 
 /**
@@ -128,8 +128,8 @@ function setAvailabilityCheck(userId, enabled) {
  * the refresh_token for a new access_token, which happens transparently
  * inside any API call once the old one has expired.
  */
-function getClientForUser(userId) {
-    const account = getGoogleCalendarAccount(userId);
+async function getClientForUser(userId) {
+    const account = await getGoogleCalendarAccount(userId);
     if (!account) return null;
 
     const oauth2Client = newOAuthClient();
@@ -141,7 +141,7 @@ function getClientForUser(userId) {
         expiry_date: account.expiry_date
     });
     oauth2Client.on('tokens', (tokens) => {
-        try { saveGoogleCalendarTokens(userId, tokens); } catch (e) { /* best-effort */ }
+        saveGoogleCalendarTokens(userId, tokens).catch(() => {});
     });
 
     return {
@@ -159,7 +159,7 @@ function getClientForUser(userId) {
 async function logOutreachEvent(userId, { phone, name, message }) {
     try {
         if (!isConfigured()) return;
-        const client = getClientForUser(userId);
+        const client = await getClientForUser(userId);
         if (!client) return;
 
         const now = new Date();
@@ -187,7 +187,7 @@ async function logOutreachEvent(userId, { phone, name, message }) {
 async function checkAvailabilityNow(userId) {
     try {
         if (!isConfigured()) return { busy: false };
-        const client = getClientForUser(userId);
+        const client = await getClientForUser(userId);
         if (!client || !client.checkAvailability) return { busy: false };
 
         const now = new Date();
@@ -224,7 +224,7 @@ async function queryBusyBlocks(client, timeMinIso, timeMaxIso) {
 async function getBusyBlocks(userId, timeMinIso, timeMaxIso) {
     try {
         if (!isConfigured()) return [];
-        const client = getClientForUser(userId);
+        const client = await getClientForUser(userId);
         if (!client) return [];
         return await queryBusyBlocks(client, timeMinIso, timeMaxIso);
     } catch (err) {
@@ -245,7 +245,7 @@ async function getBusyBlocks(userId, timeMinIso, timeMaxIso) {
 async function createAppointmentEvent(userId, { phone, contactName, startIso, endIso, notes }) {
     try {
         if (!isConfigured()) return null;
-        const client = getClientForUser(userId);
+        const client = await getClientForUser(userId);
         if (!client) return null;
 
         const who = contactName || phone;
@@ -274,7 +274,7 @@ async function createAppointmentEvent(userId, { phone, contactName, startIso, en
 async function cancelAppointmentEvent(userId, eventId) {
     try {
         if (!eventId || !isConfigured()) return;
-        const client = getClientForUser(userId);
+        const client = await getClientForUser(userId);
         if (!client) return;
         await client.calendar.events.delete({ calendarId: client.calendarId, eventId });
     } catch (err) {
@@ -304,7 +304,7 @@ function parseEventTitle(summary) {
  * imported.
  */
 async function syncEventsToScheduledMessages(userId) {
-    const client = getClientForUser(userId);
+    const client = await getClientForUser(userId);
     if (!client) return 0;
 
     const now = new Date();
@@ -332,7 +332,7 @@ async function syncEventsToScheduledMessages(userId) {
         // Never re-import our own outreach-log events, and never import the
         // same calendar event twice across sync ticks.
         if (event.description && event.description.includes(LOGGED_EVENT_TAG)) continue;
-        if (isCalendarEventSynced(userId, event.id)) continue;
+        if (await isCalendarEventSynced(userId, event.id)) continue;
 
         const phone = parseEventTitle(event.summary);
         if (!phone) continue;
@@ -343,7 +343,7 @@ async function syncEventsToScheduledMessages(userId) {
         // Respect the same per-user pending-schedule ceiling the dashboard's
         // "Schedule a message" form enforces (routes/api.js), so a calendar
         // full of tagged events can't bypass it.
-        if (countPendingScheduledMessages(userId) >= LIMITS.MAX_PENDING_SCHEDULED_PER_USER) {
+        if ((await countPendingScheduledMessages(userId)) >= LIMITS.MAX_PENDING_SCHEDULED_PER_USER) {
             console.warn(`⚠️ Calendar: user ${userId} has too many pending scheduled messages — stopping import for this tick.`);
             break;
         }
@@ -351,19 +351,19 @@ async function syncEventsToScheduledMessages(userId) {
         try {
             const scheduledAt = toSqliteUtc(new Date(startIso));
             const body = (event.description || `Hi, this is a scheduled message via ${event.summary}.`).slice(0, 4000);
-            const msg = createScheduledMessage(userId, phone, body, scheduledAt);
-            markCalendarEventSynced(event.id, userId, msg.id);
+            const msg = await createScheduledMessage(userId, phone, body, scheduledAt);
+            await markCalendarEventSynced(event.id, userId, msg.id);
             imported++;
         } catch (err) {
             // A malformed event (bad date, phone that fails normalization
             // downstream) shouldn't stop the rest of the sync — mark it
             // synced anyway so it isn't retried forever.
-            markCalendarEventSynced(event.id, userId, null);
+            await markCalendarEventSynced(event.id, userId, null);
             console.warn(`⚠️ Calendar: skipped unimportable event ${event.id} for user ${userId}:`, err.message);
         }
     }
 
-    touchCalendarLastSync(userId);
+    await touchCalendarLastSync(userId);
     return imported;
 }
 

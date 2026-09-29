@@ -125,7 +125,7 @@ function labelForAnalysis(analysis) {
  * @returns {Promise<object>} the saved analysis row
  */
 async function analyzeConversation(userId, phone) {
-    const messages = getConversation(userId, phone, { limit: MAX_TRANSCRIPT_MESSAGES });
+    const messages = await getConversation(userId, phone, { limit: MAX_TRANSCRIPT_MESSAGES });
     const withText = messages.filter(m => m.body && m.body.trim() !== '');
     if (withText.length === 0) {
         const err = new Error('No messages found for this contact.');
@@ -133,7 +133,7 @@ async function analyzeConversation(userId, phone) {
         throw err;
     }
 
-    const contact = getContactByPhone(userId, phone);
+    const contact = await getContactByPhone(userId, phone);
     const contactName = (contact && contact.name) || withText.find(m => m.contact_name)?.contact_name || '';
 
     // Build a readable transcript, bounded in per-message and total size.
@@ -148,13 +148,13 @@ async function analyzeConversation(userId, phone) {
     }
     const transcript = parts.join('\n');
 
-    const businessName = getSetting(userId, 'business_name') || '';
-    const ownerName = getSetting(userId, 'owner_name') || '';
-    const currency = getSetting(userId, 'business_currency') || '₹';
+    const businessName = (await getSetting(userId, 'business_name')) || '';
+    const ownerName = (await getSetting(userId, 'owner_name')) || '';
+    const currency = (await getSetting(userId, 'business_currency')) || '₹';
 
     let businessContext = '';
     try {
-        businessContext = getBusinessContext(userId);
+        businessContext = await getBusinessContext(userId);
     } catch (e) {
         console.warn('   ⚠️ Could not load business context for analysis (non-fatal):', e.message);
     }
@@ -186,13 +186,13 @@ async function analyzeConversation(userId, phone) {
     }
 
     const analysis = normalizeAnalysis(raw, messages.length, contactName);
-    const saved = saveLeadAnalysis(userId, phone, analysis);
+    const saved = await saveLeadAnalysis(userId, phone, analysis);
 
     // Auto-update the contact label so the verdict shows in the Contacts tab
     try {
         const label = labelForAnalysis(analysis);
         if (label) {
-            upsertContact(userId, phone, contactName, label, '');
+            await upsertContact(userId, phone, contactName, label, '');
         }
     } catch (labelErr) {
         console.warn('   ⚠️ Could not auto-label contact:', labelErr.message);
@@ -203,7 +203,7 @@ async function analyzeConversation(userId, phone) {
     try {
         const isPersonalOrSpam = /personal chat|spam/i.test(analysis.issueCategory);
         if (analysis.isSalesConversation && !isPersonalOrSpam) {
-            aiUpsertCrmDeal(userId, phone, {
+            await aiUpsertCrmDeal(userId, phone, {
                 contactName: analysis.contactName,
                 suggestedStage: analysis.suggestedStage,
                 estimatedValue: analysis.estimatedValue,
@@ -234,7 +234,7 @@ const MAX_CONVERSATIONS_PER_RUN = 25;
 const CONSECUTIVE_FAILURE_LIMIT = 3;
 
 async function analyzeAllConversations(userId, onlyStale = true, deadlineMs = 120000) {
-      const phones = getConversationPhones(userId);
+      const phones = await getConversationPhones(userId);
       const results = { analyzed: [], skipped: [], failed: [], remaining: 0 };
 
       let processed = 0;
@@ -255,7 +255,7 @@ async function analyzeAllConversations(userId, onlyStale = true, deadlineMs = 12
           }
           try {
               if (onlyStale) {
-                  const existing = getLeadAnalysis(userId, row.phone);
+                  const existing = await getLeadAnalysis(userId, row.phone);
                   if (existing && existing.message_count >= row.message_count) {
                       results.skipped.push(row.phone);
                       continue;
@@ -293,8 +293,8 @@ const pendingTimers = new Map();
 // timer eventually turns into a billed API call.
 const MAX_PENDING_AUTO_ANALYSES = 5000;
 
-function scheduleAutoAnalysis(userId, phone) {
-    const enabled = getSetting(userId, 'lead_analysis_auto');
+async function scheduleAutoAnalysis(userId, phone) {
+    const enabled = await getSetting(userId, 'lead_analysis_auto');
     if (enabled === 'false') return; // default (null/'true') = on
 
     const key = `${userId}:${phone}`;

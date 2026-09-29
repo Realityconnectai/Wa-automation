@@ -18,8 +18,27 @@ on:
       - updated-WA
 
 jobs:
+  security-scan:
+    name: Secret & Credential Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Clean dependency install
+        run: npm ci
+
+      - name: Scan repository for exposed secrets
+        run: npm run check:secrets
+
   test:
     name: Test & Build
+    needs: security-scan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,10 +67,22 @@ jobs:
 
   deploy:
     name: Deploy to production
-    needs: test          # only runs if the test job above passes
+    needs: [security-scan, test]          # only runs if both security scan and tests pass
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Clean dependency install
+        run: npm ci
+
+      - name: Verify zero secrets before deployment
+        run: npm run check:secrets
 
       - name: Set up SSH
         run: |
@@ -66,6 +97,15 @@ jobs:
             --exclude='.git' --exclude='node_modules' \
             --exclude='.wwebjs_auth' --exclude='.wwebjs_cache' --exclude='data' \
             --exclude='.env' \
+            --exclude='keys' --exclude='*.pem' --exclude='*.key' \
+            --exclude='backups' --exclude='*.zip' \
+            --exclude='gmail-src' --exclude='*_gmail.*' \
+            --exclude='*.log' --exclude='*cookies.txt' \
+            --exclude='deploy.sh' --exclude='check_users.sh' --exclude='test_*.sh' \
+            --exclude='*-deploy-aws.sh' --exclude='deploy-*.sh' \
+            --exclude='scripts/admin-test.sh' --exclude='scripts/reset-pending.sh' \
+            --exclude='WHATSAPP_AUTOMATION_COMPLETE_AUDIT.md' \
+            --exclude='TASK_*.md' \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
             ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/home/ubuntu/whatsapp-automation/
 

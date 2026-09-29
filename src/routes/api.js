@@ -14,7 +14,7 @@ const {
     getProducts, countProducts, createProduct, updateProduct, deleteProduct,
     CRM_STAGES, getCrmDeals, getCrmDealByPhone, getCrmDealById, createCrmDeal,
     updateCrmDeal, deleteCrmDeal, getCrmStats, getCrmAnalytics, addCrmActivity, getCrmActivities,
-    assertPersistable, transaction
+    assertPersistable, transaction, runSql
 } = require('../services/database');
 
 const { sendTextMessage, getStatus, initWhatsAppClient, destroyClientForUser } = require('../services/whatsapp-client');
@@ -23,6 +23,7 @@ const { analyzeConversation, analyzeAllConversations } = require('../services/le
 const { analyzeBusinessProfile, getBusinessInfo } = require('../services/business');
 const { parseCSV, mapContactRow } = require('../services/csv');
 const { startOutreachJob, getOutreachJob, cancelOutreachJob, MAX_RECIPIENTS_PER_JOB } = require('../services/outreach');
+const { getApiKey, testApiKey, ALL_GEMINI_MODELS } = require('../services/gemini-client');
 const { asyncHandler } = require('../utils/errors');
 const { perUser, concurrencyGate } = require('../middleware/rateLimit');
 const {
@@ -112,17 +113,17 @@ function requireDurableWrite(req, res, next) {
 // ─────────────────────────────────────────────────────────────
 //  DASHBOARD
 // ─────────────────────────────────────────────────────────────
-router.get('/dashboard/stats', (req, res) => {
+router.get('/dashboard/stats', asyncHandler(async (req, res) => {
     const uid = req.user.id;
-    const stats = getDashboardStats(uid);
+    const stats = await getDashboardStats(uid);
 
     // Leads overview
-    stats.leads = getLeadStats(uid);
+    stats.leads = await getLeadStats(uid);
 
     // Chats with new/unanalyzed messages
     try {
-        const phones = getConversationPhones(uid);
-        const analyses = getLeadAnalyses(uid);
+        const phones = await getConversationPhones(uid);
+        const analyses = await getLeadAnalyses(uid);
         const byPhone = new Map(analyses.map(l => [l.phone, l]));
         stats.awaitingAnalysis = phones.filter(p => {
             const existing = byPhone.get(p.phone);
@@ -133,23 +134,23 @@ router.get('/dashboard/stats', (req, res) => {
     }
 
     // Sales pipeline overview
-    stats.crm = getCrmStats(uid);
-    stats.currency = getSetting(uid, 'business_currency') || '₹';
+    stats.crm = await getCrmStats(uid);
+    stats.currency = (await getSetting(uid, 'business_currency')) || '₹';
 
     // System status
     stats.waConnected = !!getStatus(uid).connected;
     // Whether AI is usable, never the key itself. Returning any prefix or
     // length of a credential to the browser is a leak in waiting.
-    const geminiKey = getSetting(uid, 'gemini_api_key') || process.env.GEMINI_API_KEY || '';
+    const geminiKey = (await getSetting(uid, 'gemini_api_key')) || process.env.GEMINI_API_KEY || '';
     stats.aiConfigured = geminiKey.trim() !== '' && geminiKey !== 'your_gemini_api_key_here';
 
     // Plan / usage
     stats.plan = req.user.plan;
     stats.messageLimit = req.user.message_limit;
-    stats.messagesThisMonth = getMonthlyOutgoingCount(uid);
+    stats.messagesThisMonth = await getMonthlyOutgoingCount(uid);
 
     res.json({ success: true, data: stats });
-});
+}));
 
 router.get('/status', (req, res) => {
     res.json({ success: true, data: getStatus(req.user.id) });
@@ -167,7 +168,7 @@ const waConnectLimiter = perUser('wa-connect', {
     message: 'Too many WhatsApp connection attempts. Wait a moment before retrying.'
 });
 
-router.post('/whatsapp/connect', waConnectLimiter, (req, res) => {
+router.post('/whatsapp/connect', waConnectLimiter, asyncHandler(async (req, res) => {
     // Only admin accounts or users explicitly granted access may start a
     // WhatsApp session. Regular users default to wa_enabled = 0.
     if (req.user.role !== 'admin' && !req.user.wa_enabled) {
@@ -177,12 +178,12 @@ router.post('/whatsapp/connect', waConnectLimiter, (req, res) => {
             code: 'WA_NOT_ENABLED'
         });
     }
-    const result = initWhatsAppClient(req.user.id);
+    const result = await initWhatsAppClient(req.user.id);
     if (result && result.accepted === false) {
         return res.status(503).json({ success: false, error: result.reason, code: 'WA_AT_CAPACITY' });
     }
     res.json({ success: true });
-});
+}));
 
 router.post('/whatsapp/disconnect', waConnectLimiter, asyncHandler(async (req, res) => {
     await destroyClientForUser(req.user.id);
@@ -192,7 +193,7 @@ router.post('/whatsapp/disconnect', waConnectLimiter, asyncHandler(async (req, r
 // ─────────────────────────────────────────────────────────────
 //  CONTACTS
 // ─────────────────────────────────────────────────────────────
-router.get('/contacts', (req, res) => {
+router.get('/contacts', asyncHandler(async (req, res) => {
     // Search text is bounded and label is treated as an exact match. Both go
     // to SQLite as bound parameters (see database.getContacts), so the only
     // thing to enforce here is size.
@@ -201,15 +202,15 @@ router.get('/contacts', (req, res) => {
     const limit = clampInt(req.query.limit, { min: 1, max: LIMITS.MAX_PAGE_LIMIT, fallback: LIMITS.MAX_PAGE_LIMIT });
     const offset = clampInt(req.query.offset, { min: 0, max: LIMITS.MAX_OFFSET, fallback: 0 });
 
-    const contacts = getContacts(req.user.id, search, label, { limit, offset });
+    const contacts = await getContacts(req.user.id, search, label, { limit, offset });
     res.json({
         success: true,
         data: contacts,
-        meta: { limit, offset, total: countContacts(req.user.id) }
+        meta: { limit, offset, total: await countContacts(req.user.id) }
     });
-});
+}));
 
-router.post('/contacts', writeLimiter, requireDurableWrite, (req, res) => {
+router.post('/contacts', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
     const body = req.body || {};
     // normalizePhone is the single gate: it returns digits only, so a client
     // cannot store "…@g.us" (a group) or a raw internal WhatsApp id and have
@@ -222,7 +223,7 @@ router.post('/contacts', writeLimiter, requireDurableWrite, (req, res) => {
     // Per-tenant cap. The database is one shared in-memory image exported to
     // disk on every write, so one tenant's unbounded growth is everyone's
     // latency and, eventually, everyone's outage.
-    if (!getContactByPhone(req.user.id, phone) && countContacts(req.user.id) >= LIMITS.MAX_CONTACTS_PER_USER) {
+    if (!(await getContactByPhone(req.user.id, phone)) && (await countContacts(req.user.id)) >= LIMITS.MAX_CONTACTS_PER_USER) {
         return res.status(409).json({
             success: false,
             error: `You have reached the limit of ${LIMITS.MAX_CONTACTS_PER_USER.toLocaleString()} contacts. Delete some before adding more.`,
@@ -230,24 +231,24 @@ router.post('/contacts', writeLimiter, requireDurableWrite, (req, res) => {
         });
     }
 
-    const contact = upsertContact(req.user.id, phone, name, label, notes);
+    const contact = await upsertContact(req.user.id, phone, name, label, notes);
     res.json({ success: true, data: contact });
-});
+}));
 
-router.delete('/contacts/:id', writeLimiter, (req, res) => {
+router.delete('/contacts/:id', writeLimiter, asyncHandler(async (req, res) => {
     const id = requireId(req.params.id, 'contact id');
     // Scoped by user_id in the DELETE itself — an id belonging to another
     // tenant matches zero rows and returns 404, not their data.
-    const { changes } = deleteContact(req.user.id, id);
+    const { changes } = await deleteContact(req.user.id, id);
     if (!changes) return res.status(404).json({ success: false, error: 'Contact not found' });
     res.json({ success: true });
-});
+}));
 
 // ─── CSV import ─────────────────────────────────────────────
 // Body is { csv: "<raw file text>" }, not multipart — the browser reads the
 // file client-side (FileReader) and sends it as a JSON string, which avoids
 // needing multer/disk storage for something that's read once and discarded.
-router.post('/contacts/import', importLimiter, requireDurableWrite, (req, res) => {
+router.post('/contacts/import', importLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
     const csvText = req.body?.csv;
     if (typeof csvText !== 'string' || !csvText.trim()) {
         return res.status(400).json({ success: false, error: 'No CSV content received' });
@@ -271,15 +272,15 @@ router.post('/contacts/import', importLimiter, requireDurableWrite, (req, res) =
     }
 
     const mapped = rawRows.map(mapContactRow);
-    const result = bulkUpsertContacts(req.user.id, mapped);
+    const result = await bulkUpsertContacts(req.user.id, mapped);
 
     res.json({ success: true, data: result });
-});
+}));
 
 // ─── Bulk outreach ──────────────────────────────────────────
 // Starts a background send job and returns immediately — see src/outreach.js
 // for why this can't be a normal synchronous request/response.
-router.post('/contacts/outreach', sendLimiter, requireDurableWrite, (req, res) => {
+router.post('/contacts/outreach', sendLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
     const body = req.body || {};
     const { contactIds } = body;
     if (!Array.isArray(contactIds) || contactIds.length === 0) {
@@ -298,14 +299,14 @@ router.post('/contacts/outreach', sendLimiter, requireDurableWrite, (req, res) =
         return res.status(409).json({ success: false, error: 'Connect WhatsApp first (Settings → WhatsApp QR) before sending outreach.' });
     }
 
-    const contacts = getContactsByIds(req.user.id, contactIds);
+    const contacts = await getContactsByIds(req.user.id, contactIds);
     if (contacts.length === 0) {
         return res.status(400).json({ success: false, error: 'None of the selected contacts could be found' });
     }
 
     const job = startOutreachJob(req.user, contacts, message);
     res.json({ success: true, data: { jobId: job.id, total: job.total } });
-});
+}));
 
 router.get('/contacts/outreach/:jobId', (req, res) => {
     // getOutreachJob checks ownership; an unknown or someone else's job id is
@@ -324,7 +325,7 @@ router.post('/contacts/outreach/:jobId/cancel', (req, res) => {
 // ─────────────────────────────────────────────────────────────
 //  MESSAGES
 // ─────────────────────────────────────────────────────────────
-router.get('/messages', (req, res) => {
+router.get('/messages', asyncHandler(async (req, res) => {
     // Every one of these was previously passed straight through:
     // ?limit=999999999 turned into a SQL LIMIT and materialised the whole
     // table into one JSON response, and a non-numeric limit became NaN.
@@ -333,26 +334,26 @@ router.get('/messages', (req, res) => {
     const limit = clampInt(req.query.limit, { min: 1, max: LIMITS.MAX_PAGE_LIMIT, fallback: LIMITS.DEFAULT_PAGE_LIMIT });
     const offset = clampInt(req.query.offset, { min: 0, max: LIMITS.MAX_OFFSET, fallback: 0 });
 
-    const messages = getMessages(req.user.id, { phone, direction, limit, offset });
+    const messages = await getMessages(req.user.id, { phone, direction, limit, offset });
     res.json({
         success: true,
         data: messages,
-        meta: { limit, offset, total: countMessages(req.user.id, { phone, direction }) }
+        meta: { limit, offset, total: await countMessages(req.user.id, { phone, direction }) }
     });
-});
+}));
 
-router.get('/messages/conversation/:phone', (req, res) => {
+router.get('/messages/conversation/:phone', asyncHandler(async (req, res) => {
     const phone = normalizePhone(req.params.phone);
     const limit = clampInt(req.query.limit, { min: 1, max: 2000, fallback: 500 });
-    const messages = getConversation(req.user.id, phone, { limit });
+    const messages = await getConversation(req.user.id, phone, { limit });
     res.json({ success: true, data: messages });
-});
+}));
 
 // Danger Zone → Clear Message History: permanently deletes this account's own message log.
-router.delete('/messages', writeLimiter, (req, res) => {
-    clearMessages(req.user.id);
+router.delete('/messages', writeLimiter, asyncHandler(async (req, res) => {
+    await clearMessages(req.user.id);
     res.json({ success: true });
-});
+}));
 
 /**
  * Send a WhatsApp message.
@@ -399,7 +400,7 @@ router.post('/messages/send', sendLimiter, requireDurableWrite, asyncHandler(asy
         }
     }
 
-    if (req.user.message_limit && getMonthlyOutgoingCount(uid) >= req.user.message_limit) {
+    if (req.user.message_limit && (await getMonthlyOutgoingCount(uid)) >= req.user.message_limit) {
         return res.status(403).json({
             success: false,
             error: `Monthly message limit reached (${req.user.message_limit}). Contact your administrator to raise it.`,
@@ -410,7 +411,7 @@ router.post('/messages/send', sendLimiter, requireDurableWrite, asyncHandler(asy
     // Claim the key first. If this insert wins, we own the send; a concurrent
     // duplicate loses and reports itself as a duplicate without sending.
     if (idempotencyKey) {
-        const claim = logOutgoingMessageIdempotent(uid, idempotencyKey, {
+        const claim = await logOutgoingMessageIdempotent(uid, idempotencyKey, {
             phone,
             direction: 'outgoing',
             messageType: 'text',
@@ -431,12 +432,10 @@ router.post('/messages/send', sendLimiter, requireDurableWrite, asyncHandler(asy
         // must decide, with a new key, whether to try again.
         if (idempotencyKey) {
             try {
-                const row = findMessageByIdempotencyKey(uid, idempotencyKey);
-                if (row) require('../services/database').transaction(() => {
-                    require('../services/database').getDb().run(
-                        "UPDATE messages SET status = 'failed' WHERE id = ?", [row.id]
-                    );
-                });
+                const row = await findMessageByIdempotencyKey(uid, idempotencyKey);
+                if (row) {
+                    await runSql("UPDATE messages SET status = 'failed' WHERE id = $1", [row.id]);
+                }
             } catch (_) { /* logging the failure must not mask the real error */ }
         }
         err.status = err.status || 502;
@@ -444,16 +443,12 @@ router.post('/messages/send', sendLimiter, requireDurableWrite, asyncHandler(asy
     }
 
     if (idempotencyKey) {
-        const row = findMessageByIdempotencyKey(uid, idempotencyKey);
+        const row = await findMessageByIdempotencyKey(uid, idempotencyKey);
         if (row) {
-            transaction(() => {
-                require('../services/database').getDb().run(
-                    "UPDATE messages SET status = 'sent' WHERE id = ?", [row.id]
-                );
-            });
+            await runSql("UPDATE messages SET status = 'sent' WHERE id = $1", [row.id]);
         }
     } else {
-        logMessage(uid, {
+        await logMessage(uid, {
             waMessageId: result?.id?._serialized || result?.messageId || null,
             phone,
             direction: 'outgoing',
@@ -464,8 +459,8 @@ router.post('/messages/send', sendLimiter, requireDurableWrite, asyncHandler(asy
     }
 
     // Auto-save contact
-    if (!getContactByPhone(uid, phone)) {
-        if (countContacts(uid) < LIMITS.MAX_CONTACTS_PER_USER) upsertContact(uid, phone);
+    if (!(await getContactByPhone(uid, phone))) {
+        if ((await countContacts(uid)) < LIMITS.MAX_CONTACTS_PER_USER) await upsertContact(uid, phone);
     }
 
     res.json({ success: true, data: { sent: true, messageId: result?.id?._serialized || null } });
@@ -474,9 +469,9 @@ router.post('/messages/send', sendLimiter, requireDurableWrite, asyncHandler(asy
 // ─────────────────────────────────────────────────────────────
 //  CHATBOT RULES
 // ─────────────────────────────────────────────────────────────
-router.get('/chatbot/rules', (req, res) => {
-    res.json({ success: true, data: getChatbotRules(req.user.id) });
-});
+router.get('/chatbot/rules', asyncHandler(async (req, res) => {
+    res.json({ success: true, data: await getChatbotRules(req.user.id) });
+}));
 
 const RULE_MATCH_TYPES = ['exact', 'contains', 'startswith', 'regex'];
 
@@ -495,7 +490,7 @@ function validateRuleTrigger(triggerKeyword, matchType) {
     return keyword;
 }
 
-router.post('/chatbot/rules', writeLimiter, requireDurableWrite, (req, res) => {
+router.post('/chatbot/rules', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
     const uid = req.user.id;
     const body = req.body || {};
     const matchType = body.match_type === undefined ? 'contains'
@@ -504,7 +499,7 @@ router.post('/chatbot/rules', writeLimiter, requireDurableWrite, (req, res) => {
     const responseText = requireString(body.response_text, 'response_text', { max: LIMITS.RULE_RESPONSE });
     const priority = clampInt(body.priority, { min: -1000, max: 1000, fallback: 0 });
 
-    const current = countChatbotRules(uid);
+    const current = await countChatbotRules(uid);
     // Plan limit first (an admin-set number), then the platform ceiling that
     // exists regardless of plan, because every active rule is evaluated on
     // every inbound message.
@@ -523,11 +518,11 @@ router.post('/chatbot/rules', writeLimiter, requireDurableWrite, (req, res) => {
         });
     }
 
-    const rule = createChatbotRule(uid, triggerKeyword, matchType, responseText, priority);
+    const rule = await createChatbotRule(uid, triggerKeyword, matchType, responseText, priority);
     res.json({ success: true, data: rule });
-});
+}));
 
-router.put('/chatbot/rules/:id', writeLimiter, requireDurableWrite, (req, res) => {
+router.put('/chatbot/rules/:id', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
     const uid = req.user.id;
     const id = requireId(req.params.id, 'rule id');
     const body = req.body || {};
@@ -537,7 +532,8 @@ router.put('/chatbot/rules/:id', writeLimiter, requireDurableWrite, (req, res) =
     // *edited* into a catastrophic regex even though creating one was
     // checked. Re-validate against the effective match type, which may be
     // the stored one if this request only changes the keyword.
-    const existing = getChatbotRules(uid).find(r => r.id === id);
+    const rules = await getChatbotRules(uid);
+    const existing = rules.find(r => r.id === id);
     if (!existing) return res.status(404).json({ success: false, error: 'Rule not found' });
 
     const fields = {};
@@ -568,41 +564,39 @@ router.put('/chatbot/rules/:id', writeLimiter, requireDurableWrite, (req, res) =
         return res.status(400).json({ success: false, error: 'No changes supplied.' });
     }
 
-    updateChatbotRule(uid, id, fields);
-    const updated = getChatbotRules(uid).find(r => r.id === id);
+    await updateChatbotRule(uid, id, fields);
+    const updatedRules = await getChatbotRules(uid);
+    const updated = updatedRules.find(r => r.id === id);
     res.json({ success: true, data: updated });
-});
+}));
 
-router.delete('/chatbot/rules/:id', writeLimiter, (req, res) => {
+router.delete('/chatbot/rules/:id', writeLimiter, asyncHandler(async (req, res) => {
     const id = requireId(req.params.id, 'rule id');
-    const { changes } = deleteChatbotRule(req.user.id, id);
+    const { changes } = await deleteChatbotRule(req.user.id, id);
     if (!changes) return res.status(404).json({ success: false, error: 'Rule not found' });
     res.json({ success: true });
-});
+}));
 
 // Test a message against chatbot rules (without sending)
-router.post('/chatbot/test', writeLimiter, (req, res) => {
+router.post('/chatbot/test', writeLimiter, asyncHandler(async (req, res) => {
     const message = requireString(req.body?.message, 'message', { max: LIMITS.MESSAGE_BODY });
-    res.json({ success: true, data: testMessage(req.user.id, message) });
-});
+    res.json({ success: true, data: await testMessage(req.user.id, message) });
+}));
 
 // ─────────────────────────────────────────────────────────────
 //  SCHEDULED MESSAGES
 // ─────────────────────────────────────────────────────────────
-router.get('/scheduled', (req, res) => {
+router.get('/scheduled', asyncHandler(async (req, res) => {
     const status = optionalEnum(req.query.status, ['pending', 'sending', 'sent', 'failed', 'cancelled'], 'status');
-    res.json({ success: true, data: getScheduledMessages(req.user.id, status) });
-});
+    res.json({ success: true, data: await getScheduledMessages(req.user.id, status) });
+}));
 
-router.post('/scheduled', writeLimiter, requireDurableWrite, (req, res) => {
+router.post('/scheduled', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
     const body = req.body || {};
     const phone = normalizePhone(body.phone);
     const text = requireString(body.body, 'body', { max: LIMITS.MESSAGE_BODY });
 
-    // toSqliteUtc returns "YYYY-MM-DD HH:MM:SS" in UTC — the only format the
-    // scheduler's `scheduled_at <= datetime('now')` string comparison can
-    // evaluate correctly. Storing the client's raw ISO string (with a 'T'
-    // and/or 'Z') meant the job either fired instantly or never fired.
+    // toSqliteUtc returns "YYYY-MM-DD HH:MM:SS" in UTC
     const scheduledAt = toSqliteUtc(body.scheduled_at, 'scheduled_at');
 
     // Small grace window for clock skew / time spent filling the form.
@@ -610,7 +604,7 @@ router.post('/scheduled', writeLimiter, requireDurableWrite, (req, res) => {
         return res.status(400).json({ success: false, error: 'scheduled_at must be in the future.' });
     }
 
-    if (countPendingScheduledMessages(req.user.id) >= LIMITS.MAX_PENDING_SCHEDULED_PER_USER) {
+    if ((await countPendingScheduledMessages(req.user.id)) >= LIMITS.MAX_PENDING_SCHEDULED_PER_USER) {
         return res.status(409).json({
             success: false,
             error: `You already have ${LIMITS.MAX_PENDING_SCHEDULED_PER_USER} messages scheduled. Cancel some before adding more.`,
@@ -618,16 +612,16 @@ router.post('/scheduled', writeLimiter, requireDurableWrite, (req, res) => {
         });
     }
 
-    const msg = createScheduledMessage(req.user.id, phone, text, scheduledAt);
+    const msg = await createScheduledMessage(req.user.id, phone, text, scheduledAt);
     res.json({ success: true, data: msg });
-});
+}));
 
-router.delete('/scheduled/:id', writeLimiter, (req, res) => {
+router.delete('/scheduled/:id', writeLimiter, asyncHandler(async (req, res) => {
     const id = requireId(req.params.id, 'scheduled message id');
     // The UPDATE requires status='pending', so cancelling a message the
     // scheduler has already claimed ('sending') correctly fails rather than
     // pretending a send in flight was stopped.
-    const { changes } = cancelScheduledMessage(req.user.id, id);
+    const { changes } = await cancelScheduledMessage(req.user.id, id);
     if (!changes) {
         return res.status(409).json({
             success: false,
@@ -635,22 +629,22 @@ router.delete('/scheduled/:id', writeLimiter, (req, res) => {
         });
     }
     res.json({ success: true });
-});
+}));
 
 // ─────────────────────────────────────────────────────────────
 //  LEAD ANALYSIS (AI conversation insights)
 // ─────────────────────────────────────────────────────────────
 
 // List saved lead analyses (sorted by priority, then interest score)
-router.get('/leads', (req, res) => {
+router.get('/leads', asyncHandler(async (req, res) => {
     const uid = req.user.id;
     const interest = optionalEnum(req.query.interest, ['interested', 'not_interested', 'neutral', 'unclear'], 'interest');
     const priority = optionalEnum(req.query.priority, ['high', 'medium', 'low'], 'priority');
 
-    const leads = getLeadAnalyses(uid, { interestStatus: interest || '', priority: priority || '' });
-    const stats = getLeadStats(uid);
+    const leads = await getLeadAnalyses(uid, { interestStatus: interest || '', priority: priority || '' });
+    const stats = await getLeadStats(uid);
     // Conversations that exist but haven't been analyzed yet (or have new messages)
-    const phones = getConversationPhones(uid);
+    const phones = await getConversationPhones(uid);
     const leadByPhone = new Map(leads.map(l => [l.phone, l]));
     const pending = phones.filter(p => {
         const existing = leadByPhone.get(p.phone);
@@ -658,15 +652,15 @@ router.get('/leads', (req, res) => {
     }).map(p => ({ phone: p.phone, contact_name: p.contact_name, message_count: p.message_count }));
 
     res.json({ success: true, data: { leads, stats, pending } });
-});
+}));
 
 // Get one lead's analysis
-router.get('/leads/:phone', (req, res) => {
+router.get('/leads/:phone', asyncHandler(async (req, res) => {
     const phone = normalizePhone(req.params.phone);
-    const lead = getLeadAnalysis(req.user.id, phone);
+    const lead = await getLeadAnalysis(req.user.id, phone);
     if (!lead) return res.status(404).json({ success: false, error: 'No analysis found for this contact yet.' });
     res.json({ success: true, data: lead });
-});
+}));
 
 // Analyze (or re-analyze) one conversation now
 router.post('/leads/analyze/:phone', aiLimiter, withAiSlot(async (req, res) => {
@@ -699,19 +693,19 @@ router.post('/leads/analyze-all', aiLimiter, withAiSlot(async (req, res) => {
   }));
 
 // Delete a saved analysis
-router.delete('/leads/:id', writeLimiter, (req, res) => {
+router.delete('/leads/:id', writeLimiter, asyncHandler(async (req, res) => {
     const id = requireId(req.params.id, 'lead id');
-    const { changes } = deleteLeadAnalysis(req.user.id, id);
+    const { changes } = await deleteLeadAnalysis(req.user.id, id);
     if (!changes) return res.status(404).json({ success: false, error: 'Lead not found' });
     res.json({ success: true });
-});
+}));
 
 // ─────────────────────────────────────────────────────────────
 //  BUSINESS SETUP (products, catalog, AI business analysis)
 // ─────────────────────────────────────────────────────────────
-router.get('/products', (req, res) => {
-    res.json({ success: true, data: getProducts(req.user.id) });
-});
+router.get('/products', asyncHandler(async (req, res) => {
+    res.json({ success: true, data: await getProducts(req.user.id) });
+}));
 
 /**
  * Validates a product URL.
@@ -736,11 +730,11 @@ function validateProductUrl(value) {
     return parsed.toString();
 }
 
-router.post('/products', writeLimiter, requireDurableWrite, (req, res) => {
+router.post('/products', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
     const body = req.body || {};
     const name = sanitizeSpreadsheetCell(requireString(body.name, 'name', { max: LIMITS.PRODUCT_NAME }));
 
-    if (countProducts(req.user.id) >= LIMITS.MAX_PRODUCTS_PER_USER) {
+    if ((await countProducts(req.user.id)) >= LIMITS.MAX_PRODUCTS_PER_USER) {
         return res.status(409).json({
             success: false,
             error: `You have reached the maximum of ${LIMITS.MAX_PRODUCTS_PER_USER} products.`,
@@ -748,7 +742,7 @@ router.post('/products', writeLimiter, requireDurableWrite, (req, res) => {
         });
     }
 
-    const product = createProduct(req.user.id, {
+    const product = await createProduct(req.user.id, {
         name,
         description: optionalString(body.description, 'description', LIMITS.PRODUCT_DESCRIPTION),
         price: optionalString(body.price, 'price', LIMITS.PRODUCT_PRICE),
@@ -756,9 +750,9 @@ router.post('/products', writeLimiter, requireDurableWrite, (req, res) => {
         url: validateProductUrl(body.url)
     });
     res.json({ success: true, data: product });
-});
+}));
 
-router.put('/products/:id', writeLimiter, requireDurableWrite, (req, res) => {
+router.put('/products/:id', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
     const id = requireId(req.params.id, 'product id');
     const body = req.body || {};
 
@@ -770,17 +764,17 @@ router.put('/products/:id', writeLimiter, requireDurableWrite, (req, res) => {
     if (body.url !== undefined)         fields.url = validateProductUrl(body.url);
     if (body.is_active !== undefined)   fields.is_active = (body.is_active === true || body.is_active === 1 || body.is_active === '1') ? 1 : 0;
 
-    const updated = updateProduct(req.user.id, id, fields);
+    const updated = await updateProduct(req.user.id, id, fields);
     if (!updated) return res.status(404).json({ success: false, error: 'Product not found' });
     res.json({ success: true, data: updated });
-});
+}));
 
-router.delete('/products/:id', writeLimiter, (req, res) => {
+router.delete('/products/:id', writeLimiter, asyncHandler(async (req, res) => {
     const id = requireId(req.params.id, 'product id');
-    const { changes } = deleteProduct(req.user.id, id);
+    const { changes } = await deleteProduct(req.user.id, id);
     if (!changes) return res.status(404).json({ success: false, error: 'Product not found' });
     res.json({ success: true });
-});
+}));
 
 // Run the AI business analysis and save the sales brief
 router.post('/business/analyze', aiLimiter, withAiSlot(async (req, res) => {
@@ -789,32 +783,35 @@ router.post('/business/analyze', aiLimiter, withAiSlot(async (req, res) => {
 }));
 
 // Current business info (settings + products in one call)
-router.get('/business', (req, res) => {
-    const info = getBusinessInfo(req.user.id);
+router.get('/business', asyncHandler(async (req, res) => {
+    const info = await getBusinessInfo(req.user.id);
     let aiProfile = null;
-    try { aiProfile = JSON.parse(getSetting(req.user.id, 'business_ai_profile') || ''); } catch (e) { aiProfile = null; }
+    try {
+        const raw = await getSetting(req.user.id, 'business_ai_profile');
+        aiProfile = JSON.parse(raw || '');
+    } catch (e) { aiProfile = null; }
     res.json({ success: true, data: { ...info, aiProfile } });
-});
+}));
 
 // ─────────────────────────────────────────────────────────────
 //  CRM (pipeline, deals, activities)
 // ─────────────────────────────────────────────────────────────
-router.get('/crm/deals', (req, res) => {
+router.get('/crm/deals', asyncHandler(async (req, res) => {
     const uid = req.user.id;
     const stage = optionalEnum(req.query.stage, CRM_STAGES, 'stage');
-    const deals = getCrmDeals(uid, { stage: stage || '' });
-    const stats = getCrmStats(uid);
-    const currency = getSetting(uid, 'business_currency') || '₹';
+    const deals = await getCrmDeals(uid, { stage: stage || '' });
+    const stats = await getCrmStats(uid);
+    const currency = (await getSetting(uid, 'business_currency')) || '₹';
     res.json({ success: true, data: { deals, stats, stages: CRM_STAGES, currency } });
-});
+}));
 
-router.get('/crm/analytics', (req, res) => {
-    const analytics = getCrmAnalytics(req.user.id);
-    analytics.currency = getSetting(req.user.id, 'business_currency') || '₹';
+router.get('/crm/analytics', asyncHandler(async (req, res) => {
+    const analytics = await getCrmAnalytics(req.user.id);
+    analytics.currency = (await getSetting(req.user.id, 'business_currency')) || '₹';
     res.json({ success: true, data: analytics });
-});
+}));
 
-router.post('/crm/deals', writeLimiter, requireDurableWrite, (req, res) => {
+router.post('/crm/deals', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
     const uid = req.user.id;
     const body = req.body || {};
     const phone = normalizePhone(body.phone);
@@ -822,13 +819,13 @@ router.post('/crm/deals', writeLimiter, requireDurableWrite, (req, res) => {
     // UNIQUE(user_id, phone) is the real guard against a double-click creating
     // two deals; this check just produces a friendlier message when it isn't
     // a race.
-    if (getCrmDealByPhone(uid, phone)) {
+    if (await getCrmDealByPhone(uid, phone)) {
         return res.status(409).json({ success: false, error: 'A deal already exists for this contact.' });
     }
 
     let deal;
     try {
-        deal = createCrmDeal(uid, {
+        deal = await createCrmDeal(uid, {
             phone,
             contactName: sanitizeSpreadsheetCell(optionalString(body.contact_name, 'contact_name', LIMITS.CONTACT_NAME)),
             stage: body.stage === undefined ? 'new' : requireEnum(body.stage, CRM_STAGES, 'stage'),
@@ -839,22 +836,22 @@ router.post('/crm/deals', writeLimiter, requireDurableWrite, (req, res) => {
             nextFollowupAt: body.next_followup_at ? toSqliteUtc(body.next_followup_at, 'next_followup_at') : null
         });
     } catch (err) {
-        if (/UNIQUE constraint failed/i.test(String(err.message))) {
+        if (/UNIQUE constraint failed|duplicate key value/i.test(String(err.message))) {
             return res.status(409).json({ success: false, error: 'A deal already exists for this contact.' });
         }
         throw err;
     }
 
-    addCrmActivity(uid, deal.phone, 'system', 'Deal created manually');
+    await addCrmActivity(uid, deal.phone, 'system', 'Deal created manually');
     res.json({ success: true, data: deal });
-});
+}));
 
-router.put('/crm/deals/:id', writeLimiter, requireDurableWrite, (req, res) => {
+router.put('/crm/deals/:id', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
     const uid = req.user.id;
     const id = requireId(req.params.id, 'deal id');
     const body = req.body || {};
 
-    const existing = getCrmDealById(uid, id);
+    const existing = await getCrmDealById(uid, id);
     if (!existing) return res.status(404).json({ success: false, error: 'Deal not found' });
 
     const fields = {};
@@ -867,47 +864,47 @@ router.put('/crm/deals/:id', writeLimiter, requireDurableWrite, (req, res) => {
         fields.next_followup_at = body.next_followup_at ? toSqliteUtc(body.next_followup_at, 'next_followup_at') : null;
     }
 
-    const updated = updateCrmDeal(uid, id, fields);
+    const updated = await updateCrmDeal(uid, id, fields);
 
     if (fields.stage !== undefined && fields.stage !== existing.stage) {
-        addCrmActivity(uid, existing.phone, 'stage', `Stage changed: ${existing.stage} → ${fields.stage}`);
+        await addCrmActivity(uid, existing.phone, 'stage', `Stage changed: ${existing.stage} → ${fields.stage}`);
     }
 
     res.json({ success: true, data: updated });
-});
+}));
 
-router.delete('/crm/deals/:id', writeLimiter, (req, res) => {
+router.delete('/crm/deals/:id', writeLimiter, asyncHandler(async (req, res) => {
     const id = requireId(req.params.id, 'deal id');
-    const { changes } = deleteCrmDeal(req.user.id, id);
+    const { changes } = await deleteCrmDeal(req.user.id, id);
     if (!changes) return res.status(404).json({ success: false, error: 'Deal not found' });
     res.json({ success: true });
-});
+}));
 
 // One deal with its lead analysis + activity timeline (for the detail view)
-router.get('/crm/deals/phone/:phone', (req, res) => {
+router.get('/crm/deals/phone/:phone', asyncHandler(async (req, res) => {
     const uid = req.user.id;
     const phone = normalizePhone(req.params.phone);
-    const deal = getCrmDealByPhone(uid, phone);
+    const deal = await getCrmDealByPhone(uid, phone);
     if (!deal) return res.status(404).json({ success: false, error: 'Deal not found' });
-    const analysis = getLeadAnalysis(uid, phone) || null;
-    const activities = getCrmActivities(uid, phone);
+    const analysis = (await getLeadAnalysis(uid, phone)) || null;
+    const activities = await getCrmActivities(uid, phone);
     res.json({ success: true, data: { deal, analysis, activities } });
-});
+}));
 
-router.post('/crm/deals/phone/:phone/notes', writeLimiter, requireDurableWrite, (req, res) => {
+router.post('/crm/deals/phone/:phone/notes', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
     const phone = normalizePhone(req.params.phone);
     const content = sanitizeSpreadsheetCell(
         requireString(req.body?.content, 'content', { max: LIMITS.CRM_NOTE_ENTRY })
     );
-    const activity = addCrmActivity(req.user.id, phone, 'note', content);
+    const activity = await addCrmActivity(req.user.id, phone, 'note', content);
     res.json({ success: true, data: activity });
-});
+}));
 
 // ─────────────────────────────────────────────────────────────
 //  SETTINGS
 // ─────────────────────────────────────────────────────────────
-router.get('/settings', (req, res) => {
-    const settings = getAllSettings(req.user.id);
+router.get('/settings', asyncHandler(async (req, res) => {
+    const settings = await getAllSettings(req.user.id);
     // The API key never leaves the server. The dashboard only needs to know
     // whether one is configured, so it gets a boolean; sending the value back
     // (as the old handler did) means it lives in the browser's memory, in any
@@ -915,24 +912,21 @@ router.get('/settings', (req, res) => {
     const hasKey = !!(settings.gemini_api_key && settings.gemini_api_key.trim() !== '');
     delete settings.gemini_api_key;
     res.json({ success: true, data: { ...settings, gemini_api_key_set: hasKey } });
-});
+}));
 
-router.put('/settings', writeLimiter, requireDurableWrite, (req, res) => {
+router.put('/settings', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
     const uid = req.user.id;
-    // An allow-list with per-key length caps. Previously this loop wrote any
-    // key at any size, which is an unbounded write primitive into a database
-    // every tenant shares — and it let a client overwrite server-owned values
-    // such as business_ai_profile.
+    // An allow-list with per-key length caps.
     const { accepted, rejected } = validateSettingsPatch(req.body);
 
-    transaction(() => {
+    await transaction(async () => {
         for (const [key, value] of Object.entries(accepted)) {
             // An empty key means "clear it"; the UI sends the field blank.
-            setSetting(uid, key, value);
+            await setSetting(uid, key, value);
         }
     });
 
-    const settings = getAllSettings(uid);
+    const settings = await getAllSettings(uid);
     const hasKey = !!(settings.gemini_api_key && settings.gemini_api_key.trim() !== '');
     delete settings.gemini_api_key;
 
@@ -941,7 +935,40 @@ router.put('/settings', writeLimiter, requireDurableWrite, (req, res) => {
         data: { ...settings, gemini_api_key_set: hasKey },
         meta: rejected.length ? { ignored: rejected } : undefined
     });
+}));
+
+router.get('/settings/gemini-models', (req, res) => {
+    res.json({
+        success: true,
+        data: {
+            models: ALL_GEMINI_MODELS,
+            default: 'auto'
+        }
+    });
 });
+
+router.post('/settings/test-gemini', writeLimiter, asyncHandler(async (req, res) => {
+    try {
+        const candidate = (req.body?.key && typeof req.body.key === 'string' && req.body.key.trim()) || (await getApiKey(req.user.id));
+        const preferredModel = (req.body?.model && typeof req.body.model === 'string' && req.body.model.trim()) || (await getSetting(req.user.id, 'gemini_model'));
+        if (!candidate) {
+            return res.status(400).json({ success: false, error: 'No Gemini API key found. Please type your API key.' });
+        }
+        const result = await testApiKey(candidate, preferredModel);
+        res.json({
+            success: true,
+            data: {
+                success: true,
+                model: result.model,
+                supportedModels: ALL_GEMINI_MODELS
+            },
+            model: result.model,
+            supportedModels: ALL_GEMINI_MODELS
+        });
+    } catch (err) {
+        res.status(400).json({ success: false, error: err.message || 'API key validation failed' });
+    }
+}));
 
 module.exports = router;
 
