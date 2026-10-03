@@ -23,7 +23,7 @@ const { analyzeConversation, analyzeAllConversations } = require('../services/le
 const { analyzeBusinessProfile, getBusinessInfo } = require('../services/business');
 const { parseCSV, mapContactRow } = require('../services/csv');
 const { startOutreachJob, getOutreachJob, cancelOutreachJob, MAX_RECIPIENTS_PER_JOB } = require('../services/outreach');
-const { getApiKey, testApiKey, ALL_GEMINI_MODELS } = require('../services/gemini-client');
+const { getApiKey, testApiKey, ALL_GEMINI_MODELS, resetCircuits } = require('../services/gemini-client');
 const { asyncHandler } = require('../utils/errors');
 const { perUser, concurrencyGate } = require('../middleware/rateLimit');
 const {
@@ -281,6 +281,14 @@ router.post('/contacts/import', importLimiter, requireDurableWrite, asyncHandler
 // Starts a background send job and returns immediately — see src/outreach.js
 // for why this can't be a normal synchronous request/response.
 router.post('/contacts/outreach', sendLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
+    if (req.user.role !== 'admin' && !req.user.wa_enabled) {
+        return res.status(403).json({
+            success: false,
+            error: 'WhatsApp access has not been enabled for your account. Please contact the administrator.',
+            code: 'WA_NOT_ENABLED'
+        });
+    }
+
     const body = req.body || {};
     const { contactIds } = body;
     if (!Array.isArray(contactIds) || contactIds.length === 0) {
@@ -378,6 +386,14 @@ router.delete('/messages', writeLimiter, asyncHandler(async (req, res) => {
  * would both find no record, both send, and only then both try to log.
  */
 router.post('/messages/send', sendLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
+    if (req.user.role !== 'admin' && !req.user.wa_enabled) {
+        return res.status(403).json({
+            success: false,
+            error: 'WhatsApp access has not been enabled for your account. Please contact the administrator.',
+            code: 'WA_NOT_ENABLED'
+        });
+    }
+
     const uid = req.user.id;
     const body = req.body || {};
     const phone = normalizePhone(body.phone);
@@ -389,7 +405,7 @@ router.post('/messages/send', sendLimiter, requireDurableWrite, asyncHandler(asy
         : requireString(String(rawKey), 'Idempotency-Key', { max: 120 });
 
     if (idempotencyKey) {
-        const already = findMessageByIdempotencyKey(uid, idempotencyKey);
+        const already = await findMessageByIdempotencyKey(uid, idempotencyKey);
         if (already) {
             // 200 with a flag, not an error: the caller's intent was carried
             // out exactly once, which is what they asked for.
@@ -592,6 +608,14 @@ router.get('/scheduled', asyncHandler(async (req, res) => {
 }));
 
 router.post('/scheduled', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
+    if (req.user.role !== 'admin' && !req.user.wa_enabled) {
+        return res.status(403).json({
+            success: false,
+            error: 'WhatsApp access has not been enabled for your account. Please contact the administrator.',
+            code: 'WA_NOT_ENABLED'
+        });
+    }
+
     const body = req.body || {};
     const phone = normalizePhone(body.phone);
     const text = requireString(body.body, 'body', { max: LIMITS.MESSAGE_BODY });
@@ -925,6 +949,10 @@ router.put('/settings', writeLimiter, requireDurableWrite, asyncHandler(async (r
             await setSetting(uid, key, value);
         }
     });
+
+    if (accepted.gemini_api_key !== undefined) {
+        resetCircuits();
+    }
 
     const settings = await getAllSettings(uid);
     const hasKey = !!(settings.gemini_api_key && settings.gemini_api_key.trim() !== '');

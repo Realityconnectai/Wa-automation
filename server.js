@@ -97,8 +97,29 @@ function fatal(label, err) {
     process.exit(1);
 }
 
+function isNonFatalRejection(err) {
+    const msg = (err && (err.message || String(err))) || '';
+    return (
+        msg.includes('onQRChangedEvent') ||
+        msg.includes('already exists') ||
+        msg.includes('Execution context was destroyed') ||
+        msg.includes('Target closed') ||
+        msg.includes('Protocol error') ||
+        msg.includes('Session closed') ||
+        msg.includes('Evaluation failed') ||
+        msg.includes('Cannot find context with specified id')
+    );
+}
+
 process.on('uncaughtException', (err) => fatal('UNCAUGHT EXCEPTION', err));
-process.on('unhandledRejection', (reason) => fatal('UNHANDLED REJECTION', reason instanceof Error ? reason : new Error(String(reason))));
+process.on('unhandledRejection', (reason) => {
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    if (isNonFatalRejection(err)) {
+        console.warn('⚠️  Ignored non-fatal Puppeteer/async unhandled rejection:', err.message);
+        return;
+    }
+    fatal('UNHANDLED REJECTION', err);
+});
 
 // ─── Graceful shutdown ────────────────────────────────────────
 /**

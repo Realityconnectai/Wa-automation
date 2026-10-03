@@ -269,11 +269,13 @@ function verifySessionToken(token, expectedType = 'refresh') {
         return null;
     }
     if (!payload || typeof payload !== 'object') return null;
-    if (payload.type !== expectedType) return null;
+    if (expectedType && expectedType !== 'any') {
+        if (payload.type && payload.type !== expectedType) return null;
+    }
     if (typeof payload.id !== 'number' || !Number.isSafeInteger(payload.id) || payload.id <= 0) return null;
     if (typeof payload.exp !== 'number' || Date.now() > payload.exp) return null;
     
-    const maxTtl = expectedType === 'access' ? ACCESS_TOKEN_TTL_MS : SESSION_TTL_MS;
+    const maxTtl = payload.type === 'access' ? ACCESS_TOKEN_TTL_MS : SESSION_TTL_MS;
     const iat = typeof payload.iat === 'number' ? payload.iat : payload.exp - maxTtl;
     if (payload.exp - iat > maxTtl + 60000) return null;
     if (iat < getUserTokenEpoch(payload.id)) return null;
@@ -340,17 +342,58 @@ function clearSessionCookie(res) {
     res.setHeader('Set-Cookie', `${COOKIE_NAME}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax${secure}`);
 }
 
-function revokeSession(req, res) {
-    const token = getTokenFromRequest(req);
-    if (token) {
-        blacklistToken(token);
+function getAllTokensFromRequest(req) {
+    const tokens = new Set();
+    if (!req) return [];
+
+    // 1. Authorization header (Bearer token)
+    const authHeader = req.headers ? (req.headers.authorization || req.headers.Authorization) : null;
+    if (typeof authHeader === 'string') {
+        const parts = authHeader.trim().split(/\s+/);
+        if (parts.length === 2 && /^bearer$/i.test(parts[0])) {
+            tokens.add(parts[1].trim());
+        }
     }
-    clearSessionCookie(res);
+
+    // 2. Cookie wa_session
+    const cookies = parseCookies(req);
+    if (cookies[COOKIE_NAME]) {
+        tokens.add(cookies[COOKIE_NAME].trim());
+    }
+
+    // 3. Body tokens (if sent in JSON payload)
+    if (req.body && typeof req.body === 'object') {
+        if (typeof req.body.token === 'string' && req.body.token) tokens.add(req.body.token.trim());
+        if (typeof req.body.accessToken === 'string' && req.body.accessToken) tokens.add(req.body.accessToken.trim());
+        if (typeof req.body.refreshToken === 'string' && req.body.refreshToken) tokens.add(req.body.refreshToken.trim());
+        if (typeof req.body.access_token === 'string' && req.body.access_token) tokens.add(req.body.access_token.trim());
+        if (typeof req.body.refresh_token === 'string' && req.body.refresh_token) tokens.add(req.body.refresh_token.trim());
+    }
+
+    return Array.from(tokens).filter(Boolean);
 }
 
 function getTokenFromRequest(req) {
     const cookies = parseCookies(req);
-    return cookies[COOKIE_NAME] || null;
+    if (cookies[COOKIE_NAME]) return cookies[COOKIE_NAME];
+    const authHeader = req.headers ? (req.headers.authorization || req.headers.Authorization) : null;
+    if (typeof authHeader === 'string') {
+        const parts = authHeader.trim().split(/\s+/);
+        if (parts.length === 2 && /^bearer$/i.test(parts[0])) {
+            return parts[1].trim();
+        }
+    }
+    return null;
+}
+
+function revokeSession(req, res) {
+    const tokens = getAllTokensFromRequest(req);
+    for (const token of tokens) {
+        blacklistToken(token);
+    }
+    if (res) {
+        clearSessionCookie(res);
+    }
 }
 
 // ─── Validation ───────────────────────────────────────────────
@@ -400,6 +443,9 @@ module.exports = {
     revokeAllSessionsForUser,
     getUserTokenEpoch,
     getTokenFromRequest,
+    getAllTokensFromRequest,
+    blacklistToken,
+    isTokenBlacklisted,
     parseCookies,
     isValidEmail,
     isValidPassword,

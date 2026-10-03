@@ -28,7 +28,8 @@
 const cron = require('node-cron');
 const {
     getPendingScheduledMessages, updateScheduledMessageStatus, logMessage,
-    claimScheduledMessage, reclaimStuckScheduledMessages, getUserById
+    claimScheduledMessage, reclaimStuckScheduledMessages, getUserById,
+    getMonthlyOutgoingCount
 } = require('./database');
 const { sendTextMessage } = require('./whatsapp-client');
 const { tryNormalizePhone } = require('../utils/validate');
@@ -120,6 +121,14 @@ async function processPendingMessages() {
                 }
                 if (owner.status !== 'active') {
                     await updateScheduledMessageStatus(msg.id, 'cancelled', `Account is not active (${owner.status})`);
+                    continue;
+                }
+                if (owner.role !== 'admin' && !owner.wa_enabled) {
+                    await updateScheduledMessageStatus(msg.id, 'cancelled', 'WhatsApp access is disabled for this account');
+                    continue;
+                }
+                if (owner.message_limit && (await getMonthlyOutgoingCount(owner.id)) >= owner.message_limit) {
+                    await updateScheduledMessageStatus(msg.id, 'failed', `Monthly message limit reached (${owner.message_limit})`);
                     continue;
                 }
 

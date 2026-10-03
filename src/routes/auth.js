@@ -9,7 +9,7 @@ const {
 } = require('../config/auth');
 const {
     getUserByEmail, createUser, touchLastLogin, getUserById,
-    isDuplicateEmailError, updateUser
+    isDuplicateEmailError, updateUser, incrementAuthVersion
 } = require('../services/database');
 const { requireAuth } = require('../middleware/auth');
 const { rateLimit, clientIp } = require('../middleware/rateLimit');
@@ -244,6 +244,7 @@ router.post('/change-password', requireAuth, passwordChangeLimiter, asyncHandler
     await updateUser(req.user.id, { password_hash: passwordHash });
 
     revokeAllSessionsForUser(req.user.id);
+    revokeSession(req, res);
     const updatedUser = await getUserById(req.user.id);
     
     const newRefreshToken = createSessionToken(updatedUser, 'refresh');
@@ -257,6 +258,14 @@ router.post('/change-password', requireAuth, passwordChangeLimiter, asyncHandler
 router.get('/me', requireAuth, (req, res) => {
     res.json({ success: true, data: publicUser(req.user) });
 });
+
+// ─── Revoke all sessions & tokens ────────────────────────────
+router.post('/revoke-all-sessions', requireAuth, asyncHandler(async (req, res) => {
+    revokeAllSessionsForUser(req.user.id);
+    await incrementAuthVersion(req.user.id);
+    revokeSession(req, res);
+    res.json({ success: true, message: 'All active sessions and tokens have been revoked.' });
+}));
 
 module.exports = router;
 

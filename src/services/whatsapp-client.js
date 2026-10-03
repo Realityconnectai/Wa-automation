@@ -369,7 +369,7 @@ async function initWhatsAppClient(userId) {
     if (s.isInitializing) {
         if (s.startedAt && Date.now() - s.startedAt > 300000) {
             s.isInitializing = false;
-            safeDestroyClient(s);
+            await safeDestroyClient(s);
         } else {
             if (s.currentQR) {
                 broadcastSSE(userId, { type: 'qr', data: s.currentQR });
@@ -395,6 +395,10 @@ async function initWhatsAppClient(userId) {
 
     console.log(`🔧 [user ${userId}] Starting WhatsApp Web client...`);
     broadcastSSE(userId, { type: 'loading' });
+
+    if (s.client) {
+        await safeDestroyClient(s);
+    }
 
     clearStaleLocks(userId);
 

@@ -83,24 +83,64 @@ function createApp() {
         }
     }));
 
-    // ─── CORS ───────────────────────────────────────────────────
-    // This app serves its own frontend from the same origin as the API, so
-    // cross-origin *credentialed* requests are never needed for normal use.
-    // Reflecting any Origin while credentials:true would let ANY website make
-    // authenticated fetch() calls using a logged-in user's session cookie.
-    // Only explicitly listed origins get credentialed access; same-origin
-    // browser requests are unaffected either way, since browsers don't
-    // consult CORS headers for same-origin calls.
-    const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
-        .split(',').map(s => s.trim()).filter(Boolean);
+    // ─── CORS & Cross-Origin Security ───────────────────────────
+    // Allow only legitimate SaaS domains and localhost development.
+    // Untrusted cross-origin requests are blocked to prevent data theft and unauthorized remote access.
+    const defaultAllowedOrigins = [
+        'https://workpilots.dpdns.org',
+        'https://workpilot.co.in',
+        'https://leadfinder.workpilot.co.in',
+        'https://linkdinpilot.workpilot.co.in',
+        'http://localhost:3000',
+        'http://localhost:5000',
+        'http://127.0.0.1:3000',
+        'http://127.0.0.1:5000'
+    ];
+    const envOrigins = (process.env.ALLOWED_ORIGINS || '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(s => s && s !== '*');
+    const allowedOriginsList = Array.from(new Set([...defaultAllowedOrigins, ...envOrigins]));
+
+    function isOriginAllowed(origin) {
+        if (!origin) return true; // Same-origin, direct server-to-server, or native calls
+        const trimmed = origin.trim().toLowerCase();
+        if (allowedOriginsList.some(o => o.toLowerCase() === trimmed)) return true;
+        try {
+            const parsed = new URL(trimmed);
+            const host = parsed.hostname.toLowerCase();
+            if (host === 'workpilot.co.in' || host.endsWith('.workpilot.co.in')) return true;
+            if (host === 'workpilots.dpdns.org') return true;
+            if (host === 'localhost' || host === '127.0.0.1') return true;
+        } catch (e) {
+            return false;
+        }
+        return false;
+    }
+
     app.use(cors({
         origin: (origin, callback) => {
-            if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+            if (isOriginAllowed(origin)) return callback(null, true);
             return callback(null, false);
         },
         credentials: true,
-        maxAge: 600
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+        maxAge: 86400
     }));
+
+    // Strict Cross-Origin Enforcement Middleware for API endpoints:
+    // Any browser-initiated request from an untrusted origin is rejected with 403 Forbidden.
+    app.use('/api', (req, res, next) => {
+        const origin = req.headers.origin;
+        if (origin && !isOriginAllowed(origin)) {
+            return res.status(403).json({
+                success: false,
+                error: 'Cross-origin request blocked: origin not allowed by CORS policy.'
+            });
+        }
+        next();
+    });
 
 // Custom structured request logging with PII masking (replaces morgan)
     app.use(requestLogger);

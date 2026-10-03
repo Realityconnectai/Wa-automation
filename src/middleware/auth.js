@@ -3,7 +3,7 @@ const {
     createSessionToken, setSessionCookie, clearSessionCookie,
     parseTimestampToMs
 } = require('../config/auth');
-const { getUserById } = require('../services/database');
+const database = require('../services/database');
 
 /**
  * Resolves the caller's account from the session cookie.
@@ -22,14 +22,17 @@ async function resolveSession(req) {
     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
         token = req.headers.authorization.slice(7);
     }
+    if (!token) {
+        token = getTokenFromRequest(req);
+    }
     if (!token) return { error: { status: 401, code: 'AUTH_REQUIRED', message: 'Not authenticated' } };
 
-    const payload = verifySessionToken(token, 'access');
+    const payload = verifySessionToken(token, 'any');
     if (!payload) return { error: { status: 401, code: 'AUTH_REQUIRED', message: 'Your session has expired. Please log in again.' } };
 
     let user;
     try {
-        user = await getUserById(payload.id);
+        user = await database.getUserById(payload.id);
     } catch (e) {
         // The database is unavailable. Answering 401 here would silently log
         // everyone out and invite a stampede of re-logins against an already

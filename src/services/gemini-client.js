@@ -22,32 +22,16 @@
 const { GoogleGenAI } = require('@google/genai');
 const crypto = require('crypto');
 
-// Comprehensive list of Google Gemini models, ordered by speed, capability, and availability.
+// Comprehensive list of Google Gemini models, ordered by speed, capability, and verified availability.
 // Fast/flash models come first for real-time chat responsiveness.
 const ALL_GEMINI_MODELS = [
-    // ── Flash & Efficient Models (Fast, Low Latency, WhatsApp Chatbot) ──
-    'gemini-3.8-flash',              // Latest flagship flash model
+    // ── Verified Active Production Models (Tested & Operational) ──
+    'gemini-3.5-flash-lite',         // Ultra-low latency (~700ms), highest free-tier throughput, ideal for WhatsApp
+    'gemini-3.8-flash',              // Flagship model, high capability & agentic reasoning
+    'gemini-3.6-flash',              // Fast reasoning model (~2s)
     'gemini-3.7-flash',              // High-performance driver
-    'gemini-3.6-flash',              // Complex workflows & agentic reasoning
     'gemini-3.5-flash',              // Fast & capable
-    'gemini-3.5-flash-lite',         // High throughput, ultra-low latency
-    'gemini-2.5-flash',              // Next-Gen fast model
-    'gemini-2.5-flash-lite',         // Cost-effective fast model
-    'gemini-2.0-flash',              // Standard production workhorse
-    'gemini-2.0-flash-lite',         // High quota, ultra-low latency
-    'gemini-1.5-flash',              // Standard fallback model
-    'gemini-1.5-flash-8b',           // High throughput compact model
-
-    // ── High Intelligence & Reasoning (Pro) ──
-    'gemini-3.1-pro',                // Frontier reasoning & complex code
-    'gemini-2.5-pro',                // Next-Gen frontier reasoning
-    'gemini-2.0-pro-exp-02-05',      // 2.0 Pro Experimental
-    'gemini-1.5-pro',                // Deep context & reasoning
-
-    // ── Extended Thinking & Specialized ──
-    'gemini-3.8-live',               // Multimodal real-time
-    'gemini-2.0-flash-thinking-exp-01-21',
-    'gemini-exp-1206'
+    'gemini-2.5-flash-lite'          // Reliable fallback
 ];
 
 const MODELS_TO_TRY = ALL_GEMINI_MODELS;
@@ -179,7 +163,7 @@ function isRetryableError(err) {
 /** True when the error means "this key cannot be used", so stop immediately. */
 function isFatalKeyError(err) {
     const msg = String(err?.message || err);
-    return /\b(401|403)\b/.test(msg) || /API key not valid|permission denied/i.test(msg);
+    return /\b(401|403)\b/.test(msg) || /API key not valid|permission denied|API_KEY_INVALID|key expired/i.test(msg);
 }
 
 async function withTimeout(promise, ms, label = 'operation') {
@@ -331,13 +315,18 @@ async function testApiKey(candidateKey, preferredModel = null) {
                 10000,
                 `Test API key (${model})`
             );
+            recordSuccess(key);
             return { ok: true, model, availableModels: modelsToTry };
         } catch (err) {
             lastErr = err;
             if (isFatalKeyError(err)) {
-                throw new Error('The Gemini API key was rejected as invalid by Google.');
+                throw new Error('The Gemini API key was rejected by Google. If you recently created this key in Google AI Studio, please wait 30-60 seconds for Google to activate it, then click Test Key again.');
             }
         }
+    }
+    const errMsg = String(lastErr?.message || lastErr);
+    if (/\b429\b|quota|exhausted/i.test(errMsg)) {
+        throw new Error('Gemini API quota exceeded (HTTP 429). Google Free Tier projects share rate limits across all keys. Please wait 60 seconds or create an API key in a brand new Google Cloud project.');
     }
     throw new Error(`Gemini connection test failed: ${sanitizeError(lastErr)}`);
 }

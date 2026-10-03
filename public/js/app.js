@@ -2664,20 +2664,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         btn.disabled = true;
         btn.textContent = 'Testing…';
         try {
-            const resp = await fetch('/api/settings/test-gemini', {
+            const data = await api('/api/settings/test-gemini', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ key: keyVal || '', model: preferredModel || '' })
             });
-            if (resp.status === 401) {
-                window.location.href = '/login';
-                return;
-            }
-            const data = await resp.json().catch(() => ({}));
-            if (!resp.ok || !data.success) {
-                throw new Error(data.error || 'Gemini connection test failed');
-            }
-            const modelName = data.model || data.data?.model || 'Gemini';
+            const modelName = data?.model || data?.data?.model || 'Gemini';
             showToast(`Gemini connected successfully! (Model: ${modelName})`, 'success');
             if (keyVal) {
                 showToast('Key is valid! Click "Save AI Persona Settings" to save it.', 'info');
