@@ -482,7 +482,8 @@ const SETTINGS_SCHEMA = {
     business_target_customers:    { max: 1000 },
     business_offers:              { max: 2000 },
     business_currency:            { max: 8 },
-    chatbot_throttle_reply:       { max: 500 }
+    chatbot_throttle_reply:       { max: 500 },
+    chatbot_media_ack_reply:      { max: 500 }
 };
 
 /** Keys the server writes itself and a client must never be able to set. */

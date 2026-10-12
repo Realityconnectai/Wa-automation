@@ -4,6 +4,7 @@ const fs     = require('fs');
 const path   = require('path');
 const { AUTH_ROOT, CACHE_ROOT } = require('../config/paths');
 const { processMessage } = require('./chatbot');
+const { logMessage, updateMessageAckStatus, getSetting } = require('./database');
 
 // ─── Per-user session registry ─────────────────────────────────
 // Each signed-up account gets its own isolated whatsapp-web.js Client,
@@ -475,6 +476,23 @@ async function initWhatsAppClient(userId) {
     return { accepted: true, starting: true };
 }
 
+/**
+ * Maps a whatsapp-web.js message type string to a concise category name
+ * stored as message_type in the messages table.
+ * Only called for messages where msg.hasMedia is true.
+ */
+function resolveMediaType(msgType) {
+    switch (String(msgType || '').toLowerCase()) {
+        case 'image':     return 'image';
+        case 'video':     return 'video';
+        case 'audio':
+        case 'ptt':       return 'audio';   // ptt = push-to-talk (voice note)
+        case 'document':  return 'document';
+        case 'sticker':   return 'sticker';
+        default:          return 'media';
+    }
+}
+
 function attachHandlers(userId, s, client) {
     // ── QR ──────────────────────────────────────────────────
     client.on('qr', async (qr) => {
@@ -601,7 +619,6 @@ function attachHandlers(userId, s, client) {
     client.on('message', async msg => {
         try {
             if (msg.isGroupMsg || msg.isStatus || msg.from.endsWith('@g.us') || msg.from.endsWith('@broadcast')) return;
-            if (!msg.body || msg.body.trim() === '') return;
             if (msg.fromMe) return;
 
             // msg.from is "<digits>@c.us"; take the digits. A malformed
@@ -619,6 +636,70 @@ function attachHandlers(userId, s, client) {
                 contactName = String(contact?.pushname || contact?.name || '').slice(0, 200);
             } catch (e) { /* non-fatal */ }
 
+            // ── Incoming media (image, document, video, audio, sticker) ──────
+            // msg.body is empty/null for media-only messages. The previous
+            // `if (!msg.body) return` silently dropped them — no DB record,
+            // no awareness that a lead sent a floor plan or payment screenshot.
+            //
+            // Now we save a record for every inbound message, including media.
+            // We do NOT download the file (no disk I/O, no memory spike) and
+            // do NOT trigger an AI reply — the chatbot receives text only.
+            // An optional acknowledgement to the sender is controlled via the
+            // 'media_ack_reply' setting (default: empty = no reply).
+            if (msg.hasMedia || !msg.body || msg.body.trim() === '') {
+                if (msg.hasMedia) {
+                    // Derive a safe description from message metadata only.
+                    // Never download the file here — that would block the
+                    // event loop for large files and is unnecessary for logging.
+                    const mimeType   = String(msg.mimetype || msg.type || 'unknown').slice(0, 100);
+                    const fileName   = String(msg.filename || '').slice(0, 200);
+                    const caption    = String(msg.body || msg.caption || '').slice(0, 500);
+                    const mediaType  = resolveMediaType(msg.type);
+                    const bodyText   = caption ||
+                        (fileName ? `[${mediaType}: ${fileName}]` : `[${mediaType}]`);
+
+                    try {
+                        await logMessage(userId, {
+                            waMessageId: msg.id?._serialized || null,
+                            phone,
+                            contactName,
+                            direction: 'incoming',
+                            messageType: mediaType,
+                            body: bodyText,
+                            status: 'received'
+                        });
+                    } catch (dbErr) {
+                        console.error(`   ⚠️ [user ${userId}] Failed to log incoming media:`, dbErr.message);
+                    }
+
+                    // Optional single acknowledgement reply, default off.
+                    // Configurable per-tenant via Settings → chatbot_media_ack_reply.
+                    // Empty string (default) means no reply is sent.
+                    try {
+                        const ackReply = await getSetting(userId, 'chatbot_media_ack_reply');
+                        if (ackReply && ackReply.trim()) {
+                            await msg.reply(ackReply.trim().slice(0, 500));
+                            await logMessage(userId, {
+                                phone, contactName, direction: 'outgoing',
+                                messageType: 'text', body: ackReply.trim().slice(0, 500),
+                                status: 'sent'
+                            });
+                        }
+                    } catch (ackErr) {
+                        console.warn(`   ⚠️ [user ${userId}] Media ack reply failed (non-fatal):`, ackErr.message?.split('\n')[0]);
+                    }
+
+                    // Schedule lead analysis so media messages appear in the pipeline
+                    try {
+                        const { scheduleAutoAnalysis } = require('./lead-analyzer');
+                        scheduleAutoAnalysis(userId, phone);
+                    } catch (_) {}
+                }
+                // Pure empty-body non-media messages (e.g. location, contact
+                // cards) are silently skipped — no meaningful body to store.
+                return;
+            }
+
             await Promise.race([
                 processMessage(userId, phone, msg.body, contactName, client, msg),
                 new Promise((_, rej) => setTimeout(() => rej(new Error('processMessage timeout after 90s')), 90000))
@@ -629,6 +710,26 @@ function attachHandlers(userId, s, client) {
             // treats as fatal — one malformed message would restart the
             // process and disconnect every other tenant.
             console.error(`   ❌ [user ${userId}] message handler error (non-fatal):`, error.message?.split('\n')[0]);
+        }
+    });
+
+    // ── Delivery acks ────────────────────────────────────────
+    // whatsapp-web.js MessageAck: 0=ERROR, 1=PENDING, 2=SERVER(sent),
+    // 3=DEVICE(delivered), 4=READ, 5=PLAYED(voice=read)
+    //
+    // We never downgrade: once a message is 'read' it stays 'read'
+    // even if a later ack arrives with a lower value (e.g. out-of-order
+    // delivery from an offline device). The SQL in updateMessageAckStatus
+    // enforces this with a rank comparison.
+    client.on('message_ack', async (msg, ack) => {
+        try {
+            const waId = msg?.id?._serialized;
+            if (!waId || typeof ack !== 'number') return;
+            await updateMessageAckStatus(userId, waId, ack);
+        } catch (ackErr) {
+            // Non-fatal: ack tracking is best-effort. The message was
+            // already sent; losing the status update is not data loss.
+            console.warn(`   ⚠️ [user ${userId}] message_ack update failed (non-fatal):`, ackErr.message?.split('\n')[0]);
         }
     });
 }

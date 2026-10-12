@@ -647,6 +647,55 @@ async function clearMessages(userId) {
     return runSql('DELETE FROM messages WHERE user_id = $1', [userId]);
 }
 
+/**
+ * Updates an outgoing message's delivery status from a WhatsApp ack event.
+ *
+ * Status order (never downgrade): sent → delivered → read
+ *   0 = pending/error, 1 = sent (server ack), 2 = delivered, 3 = read
+ *
+ * The WHERE clause enforces two invariants atomically:
+ *   1. Tenant isolation: user_id must match.
+ *   2. No downgrade: only advance to a higher status than the current one.
+ *      We map ack integers to string names and store an ordinal in a CASE
+ *      expression so the comparison is a simple string equality guard.
+ *
+ * Returns true if a row was updated, false if the message was not found,
+ * belongs to a different tenant, or was already at an equal/higher status.
+ */
+async function updateMessageAckStatus(userId, waMessageId, ackStatus) {
+    if (!waMessageId || typeof waMessageId !== 'string') return false;
+
+    // Map WhatsApp ack integer → status string and ordinal rank
+    // whatsapp-web.js MessageAck values: 0=ERROR, 1=PENDING, 2=SERVER, 3=DEVICE, 4=READ, 5=PLAYED
+    const ACK_MAP = {
+        0: null,       // error — don't touch status
+        1: null,       // pending — don't touch status
+        2: { status: 'sent',      rank: 1 },
+        3: { status: 'delivered', rank: 2 },
+        4: { status: 'read',      rank: 3 },
+        5: { status: 'read',      rank: 3 }  // played (voice) = read
+    };
+    const mapped = ACK_MAP[ackStatus];
+    if (!mapped) return false;
+
+    // Only update if the new rank is strictly higher than the current rank.
+    // NULL/unknown current status is treated as rank 0 (always upgradable).
+    const res = await query(
+        `UPDATE messages SET status = $1
+         WHERE user_id = $2
+           AND wa_message_id = $3
+           AND direction = 'outgoing'
+           AND CASE status
+                 WHEN 'read'      THEN 3
+                 WHEN 'delivered' THEN 2
+                 WHEN 'sent'      THEN 1
+                 ELSE 0
+               END < $4`,
+        [mapped.status, userId, waMessageId, mapped.rank]
+    );
+    return (res.rowCount || 0) > 0;
+}
+
 async function getMessages(userId, { phone, direction, limit = 100, offset = 0 } = {}) {
     let sql = 'SELECT * FROM messages WHERE user_id = $1';
     const params = [userId];
@@ -1404,6 +1453,7 @@ module.exports = {
     getMessages,
     countMessages,
     clearMessages,
+    updateMessageAckStatus,
     getConversation,
     getChatbotRules,
     createChatbotRule,
