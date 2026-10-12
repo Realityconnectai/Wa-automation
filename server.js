@@ -75,6 +75,21 @@ function validateEnvironment() {
         if (Number.isFinite(maxSessions) && maxSessions > 50) {
             warnings.push(`MAX_CONCURRENT_WHATSAPP_SESSIONS=${maxSessions} — each session is a Chrome process using roughly 150-250MB. Verify the host actually has that memory.`);
         }
+
+        // extract-zip critical CVE (GHSA-jmr9-qjv8-65gv): arbitrary file write via
+        // symlink. This path is only reachable if Puppeteer downloads Chromium at
+        // runtime. PUPPETEER_SKIP_DOWNLOAD=true (set in Dockerfile) disables it.
+        // If unset in production, a misconfigured deploy could trigger the vulnerable
+        // code path the next time a WhatsApp session initialises.
+        if (process.env.PUPPETEER_SKIP_DOWNLOAD !== 'true') {
+            warnings.push(
+                'PUPPETEER_SKIP_DOWNLOAD is not set to "true". ' +
+                'In the production Docker image this should always be "true" — ' +
+                'Chromium is installed via apt and the Puppeteer download path ' +
+                '(which has a known symlink-traversal CVE) should never run. ' +
+                'Set PUPPETEER_SKIP_DOWNLOAD=true in your .env or Dockerfile.'
+            );
+        }
     }
 
     if (!Number.isFinite(PORT) || PORT <= 0 || PORT > 65535) {
