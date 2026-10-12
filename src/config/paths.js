@@ -34,7 +34,6 @@ const PERSIST_ROOT = process.env.PERSIST_ROOT
     : path.resolve(__dirname, '..', '..');   // src/config/../../ = project root
 
 const DATA_DIR    = path.join(PERSIST_ROOT, 'data');
-const DB_PATH     = path.join(DATA_DIR, 'whatsapp.db');
 const SECRET_PATH = path.join(DATA_DIR, '.session_secret');
 const AUTH_ROOT   = path.join(PERSIST_ROOT, '.wwebjs_auth');
 const CACHE_ROOT  = path.join(PERSIST_ROOT, '.wwebjs_cache');
@@ -65,7 +64,6 @@ function assertPersistRootWritable() {
 module.exports = {
     PERSIST_ROOT,
     DATA_DIR,
-    DB_PATH,
     SECRET_PATH,
     AUTH_ROOT,
     CACHE_ROOT,
