@@ -163,4 +163,59 @@ describe('createAppointment — concurrency safety', () => {
         const rows = await listAppointments(userA.id);
         expect(rows).toHaveLength(2);
     });
+
+    // ─────────────────────────────────────────────────────────────
+    // Scenario D: same tenant, two DIFFERENT contacts, OVERLAPPING slots
+    // (e.g. 10:00-10:30 and 10:15-10:45), booked concurrently
+    // ─────────────────────────────────────────────────────────────
+    test('Scenario D: same tenant, different contacts, overlapping slots — exactly one succeeds', async () => {
+        const { createAppointment, listAppointments } = require('../src/services/database');
+
+        // slot1: SLOT_START → SLOT_START+30min
+        // slot2: SLOT_START+15min → SLOT_START+45min  (overlaps slot1 by 15 min)
+        const slot1Start = SLOT_START;
+        const slot1End   = SLOT_END; // +30min
+        const slot2Start = new Date(SLOT_START.getTime() + 15 * 60 * 1000);
+        const slot2End   = new Date(SLOT_START.getTime() + 45 * 60 * 1000);
+
+        const [r1, r2] = await Promise.all([
+            createAppointment(userA.id, {
+                phone: '919111111111', contactName: 'Contact 1',
+                startAt: slot1Start.toISOString(), endAt: slot1End.toISOString(), source: 'chatbot'
+            }),
+            createAppointment(userA.id, {
+                phone: '919222222222', contactName: 'Contact 2',
+                startAt: slot2Start.toISOString(), endAt: slot2End.toISOString(), source: 'chatbot'
+            })
+        ]);
+
+        // The advisory lock on userId serialises both calls. The overlap check
+        // (WHERE start_at < $endAt AND end_at > $startAt) is scoped by
+        // user_id only — it does NOT distinguish between contacts or "agents".
+        // One succeeds; the overlapping booking is rejected (returns null).
+        const successes = [r1, r2].filter(r => r !== null);
+        const failures  = [r1, r2].filter(r => r === null);
+
+        expect(successes).toHaveLength(1);
+        expect(failures).toHaveLength(1);
+
+        const rows = await listAppointments(userA.id);
+        expect(rows).toHaveLength(1);
+    });
+    // ─── Overlap-check scope analysis (report-only, not a test) ───────────────
+    // countOverlappingAppointments(userId, startAt, endAt) queries:
+    //   WHERE user_id = $1 AND status = 'confirmed' AND start_at < $endAt AND end_at > $startAt
+    // The check is scoped by TENANT only. There is NO concept of per-agent or
+    // per-property scoping. In a multi-agent real estate product where two
+    // agents should be able to run site visits simultaneously at different
+    // properties, this causes false conflicts.
+    //
+    // Proposed minimal change (Phase 1, additive):
+    //   ALTER TABLE appointments ADD COLUMN property_id INTEGER REFERENCES properties(id);
+    //   ALTER TABLE appointments ADD COLUMN agent_id INTEGER REFERENCES users(id);
+    // Then add an optional agentId parameter to createAppointment and
+    // countOverlappingAppointments:
+    //   if (agentId) sql += ' AND (agent_id IS NULL OR agent_id = $N)'
+    // This preserves existing single-agent behaviour (agentId=null = tenant-wide)
+    // while allowing per-agent scoping when agent_id is supplied.
 });
