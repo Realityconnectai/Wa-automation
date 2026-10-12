@@ -64,6 +64,38 @@ It also prints a SHA-256 checksum. Store it alongside the backup file.
 
 **Always test into a scratch database first. Never restore directly into production.**
 
+### Restore test — verified October 2026 against `wa_test`
+
+This procedure was run as part of `phase0-5-fixes`. Results:
+
+**Source (`wa_test`) row counts before backup:**
+```
+users:1  contacts:2  messages:3  chatbot_rules:1  scheduled_messages:1
+products:1  crm_deals:1  crm_activities:1  lead_analysis:1  settings:1
+availability_settings:1  appointments:1  google_calendar_accounts:0
+google_calendar_synced_events:0  schema_migrations:12
+```
+
+**Backup:** Created inside the Docker container using `pg_dump | gzip` — 4.7 KB compressed.
+
+**Restore into `wa_restore_test`:** Used `gunzip | psql --single-transaction --set ON_ERROR_STOP=on`.
+
+**Restored row counts (every table):**
+```
+users:1  contacts:2  messages:3  chatbot_rules:1  scheduled_messages:1
+products:1  crm_deals:1  crm_activities:1  lead_analysis:1  settings:1
+availability_settings:1  appointments:1  google_calendar_accounts:0
+google_calendar_synced_events:0  schema_migrations:12
+```
+
+**Result: all 15 tables match exactly. ✅**
+
+**Fix found:** The `scripts/backup-postgres.sh` script cannot be run from Windows with `>` redirection — PowerShell adds a UTF-16LE BOM that corrupts the gzip magic bytes. On Linux/Mac servers the script works correctly. For Windows-based testing, run the backup inside the Docker container as shown below.
+
+**Scratch DB dropped after verification** (`DROP DATABASE wa_restore_test`).
+
+---
+
 ### Step 1 — Create a scratch database
 
 ```bash
@@ -145,3 +177,19 @@ the target is correct.
 
 4. **The script uses PGPASSWORD environment variable**, never command-line
    arguments, so the password does not appear in `ps aux` output.
+
+---
+
+## Windows note
+
+`scripts/backup-postgres.sh` requires a Linux shell and `pg_dump`. On Windows,
+run the backup inside the Docker container:
+
+```powershell
+# Backup inside the container (writes to container /tmp, then copy out)
+docker exec wa-postgres sh -c "PGPASSWORD=postgres pg_dump -U postgres whatsapp_automation --no-owner --no-acl | gzip > /tmp/backup.sql.gz"
+docker cp wa-postgres:/tmp/backup.sql.gz .\backups\backup.sql.gz
+docker exec wa-postgres rm /tmp/backup.sql.gz
+```
+
+Do NOT use PowerShell `>` redirection — it adds a BOM that corrupts the gzip file.
