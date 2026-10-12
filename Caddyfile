@@ -1,6 +1,10 @@
-# Replace with your real domain before deploying. Caddy handles the entire
-# HTTPS certificate (Let's Encrypt) automatically — nothing else to configure.
-ai4automation.in, www.ai4automation.in {
+# Set APP_DOMAIN in your .env file (e.g. APP_DOMAIN=yourdomain.com).
+# Caddy substitutes {$APP_DOMAIN} at startup. The server refuses to start
+# if the variable is missing, which is intentional: a deploy without a
+# domain would silently serve over HTTP with no certificate.
+#
+# Example:  APP_DOMAIN=workpilot.co.in
+{$APP_DOMAIN} {
     # SSE (Server-Sent Events) stream for QR code / connection status.
     # flush_interval -1 disables buffering entirely for this route so the
     # browser receives QR code events in real time instead of waiting for
