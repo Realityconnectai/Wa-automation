@@ -12,6 +12,7 @@
     "test:integration": "jest tests/tenant-isolation.test.js --detectOpenHandles",
     "test:security": "jest tests/auth.security.test.js --detectOpenHandles",
     "test:watch": "jest --watch",
+    "test:db": "node scripts/run-tests-with-db.js",
     "lint": "node scripts/lint.js",
     "check:secrets": "node scripts/check-secrets.js",
     "package": "node scripts/create-safe-archive.js",
