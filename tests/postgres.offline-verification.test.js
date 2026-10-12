@@ -180,7 +180,9 @@ describe('Task 2B: Offline PostgreSQL Verification Suite', () => {
 
         test('all 11 migration files exist and are non-empty', () => {
             const files = fs.readdirSync(migrationDir).filter(f => f.endsWith('.sql')).sort();
-            expect(files.length).toBe(11);
+            // Use >= rather than an exact count so adding future migrations
+            // does not require updating this test every time.
+            expect(files.length).toBeGreaterThanOrEqual(11);
             for (const f of files) {
                 const content = fs.readFileSync(path.join(migrationDir, f), 'utf8').trim();
                 expect(content.length).toBeGreaterThan(50);
