@@ -47,6 +47,30 @@ services:
     depends_on:
       - app
 
+  # Daily PostgreSQL backup at 02:00 UTC with 14-day retention.
+  # Writes gzip dumps to the backup volume (host path configurable via
+  # BACKUP_HOST_DIR in your .env; defaults to ./backups/postgres on the host).
+  # The backup container has read-only access to DATABASE_URL — it never
+  # touches the app container or the app data volumes.
+  backup:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PGPASSWORD_FILE=/run/secrets/pg_password
+    volumes:
+      - ./scripts/backup-postgres.sh:/backup.sh:ro
+      - backup-data:/backups
+    # ofelia/crond approach: use the alpine built-in crond.
+    # Runs at 02:00 UTC daily. Keeps the last 14 days and deletes older files.
+    entrypoint: >
+      sh -c "
+        echo '0 2 * * * DATABASE_URL=$$DATABASE_URL /backup.sh /backups && find /backups -name \"*.sql.gz\" -mtime +14 -delete' | crontab - &&
+        crond -f -l 6
+      "
+
 volumes:
   caddy-data:
   caddy-config:
+  backup-data:
