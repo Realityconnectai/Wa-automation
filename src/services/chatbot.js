@@ -10,13 +10,33 @@ const { conversationQueue } = require('../utils/conversation-queue');
 // ─── Anti-Ban Rate Limiting ─────────────────────────────────
 const userRateLimits = new Map();
 
+// Configurable via environment. Defaults keep existing behaviour (10/min).
+// CHATBOT_RATE_LIMIT_MAX  — max messages per window before throttling
+// CHATBOT_RATE_LIMIT_WINDOW_MS — window size in milliseconds
+const RATE_LIMIT_MAX       = Math.max(1, parseInt(process.env.CHATBOT_RATE_LIMIT_MAX,       10) || 10);
+const RATE_LIMIT_WINDOW_MS = Math.max(5000, parseInt(process.env.CHATBOT_RATE_LIMIT_WINDOW_MS, 10) || 60000);
+
+// Default throttle reply — can be overridden per-tenant via the
+// 'chatbot_throttle_reply' setting key.
+const DEFAULT_THROTTLE_REPLY =
+    process.env.CHATBOT_THROTTLE_REPLY ||
+    "You're sending messages very quickly — I'll be right with you! 🙏";
+
+// Tracks whether a throttle reply has already been sent in the current window
+// so we send at most one per window per sender.
+// key: `${userId}:${phone}` → timestamp of last throttle-reply sent
+const throttleReplySentAt = new Map();
+
 // Without this, every distinct (userId, phone) pair that ever messages in
 // stays in memory forever — a slow leak on a long-running server with many
-// contacts. Sweep out anything whose 60s window is long over.
+// contacts. Sweep out anything whose window is long over.
 const _rateLimitCleanup = setInterval(() => {
     const now = Date.now();
     for (const [key, data] of userRateLimits) {
         if (now - data.firstMsgTime > 5 * 60 * 1000) userRateLimits.delete(key);
+    }
+    for (const [key, sentAt] of throttleReplySentAt) {
+        if (now - sentAt > RATE_LIMIT_WINDOW_MS) throttleReplySentAt.delete(key);
     }
 }, 10 * 60 * 1000);
 _rateLimitCleanup.unref?.();
@@ -37,8 +57,8 @@ function isRateLimited(userId, phone) {
     const now = Date.now();
     const limitData = userRateLimits.get(key) || { count: 0, firstMsgTime: now };
 
-    // Reset window every 60 seconds
-    if (now - limitData.firstMsgTime > 60000) {
+    // Reset window when it has expired
+    if (now - limitData.firstMsgTime > RATE_LIMIT_WINDOW_MS) {
         limitData.count = 1;
         limitData.firstMsgTime = now;
     } else {
@@ -52,8 +72,7 @@ function isRateLimited(userId, phone) {
     }
     userRateLimits.set(key, limitData);
 
-    // Allow max 10 messages per minute
-    return limitData.count > 10;
+    return limitData.count > RATE_LIMIT_MAX;
 }
 
 /** True if this account has hit its plan's monthly outgoing-message cap (0 = unlimited). */
@@ -156,7 +175,30 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
     }
 
     if (isRateLimited(userId, phone)) {
-        console.log(`⚠️ Rate limit exceeded for ${maskPhone(phone)}, ignoring message to prevent ban.`);
+        // Warn-level log with only the last 4 digits — no message body, no full phone.
+        console.warn(`⚠️ [user ${userId}] Rate limit exceeded for ****${String(phone).slice(-4)}: message saved, reply suppressed.`);
+
+        // Send at most ONE throttle reply per sender per window.
+        // We check and set throttleReplySentAt before the async send to avoid
+        // a race where two queued messages both pass the check simultaneously.
+        const rlKey = `${userId}:${phone}`;
+        const now = Date.now();
+        const lastThrottle = throttleReplySentAt.get(rlKey) || 0;
+        if (now - lastThrottle > RATE_LIMIT_WINDOW_MS) {
+            throttleReplySentAt.set(rlKey, now);
+            try {
+                // Per-tenant override via settings; fall back to env/default.
+                const customReply = await getSetting(userId, 'chatbot_throttle_reply');
+                const throttleText = (customReply && customReply.trim()) || DEFAULT_THROTTLE_REPLY;
+                await safeReply(client, phone, throttleText, msg);
+                await logMessage(userId, { phone, contactName, direction: 'outgoing', body: throttleText });
+            } catch (throttleErr) {
+                // Non-fatal: the message was already saved; losing the throttle
+                // reply is acceptable.
+                console.warn(`   ⚠️ [user ${userId}] Could not send throttle reply (non-fatal):`, throttleErr.message?.split('\n')[0]);
+            }
+        }
+
         return { replied: false, reason: 'rate_limit' };
     }
 
@@ -304,7 +346,14 @@ async function testMessage(userId, messageText) {
     };
 }
 
-module.exports = { processMessage, testMessage, ruleMatches, maskPhone };
+// ─── Test helper — resets rate-limit state between test runs ─────────────
+// Only exported for use in the test suite; not part of the production API.
+function __resetRateLimits() {
+    userRateLimits.clear();
+    throttleReplySentAt.clear();
+}
+
+module.exports = { processMessage, testMessage, ruleMatches, maskPhone, __resetRateLimits };
 
 
 
