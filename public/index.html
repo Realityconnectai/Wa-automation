@@ -62,6 +62,10 @@
             <span class="nav-icon" data-icon="calendar-clock" aria-hidden="true"></span>
             <span class="nav-label">Appointments</span>
         </a>
+        <a href="#" class="nav-item" data-section="inventory" id="nav-inventory" role="menuitem">
+            <span class="nav-icon" data-icon="building-2" aria-hidden="true"></span>
+            <span class="nav-label">Properties</span>
+        </a>
         <a href="#" class="nav-item" data-section="settings" id="nav-settings" role="menuitem">
             <span class="nav-icon" data-icon="settings" aria-hidden="true"></span>
             <span class="nav-label">Settings</span>
@@ -802,6 +806,90 @@
         </div>
     </section>
 
+    <!-- ── INVENTORY (Properties) ── -->
+    <section class="section" id="section-inventory" aria-labelledby="inventory-heading">
+        <div class="page-inner">
+            <div class="section-header">
+                <h1 id="inventory-heading">Properties</h1>
+                <div class="section-header-actions">
+                    <button class="btn btn-sm" id="invNewProjectBtn" onclick="Inventory.openNewProject()">
+                        <span data-icon="plus" aria-hidden="true"></span> New Project
+                    </button>
+                </div>
+            </div>
+
+            <!-- Tabs: Projects / Availability Grid -->
+            <div class="tabs" role="tablist" aria-label="Inventory views">
+                <button class="tab active" id="inv-tab-projects" role="tab" aria-selected="true"
+                    aria-controls="inv-panel-projects" onclick="Inventory.showTab('projects')">Projects</button>
+                <button class="tab" id="inv-tab-grid" role="tab" aria-selected="false"
+                    aria-controls="inv-panel-grid" onclick="Inventory.showTab('grid')">Availability Grid</button>
+            </div>
+
+            <!-- Projects panel -->
+            <div id="inv-panel-projects" role="tabpanel" aria-labelledby="inv-tab-projects">
+                <!-- Search / filter bar -->
+                <div class="filter-bar" style="display:flex;gap:.5rem;flex-wrap:wrap;margin:.75rem 0">
+                    <input type="text" id="invCityFilter" placeholder="Filter by city…"
+                        style="max-width:160px" oninput="Inventory.applyFilter()">
+                    <select id="invTypeFilter" onchange="Inventory.applyFilter()">
+                        <option value="">All types</option>
+                        <option value="residential">Residential</option>
+                        <option value="commercial">Commercial</option>
+                        <option value="plot">Plot</option>
+                        <option value="rental">Rental</option>
+                        <option value="resale">Resale</option>
+                    </select>
+                    <button class="btn btn-sm btn-ghost" onclick="Inventory.loadProjects()">
+                        <span data-icon="refresh-cw" aria-hidden="true"></span>
+                    </button>
+                </div>
+
+                <!-- Loading / empty / error states -->
+                <div id="invProjectsLoading" class="loading-state" style="display:none">
+                    <div class="spinner" aria-label="Loading properties…"></div>
+                    <span>Loading properties…</span>
+                </div>
+                <div id="invProjectsEmpty" class="empty-state" style="display:none">
+                    <span data-icon="building-2" aria-hidden="true" style="font-size:2rem"></span>
+                    <p>No projects yet. Click <strong>New Project</strong> to add one.</p>
+                </div>
+                <div id="invProjectsError" class="error-state" style="display:none"></div>
+
+                <!-- Project cards grid -->
+                <div id="invProjectsGrid" class="cards-grid" role="list"></div>
+            </div>
+
+            <!-- Availability Grid panel -->
+            <div id="inv-panel-grid" role="tabpanel" aria-labelledby="inv-tab-grid" style="display:none">
+                <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin:.75rem 0;align-items:center">
+                    <select id="invGridProject" onchange="Inventory.loadGrid()" style="max-width:200px">
+                        <option value="">— Select project —</option>
+                    </select>
+                    <select id="invGridStatusFilter" onchange="Inventory.filterGrid()">
+                        <option value="">All statuses</option>
+                        <option value="VACANT">Vacant</option>
+                        <option value="ON_HOLD">On Hold</option>
+                        <option value="BOOKED">Booked</option>
+                        <option value="SOLD">Sold</option>
+                    </select>
+                    <input type="text" id="invGridBhkFilter" placeholder="BHK filter…"
+                        style="max-width:120px" oninput="Inventory.filterGrid()">
+                </div>
+
+                <div id="invGridLoading" class="loading-state" style="display:none">
+                    <div class="spinner" aria-label="Loading grid…"></div>
+                </div>
+                <div id="invGridEmpty" class="empty-state" style="display:none">
+                    <p>Select a project to view its availability grid.</p>
+                </div>
+
+                <!-- Tower × floor grid -->
+                <div id="invGridContainer" style="overflow-x:auto"></div>
+            </div>
+        </div>
+    </section>
+
     <!-- ── SETTINGS ── -->
     <section class="section" id="section-settings" aria-labelledby="settings-heading">
         <div class="page-inner">
@@ -1266,5 +1354,6 @@
 <script src="js/chart.umd.min.js"></script>
 <script src="js/icons.js"></script>
 <script src="js/app.js?v=20260919_4"></script>
+<script src="js/inventory.js?v=20261012_1"></script>
 </body>
 </html>
