@@ -812,49 +812,45 @@
             <div class="section-header">
                 <h1 id="inventory-heading">Properties</h1>
                 <div class="section-header-actions">
-                    <button class="btn btn-sm" id="invNewProjectBtn" onclick="Inventory.openNewProject()">
+                    <button class="btn btn-sm btn-primary" id="invNewProjectBtn" type="button">
                         <span data-icon="plus" aria-hidden="true"></span> New Project
                     </button>
                 </div>
             </div>
 
             <!-- Tabs: Projects / Availability Grid -->
-            <div class="tabs" role="tablist" aria-label="Inventory views">
-                <button class="tab active" id="inv-tab-projects" role="tab" aria-selected="true"
-                    aria-controls="inv-panel-projects" onclick="Inventory.showTab('projects')">Projects</button>
-                <button class="tab" id="inv-tab-grid" role="tab" aria-selected="false"
-                    aria-controls="inv-panel-grid" onclick="Inventory.showTab('grid')">Availability Grid</button>
+            <div class="settings-tabs" role="tablist" aria-label="Inventory views">
+                <button class="settings-tab active" id="inv-tab-projects" role="tab" aria-selected="true"
+                    aria-controls="inv-panel-projects" data-inventory-tab="projects" type="button">Projects</button>
+                <button class="settings-tab" id="inv-tab-grid" role="tab" aria-selected="false"
+                    aria-controls="inv-panel-grid" data-inventory-tab="grid" type="button">Availability Grid</button>
             </div>
 
             <!-- Projects panel -->
             <div id="inv-panel-projects" role="tabpanel" aria-labelledby="inv-tab-projects">
                 <!-- Search / filter bar -->
-                <div class="filter-bar" style="display:flex;gap:.5rem;flex-wrap:wrap;margin:.75rem 0">
-                    <input type="text" id="invCityFilter" placeholder="Filter by city…"
-                        style="max-width:160px" oninput="Inventory.applyFilter()">
-                    <select id="invTypeFilter" onchange="Inventory.applyFilter()">
+                <div class="toolbar">
+                    <div class="form-group" style="margin:0;max-width:180px"><label class="sr-only" for="invCityFilter">Filter by city</label><input type="text" id="invCityFilter" placeholder="Filter by city…"></div>
+                    <div class="form-group" style="margin:0;max-width:180px"><label class="sr-only" for="invTypeFilter">Filter by type</label><select id="invTypeFilter">
                         <option value="">All types</option>
                         <option value="residential">Residential</option>
                         <option value="commercial">Commercial</option>
                         <option value="plot">Plot</option>
                         <option value="rental">Rental</option>
                         <option value="resale">Resale</option>
-                    </select>
-                    <button class="btn btn-sm btn-ghost" onclick="Inventory.loadProjects()">
+                    </select></div>
+                    <button class="btn btn-sm btn-secondary" id="invRefreshProjectsBtn" type="button" aria-label="Refresh projects">
                         <span data-icon="refresh-cw" aria-hidden="true"></span>
                     </button>
                 </div>
 
                 <!-- Loading / empty / error states -->
-                <div id="invProjectsLoading" class="loading-state" style="display:none">
-                    <div class="spinner" aria-label="Loading properties…"></div>
-                    <span>Loading properties…</span>
-                </div>
+                <div id="invProjectsLoading" class="empty-state" style="display:none">Loading properties…</div>
                 <div id="invProjectsEmpty" class="empty-state" style="display:none">
                     <span data-icon="building-2" aria-hidden="true" style="font-size:2rem"></span>
                     <p>No projects yet. Click <strong>New Project</strong> to add one.</p>
                 </div>
-                <div id="invProjectsError" class="error-state" style="display:none"></div>
+                <div id="invProjectsError" style="display:none"></div>
 
                 <!-- Project cards grid -->
                 <div id="invProjectsGrid" class="cards-grid" role="list"></div>
@@ -862,24 +858,22 @@
 
             <!-- Availability Grid panel -->
             <div id="inv-panel-grid" role="tabpanel" aria-labelledby="inv-tab-grid" style="display:none">
-                <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin:.75rem 0;align-items:center">
-                    <select id="invGridProject" onchange="Inventory.loadGrid()" style="max-width:200px">
+                <div class="toolbar">
+                    <div class="form-group" style="margin:0;min-width:200px"><label class="sr-only" for="invGridProject">Project</label><select id="invGridProject">
                         <option value="">— Select project —</option>
-                    </select>
-                    <select id="invGridStatusFilter" onchange="Inventory.filterGrid()">
+                    </select></div>
+                    <div class="form-group" style="margin:0;min-width:160px"><label class="sr-only" for="invGridStatusFilter">Status</label><select id="invGridStatusFilter">
                         <option value="">All statuses</option>
                         <option value="VACANT">Vacant</option>
                         <option value="ON_HOLD">On Hold</option>
                         <option value="BOOKED">Booked</option>
                         <option value="SOLD">Sold</option>
-                    </select>
-                    <input type="text" id="invGridBhkFilter" placeholder="BHK filter…"
-                        style="max-width:120px" oninput="Inventory.filterGrid()">
+                    </select></div>
+                    <div class="form-group" style="margin:0;max-width:140px"><label class="sr-only" for="invGridBhkFilter">BHK filter</label><input type="text" id="invGridBhkFilter" placeholder="BHK filter…"></div>
+                    <button class="btn btn-sm btn-primary" id="invNewUnitBtn" type="button" disabled>New Unit</button>
                 </div>
 
-                <div id="invGridLoading" class="loading-state" style="display:none">
-                    <div class="spinner" aria-label="Loading grid…"></div>
-                </div>
+                <div id="invGridLoading" class="empty-state" style="display:none">Loading units…</div>
                 <div id="invGridEmpty" class="empty-state" style="display:none">
                     <p>Select a project to view its availability grid.</p>
                 </div>
