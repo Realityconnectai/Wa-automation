@@ -29,7 +29,7 @@ const cron = require('node-cron');
 const {
     getPendingScheduledMessages, updateScheduledMessageStatus, logMessage,
     claimScheduledMessage, reclaimStuckScheduledMessages, getUserById,
-    getMonthlyOutgoingCount
+    getMonthlyOutgoingCount, expireStaleHolds
 } = require('./database');
 const { sendTextMessage } = require('./whatsapp-client');
 const { tryNormalizePhone } = require('../utils/validate');
@@ -65,6 +65,9 @@ async function initScheduler() {
     schedulerTask = cron.schedule('* * * * *', async () => {
         try {
             await processPendingMessages();
+            // Expire stale unit holds (all tenants) on every tick — idempotent
+            const expired = await expireStaleHolds(null);
+            if (expired > 0) console.log(`🔓 Scheduler: reverted ${expired} expired unit hold(s) to VACANT`);
         } catch (err) {
             console.error('❌ Scheduler tick error (non-fatal):', err.message);
         }

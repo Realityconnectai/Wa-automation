@@ -30,6 +30,7 @@ const authRoutes                    = require('../routes/auth');
 const adminRoutes                   = require('../routes/admin');
 const calendarRoutes                = require('../routes/calendar');
 const appointmentRoutes             = require('../routes/appointments');
+const inventoryRoutes               = require('../routes/inventory');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { errorHandler }              = require('../utils/errors');
 const { addSSEClient, getSessionMetrics } = require('../services/whatsapp-client');
@@ -270,6 +271,9 @@ app.get('/health', (req, res) => {
 
     // ─── Appointment booking (weekly hours, slot lookup, bookings) ──
     app.use('/api/appointments', requireAuth, appointmentRoutes);
+
+    // ─── Inventory (projects, units, media assets) ────────────────────
+    app.use('/api/inventory', requireAuth, inventoryRoutes);
 
     // ─── Everything else under /api requires a logged-in account ──
     app.use('/api', requireAuth, apiRoutes);

@@ -1413,6 +1413,188 @@ async function getDashboardStats(userId) {
     };
 }
 
+// ─── Inventory: Projects ─────────────────────────────────────────────────
+
+async function createProject(userId, fields) {
+    const res = await query(
+        `INSERT INTO projects (user_id, name, developer, city, locality, address, map_url,
+            property_type, rera_number, rera_status, possession_date, description, listing_url)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+        [userId, fields.name, fields.developer||'', fields.city||'', fields.locality||'',
+         fields.address||'', fields.mapUrl||'', fields.propertyType||'residential',
+         fields.reraNumber||'', fields.reraStatus||'unverified',
+         fields.possessionDate||null, fields.description||'', fields.listingUrl||'']
+    );
+    return res.rows[0];
+}
+
+async function getProjects(userId, { city, propertyType, activeOnly = true } = {}) {
+    let sql = 'SELECT * FROM projects WHERE user_id = $1';
+    const params = [userId];
+    let idx = 2;
+    if (activeOnly) { sql += ` AND is_active = 1`; }
+    if (city) { sql += ` AND LOWER(city) = LOWER($${idx++})`; params.push(city); }
+    if (propertyType) { sql += ` AND property_type = $${idx++}`; params.push(propertyType); }
+    sql += ' ORDER BY created_at DESC';
+    return queryAll(sql, params);
+}
+
+async function getProjectById(userId, id) {
+    return queryGet('SELECT * FROM projects WHERE id = $1 AND user_id = $2', [id, userId]);
+}
+
+async function updateProject(userId, id, fields) {
+    const allowed = ['name','developer','city','locality','address','map_url','property_type',
+                     'rera_number','rera_status','possession_date','description','listing_url','is_active'];
+    const sets = [], params = [];
+    let idx = 1;
+    const col = { mapUrl:'map_url', propertyType:'property_type', reraNumber:'rera_number',
+                  reraStatus:'rera_status', possessionDate:'possession_date',
+                  listingUrl:'listing_url', isActive:'is_active' };
+    for (const [k, v] of Object.entries(fields)) {
+        if (v === undefined) continue;              // skip fields caller didn't supply
+        const dbKey = col[k] || k;
+        if (allowed.includes(dbKey)) { sets.push(`${dbKey} = $${idx++}`); params.push(v); }
+    }
+    if (!sets.length) return getProjectById(userId, id);
+    sets.push('updated_at = CURRENT_TIMESTAMP');
+    params.push(userId, id);
+    await runSql(`UPDATE projects SET ${sets.join(', ')} WHERE user_id = $${idx++} AND id = $${idx}`, params);
+    return getProjectById(userId, id);
+}
+
+async function deleteProject(userId, id) {
+    return runSql('DELETE FROM projects WHERE user_id = $1 AND id = $2', [userId, id]);
+}
+
+// ─── Inventory: Units ────────────────────────────────────────────────────
+
+const VALID_UNIT_STATUSES = ['VACANT','ON_HOLD','BOOKED','SOLD'];
+const UNIT_TRANSITIONS = { VACANT:['ON_HOLD','BOOKED'], ON_HOLD:['VACANT','BOOKED'], BOOKED:['SOLD'], SOLD:[] };
+
+async function createUnit(userId, projectId, fields) {
+    const res = await query(
+        `INSERT INTO units (user_id, project_id, tower, unit_number, bhk, area, area_unit, price, floor, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+        [userId, projectId, fields.tower||'', fields.unitNumber, fields.bhk||'',
+         fields.area||0, fields.areaUnit||'sqft', fields.price||0, fields.floor||null, 'VACANT']
+    );
+    return res.rows[0];
+}
+
+async function getUnits(userId, projectId, { status, bhk } = {}) {
+    let sql = 'SELECT * FROM units WHERE user_id = $1 AND project_id = $2 AND is_active = 1';
+    const params = [userId, projectId];
+    let idx = 3;
+    if (status) { sql += ` AND status = $${idx++}`; params.push(status); }
+    if (bhk)    { sql += ` AND LOWER(bhk) = LOWER($${idx++})`; params.push(bhk); }
+    sql += ' ORDER BY tower ASC, floor ASC, unit_number ASC';
+    return queryAll(sql, params);
+}
+
+async function getUnitById(userId, id) {
+    return queryGet('SELECT * FROM units WHERE id = $1 AND user_id = $2', [id, userId]);
+}
+
+async function searchUnits(userId, { city, locality, bhk, minPrice, maxPrice, propertyType, status } = {}) {
+    let sql = `
+        SELECT u.*, p.name AS project_name, p.city, p.locality, p.property_type, p.rera_status
+        FROM units u JOIN projects p ON p.id = u.project_id
+        WHERE u.user_id = $1 AND u.is_active = 1 AND p.is_active = 1`;
+    const params = [userId]; let idx = 2;
+    if (status)       { sql += ` AND u.status = $${idx++}`;               params.push(status); }
+    else              { sql += ` AND u.status = 'VACANT'`; }
+    if (bhk)          { sql += ` AND LOWER(u.bhk) = LOWER($${idx++})`;    params.push(bhk); }
+    if (minPrice)     { sql += ` AND u.price >= $${idx++}`;                params.push(minPrice); }
+    if (maxPrice)     { sql += ` AND u.price <= $${idx++}`;                params.push(maxPrice); }
+    if (city)         { sql += ` AND LOWER(p.city) = LOWER($${idx++})`;   params.push(city); }
+    if (locality)     { sql += ` AND LOWER(p.locality) ILIKE $${idx++}`;  params.push(`%${locality}%`); }
+    if (propertyType) { sql += ` AND p.property_type = $${idx++}`;         params.push(propertyType); }
+    sql += ' ORDER BY u.price ASC LIMIT 50';
+    return queryAll(sql, params);
+}
+
+/**
+ * Atomically transitions a unit's status with advisory lock + history row.
+ * Two concurrent holds on the same unit → exactly one success.
+ */
+async function transitionUnitStatus(userId, unitId, newStatus, { holdExpiresAt=null, holdBy='', bookingRef='', changedBy='', reason='' } = {}) {
+    if (!VALID_UNIT_STATUSES.includes(newStatus)) {
+        const err = new Error(`Invalid unit status: ${newStatus}`); err.code = 'INVALID_TRANSITION'; throw err;
+    }
+    return transaction(async (tx) => {
+        await tx.query('SELECT pg_advisory_xact_lock($1)', [unitId]);
+        const row = await tx.query('SELECT * FROM units WHERE id = $1 AND user_id = $2 FOR UPDATE', [unitId, userId]);
+        if (!row.rows.length) { const e=new Error('Unit not found'); e.code='UNIT_NOT_FOUND'; throw e; }
+        const unit = row.rows[0];
+        const allowed = UNIT_TRANSITIONS[unit.status] || [];
+        if (!allowed.includes(newStatus)) {
+            const e=new Error(`Cannot transition from ${unit.status} to ${newStatus}`); e.code='INVALID_TRANSITION'; throw e;
+        }
+        const sets=['status=$1','updated_at=CURRENT_TIMESTAMP'], params=[newStatus]; let idx=2;
+        if (newStatus==='ON_HOLD') {
+            sets.push(`hold_expires_at=$${idx++}`,`hold_by=$${idx++}`); params.push(holdExpiresAt||null, holdBy||'');
+        } else {
+            sets.push(`hold_expires_at=NULL`,`hold_by=''`);
+        }
+        if (newStatus==='BOOKED'||newStatus==='SOLD') { sets.push(`booking_ref=$${idx++}`); params.push(bookingRef||''); }
+        params.push(unitId, userId);
+        const updated = await tx.query(
+            `UPDATE units SET ${sets.join(',')} WHERE id=$${idx++} AND user_id=$${idx} RETURNING *`, params);
+        await tx.query(
+            `INSERT INTO unit_status_history (unit_id,user_id,old_status,new_status,changed_by,reason) VALUES($1,$2,$3,$4,$5,$6)`,
+            [unitId, userId, unit.status, newStatus, changedBy||'', reason||'']);
+        return updated.rows[0];
+    });
+}
+
+/** Revert expired ON_HOLD units to VACANT, idempotently. Returns count reverted. */
+async function expireStaleHolds(userId = null) {
+    const now = new Date().toISOString();
+    const userClause = userId !== null ? 'AND user_id = $2' : '';
+    const params = userId !== null ? [now, userId] : [now];
+    const stale = await queryAll(
+        `SELECT id, user_id FROM units WHERE status='ON_HOLD' AND hold_expires_at<=$1 ${userClause}`, params);
+    if (!stale.length) return 0;
+    await runSql(
+        `UPDATE units SET status='VACANT',hold_expires_at=NULL,hold_by='',updated_at=CURRENT_TIMESTAMP
+         WHERE status='ON_HOLD' AND hold_expires_at<=$1 ${userClause}`, params);
+    for (const u of stale) {
+        await runSql(
+            `INSERT INTO unit_status_history (unit_id,user_id,old_status,new_status,reason)
+             VALUES ($1,$2,'ON_HOLD','VACANT','hold_expired')`, [u.id, u.user_id]);
+    }
+    return stale.length;
+}
+
+// ─── Inventory: Media Assets ─────────────────────────────────────────────
+
+async function createMediaAsset(userId, { projectId, unitId, assetType, fileName, storagePath, mimeType, sizeBytes, reraVerified=false }) {
+    const res = await query(
+        `INSERT INTO media_assets (user_id,project_id,unit_id,asset_type,file_name,storage_path,mime_type,size_bytes,rera_verified)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+        [userId, projectId, unitId||null, assetType, fileName, storagePath, mimeType, sizeBytes||0, reraVerified?1:0]);
+    return res.rows[0];
+}
+
+async function getMediaAssets(userId, projectId, { assetType, unitId, activeOnly=true } = {}) {
+    let sql = 'SELECT * FROM media_assets WHERE user_id=$1 AND project_id=$2';
+    const params=[userId, projectId]; let idx=3;
+    if (activeOnly) sql += ' AND is_active=1';
+    if (assetType) { sql += ` AND asset_type=$${idx++}`; params.push(assetType); }
+    if (unitId)    { sql += ` AND unit_id=$${idx++}`; params.push(unitId); }
+    sql += ' ORDER BY created_at ASC';
+    return queryAll(sql, params);
+}
+
+async function getMediaAssetById(userId, id) {
+    return queryGet('SELECT * FROM media_assets WHERE id=$1 AND user_id=$2', [id, userId]);
+}
+
+async function deleteMediaAsset(userId, id) {
+    return runSql('UPDATE media_assets SET is_active=0 WHERE id=$1 AND user_id=$2', [id, userId]);
+}
+
 module.exports = {
     initDatabase,
     closeDatabase,
@@ -1518,5 +1700,21 @@ module.exports = {
     countAppointments,
     createAppointment,
     getAppointmentById,
-    cancelAppointment
+    cancelAppointment,
+    // Inventory — projects, units, media assets
+    createProject,
+    getProjects,
+    getProjectById,
+    updateProject,
+    deleteProject,
+    createUnit,
+    getUnits,
+    getUnitById,
+    searchUnits,
+    transitionUnitStatus,
+    expireStaleHolds,
+    createMediaAsset,
+    getMediaAssets,
+    getMediaAssetById,
+    deleteMediaAsset
 };
