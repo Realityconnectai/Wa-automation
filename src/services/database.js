@@ -884,6 +884,61 @@ async function cancelScheduledMessage(userId, id) {
     );
 }
 
+// ─── Durable outreach jobs ──────────────────────────────────────────────
+async function createOutreachJob(userId, id, messageTemplate, contacts) {
+    return transaction(async (tx) => {
+        await tx.query(`INSERT INTO outreach_jobs (id,user_id,message_template,status,total)
+                        VALUES ($1,$2,$3,'running',$4)`, [id, userId, messageTemplate, contacts.length]);
+        for (const contact of contacts) {
+            if (contact.id) {
+                const ownedContact = await tx.query('SELECT id FROM contacts WHERE id=$1 AND user_id=$2', [contact.id, userId]);
+                if (!ownedContact.rows[0]) {
+                    const err = new Error('Outreach recipients must belong to the job owner');
+                    err.status = 403;
+                    throw err;
+                }
+            }
+            await tx.query(`INSERT INTO outreach_recipients (job_id,user_id,contact_id,phone,contact_name)
+                            VALUES ($1,$2,$3,$4,$5)`, [id, userId, contact.id || null, contact.phone, contact.name || '']);
+        }
+        return getOutreachJob(userId, id, tx.client);
+    });
+}
+
+async function getOutreachJob(userId, id, client = null) {
+    const job = await queryGet('SELECT * FROM outreach_jobs WHERE id=$1 AND user_id=$2', [id, userId], client);
+    if (!job) return null;
+    const results = await queryAll(`SELECT phone, contact_name AS name, status, reason FROM outreach_recipients
+                                    WHERE job_id=$1 AND user_id=$2 ORDER BY id`, [id, userId], client);
+    const counts = results.reduce((out, row) => { out[row.status] = (out[row.status] || 0) + 1; return out; }, {});
+    return { ...job, results, sent: counts.sent || 0, failed: counts.failed || 0,
+        skipped: (counts.skipped || 0) + (counts.unknown || 0), cancelRequested: job.status === 'cancel_requested' };
+}
+
+async function countRunningOutreachJobs(userId = null) {
+    const sql = userId ? "SELECT COUNT(*) AS count FROM outreach_jobs WHERE user_id=$1 AND status IN ('running','cancel_requested')"
+        : "SELECT COUNT(*) AS count FROM outreach_jobs WHERE status IN ('running','cancel_requested')";
+    const row = await queryGet(sql, userId ? [userId] : []);
+    return Number(row?.count || 0);
+}
+
+async function requestOutreachCancellation(userId, id) {
+    const result = await runSql("UPDATE outreach_jobs SET status='cancel_requested' WHERE id=$1 AND user_id=$2 AND status='running'", [id, userId]);
+    return result.changes > 0;
+}
+
+async function recoverInterruptedOutreachJobs() {
+    return transaction(async (tx) => {
+        const jobs = await tx.query("SELECT id,user_id FROM outreach_jobs WHERE status IN ('running','cancel_requested')");
+        for (const job of jobs.rows) {
+            await tx.query("UPDATE outreach_recipients SET status='unknown', reason='Server restarted before delivery could be confirmed' WHERE job_id=$1 AND user_id=$2 AND status='sending'", [job.id, job.user_id]);
+            await tx.query("UPDATE outreach_recipients SET status='skipped', reason='Server restarted before this recipient was sent' WHERE job_id=$1 AND user_id=$2 AND status='pending'", [job.id, job.user_id]);
+            await tx.query("UPDATE outreach_jobs SET status='interrupted', finished_at=CURRENT_TIMESTAMP, error='Interrupted by server restart; unsent recipients were not retried' WHERE id=$1 AND user_id=$2", [job.id, job.user_id]);
+        }
+        return jobs.rows.length;
+    });
+}
+
 // ─── Product / Catalog Helpers ──────────────────────────────
 
 async function getProducts(userId, activeOnly = false) {
@@ -1708,6 +1763,11 @@ module.exports = {
     claimScheduledMessage,
     reclaimStuckScheduledMessages,
     cancelScheduledMessage,
+    createOutreachJob,
+    getOutreachJob,
+    countRunningOutreachJobs,
+    requestOutreachCancellation,
+    recoverInterruptedOutreachJobs,
     getSetting,
     setSetting,
     getAllSettings,

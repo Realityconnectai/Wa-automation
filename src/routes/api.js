@@ -312,23 +312,23 @@ router.post('/contacts/outreach', sendLimiter, requireDurableWrite, asyncHandler
         return res.status(400).json({ success: false, error: 'None of the selected contacts could be found' });
     }
 
-    const job = startOutreachJob(req.user, contacts, message);
+    const job = await startOutreachJob(req.user, contacts, message);
     res.json({ success: true, data: { jobId: job.id, total: job.total } });
 }));
 
-router.get('/contacts/outreach/:jobId', (req, res) => {
+router.get('/contacts/outreach/:jobId', asyncHandler(async (req, res) => {
     // getOutreachJob checks ownership; an unknown or someone else's job id is
     // indistinguishable from a missing one.
-    const job = getOutreachJob(String(req.params.jobId).slice(0, 40), req.user.id);
+    const job = await getOutreachJob(String(req.params.jobId).slice(0, 40), req.user.id);
     if (!job) return res.status(404).json({ success: false, error: 'Job not found' });
     res.json({ success: true, data: job });
-});
+}));
 
-router.post('/contacts/outreach/:jobId/cancel', (req, res) => {
-    const ok = cancelOutreachJob(String(req.params.jobId).slice(0, 40), req.user.id);
+router.post('/contacts/outreach/:jobId/cancel', asyncHandler(async (req, res) => {
+    const ok = await cancelOutreachJob(String(req.params.jobId).slice(0, 40), req.user.id);
     if (!ok) return res.status(404).json({ success: false, error: 'Job not found or already finished' });
     res.json({ success: true });
-});
+}));
 
 // ─────────────────────────────────────────────────────────────
 //  MESSAGES

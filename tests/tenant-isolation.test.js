@@ -335,7 +335,7 @@ describe('Multi-tenant isolation', () => {
             // Start a job as Alice directly (the route requires a live
             // WhatsApp connection; the ownership check is what's under test).
             const aliceContacts = await getContacts(alice.user.id);
-            const job = startOutreachJob(alice.user, aliceContacts, 'hello {{name}}');
+            const job = await startOutreachJob(alice.user, aliceContacts, 'hello {{name}}');
 
             const asBob = await request(app)
                 .get(`/api/contacts/outreach/${job.id}`)
@@ -347,22 +347,22 @@ describe('Multi-tenant isolation', () => {
                 .set('Cookie', alice.cookie);
             expect(asAlice.status).toBe(200);
 
-            require('../src/services/outreach').cancelAllOutreachJobs();
+            await require('../src/services/outreach').cancelAllOutreachJobs();
         });
 
         test('one tenant cannot cancel another tenant\'s job', async () => {
             const { startOutreachJob, getOutreachJob } = require('../src/services/outreach');
             const { getContacts } = require('../src/services/database');
             const aliceContacts = await getContacts(alice.user.id);
-            const job = startOutreachJob(alice.user, aliceContacts, 'hi');
+            const job = await startOutreachJob(alice.user, aliceContacts, 'hi');
 
             const res = await request(app)
                 .post(`/api/contacts/outreach/${job.id}/cancel`)
                 .set('Cookie', bob.cookie);
             expect(res.status).toBe(404);
-            expect(getOutreachJob(job.id, alice.user.id).cancelRequested).toBe(false);
+            expect((await getOutreachJob(job.id, alice.user.id)).cancelRequested).toBe(false);
 
-            require('../src/services/outreach').cancelAllOutreachJobs();
+            await require('../src/services/outreach').cancelAllOutreachJobs();
         });
 
         test('outreach only ever resolves contacts belonging to the caller', async () => {

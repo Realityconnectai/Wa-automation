@@ -19,7 +19,7 @@
 require('dotenv').config();
 
 const { createApp } = require('./src/config/app');
-const { initDatabase, closeDatabase, getPersistHealth, listUsers } = require('./src/services/database');
+const { initDatabase, closeDatabase, getPersistHealth, listUsers, recoverInterruptedOutreachJobs } = require('./src/services/database');
 const { initScheduler, stopScheduler, isSchedulerBusy } = require('./src/services/scheduler');
 const { initCalendarSync, stopCalendarSync } = require('./src/services/calendar-sync');
 const { initWhatsAppClient, destroyAllClients } = require('./src/services/whatsapp-client');
@@ -162,7 +162,7 @@ async function shutdown(signal) {
 
     stopScheduler();
     stopCalendarSync();
-    const cancelled = cancelAllOutreachJobs();
+    const cancelled = await cancelAllOutreachJobs();
     if (cancelled) console.log(`   ✔ Requested cancellation of ${cancelled} outreach job(s)`);
     clearPendingAutoAnalyses();
 
@@ -257,6 +257,8 @@ async function start() {
     try {
         await initDatabase();
         console.log('✅ Database initialized');
+        const recoveredOutreach = await recoverInterruptedOutreachJobs();
+        if (recoveredOutreach) console.warn(`⚠️ Marked ${recoveredOutreach} interrupted outreach job(s) safe after restart`);
     } catch (dbErr) {
         console.error('❌ Database init failed:', dbErr.message);
         process.exit(1);

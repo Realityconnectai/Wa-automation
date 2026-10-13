@@ -1,7 +1,8 @@
-const { initDatabase, getDb, stopPersistence, createUser, createScheduledMessage, claimScheduledMessage, updateScheduledMessageStatus } = require('../src/services/database');
+const { initDatabase, getDb, stopPersistence, createUser, createScheduledMessage, claimScheduledMessage, updateScheduledMessageStatus, createOutreachJob, getOutreachJob: getStoredOutreachJob, recoverInterruptedOutreachJobs } = require('../src/services/database');
 const { concurrencyGate } = require('../src/middleware/rateLimit');
 const { isCircuitOpen, recordFailure, recordSuccess, resetCircuits } = require('../src/services/gemini-client');
-const { startOutreachJob, cancelOutreachJob, getOutreachJob, countRunningJobsForUser } = require('../src/services/outreach');
+const { startOutreachJob, cancelOutreachJob } = require('../src/services/outreach');
+const { runSql } = require('../src/services/db-pool');
 
 describe('Priority 2: Background Jobs, Scheduler & AI Protections', () => {
     let db;
@@ -46,28 +47,41 @@ describe('Priority 2: Background Jobs, Scheduler & AI Protections', () => {
     });
 
     describe('2.2 Bulk Outreach Rate Limiting & Safety', () => {
-        test('rejects batch larger than maximum recipients per job', () => {
+        test('rejects batch larger than maximum recipients per job', async () => {
             const contacts = Array.from({ length: 30 }, (_, i) => ({
                 phone: `9198765432${i.toString().padStart(2, '0')}`,
                 name: `User ${i}`
             }));
 
-            expect(() => {
-                startOutreachJob(testUser, contacts, 'Hello {{name}}');
-            }).toThrow(/capped at 25/);
+            await expect(startOutreachJob(testUser, contacts, 'Hello {{name}}')).rejects.toThrow(/capped at 25/);
         });
 
-        test('prevents user from starting multiple simultaneous outreach jobs', () => {
+        test('persists jobs and prevents multiple simultaneous jobs per tenant', async () => {
             const contacts = [{ phone: '919876543210', name: 'Test' }];
 
-            const job = startOutreachJob(testUser, contacts, 'Hello {{name}}');
+            // Create the first durable job without starting its asynchronous
+            // sender. A real one-recipient job can complete before the second
+            // request is scheduled, which would not exercise the concurrency
+            // guard at all.
+            const job = await createOutreachJob(testUser.id, `active-${Date.now()}`, 'Hello {{name}}', contacts);
             expect(job.status).toBe('running');
+            await expect(startOutreachJob(testUser, contacts, 'Hello again {{name}}')).rejects.toThrow(/already have an outreach send in progress/);
+            await cancelOutreachJob(job.id, testUser.id);
+        });
 
-            expect(() => {
-                startOutreachJob(testUser, contacts, 'Hello again {{name}}');
-            }).toThrow(/already have an outreach send in progress/);
-
-            cancelOutreachJob(job.id, testUser.id);
+        test('restart recovery marks unfinished recipients without resending', async () => {
+            const job = await createOutreachJob(testUser.id, `recovery-${Date.now()}`, 'Hello', [
+                { phone: '919876543210', name: 'Sending' },
+                { phone: '919876543211', name: 'Pending' }
+            ]);
+            await runSql("UPDATE outreach_recipients SET status='sending' WHERE job_id=$1 AND contact_name='Sending'", [job.id]);
+            await recoverInterruptedOutreachJobs();
+            const recovered = await getStoredOutreachJob(testUser.id, job.id);
+            expect(recovered.status).toBe('interrupted');
+            expect(recovered.results).toEqual(expect.arrayContaining([
+                expect.objectContaining({ name: 'Sending', status: 'unknown' }),
+                expect.objectContaining({ name: 'Pending', status: 'skipped' })
+            ]));
         });
     });
 

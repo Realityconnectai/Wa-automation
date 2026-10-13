@@ -64,7 +64,7 @@ async function freshDatabase() {
 
     // Tear down anything holding a timer, a socket, or a Chrome stub.
     try { require('../src/services/whatsapp-client').destroyAllClients(); } catch (e) {}
-    try { require('../src/services/outreach').cancelAllOutreachJobs(); } catch (e) {}
+    try { await require('../src/services/outreach').cancelAllOutreachJobs(); } catch (e) {}
     try { require('../src/services/lead-analyzer').clearPendingAutoAnalyses(); } catch (e) {}
     try { require('../src/services/scheduler').stopScheduler(); } catch (e) {}
     try { require('whatsapp-web.js').__reset(); } catch (e) {}
@@ -239,7 +239,7 @@ if (typeof afterAll === 'function') {
     afterAll(async () => {
         try { require('../src/services/database').stopPersistence(); } catch (e) {}
         try { await require('../src/services/whatsapp-client').destroyAllClients(); } catch (e) {}
-        try { require('../src/services/outreach').cancelAllOutreachJobs(); } catch (e) {}
+        try { await require('../src/services/outreach').cancelAllOutreachJobs(); } catch (e) {}
         try { require('../src/services/lead-analyzer').clearPendingAutoAnalyses(); } catch (e) {}
         try { require('../src/services/scheduler').stopScheduler(); } catch (e) {}
         try { require('../src/services/db-pool').closePool().catch(() => {}); } catch (e) {}
