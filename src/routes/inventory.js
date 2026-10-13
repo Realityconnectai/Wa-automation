@@ -22,13 +22,14 @@ const {
     createUnit, getUnits, getUnitById, searchUnits,
     transitionUnitStatus, expireStaleHolds,
     createMediaAsset, getMediaAssets, getMediaAssetById, deleteMediaAsset,
+    getMonthlyOutgoingCount,
     assertPersistable
 } = require('../services/database');
 
-const { validateMediaFile } = require('../services/messaging');
+const { validateMediaFile, sendMedia } = require('../services/messaging');
 const { asyncHandler }      = require('../utils/errors');
 const { perUser }           = require('../middleware/rateLimit');
-const { requireId, optionalString, clampNumber, clampInt, requireEnum, LIMITS }
+const { requireId, optionalString, clampNumber, clampInt, requireEnum, normalizePhone, LIMITS }
     = require('../utils/validate');
 
 const writeLimiter = perUser('inventory-write', {
@@ -266,6 +267,40 @@ router.post('/projects/:projectId/assets', writeLimiter, requireDurableWrite,
             reraVerified: b.reraVerified === 'true' || b.reraVerified === true
         });
         res.json({ success: true, data: asset });
+    })
+);
+
+// Manual delivery is intentionally bound to an asset already owned by this
+// tenant and project.  The browser never supplies a disk path or arbitrary
+// file identifier, so it cannot turn this endpoint into a file sender.
+router.post('/projects/:projectId/assets/:assetId/send', writeLimiter, requireDurableWrite,
+    asyncHandler(async (req, res) => {
+        if (req.user.role !== 'admin' && !req.user.wa_enabled) {
+            return res.status(403).json({ success: false, error: 'WhatsApp access has not been enabled for your account.', code: 'WA_NOT_ENABLED' });
+        }
+        const projectId = requireId(req.params.projectId, 'project id');
+        const assetId = requireId(req.params.assetId, 'asset id');
+        const project = await getProjectById(req.user.id, projectId);
+        const asset = await getMediaAssetById(req.user.id, assetId);
+        if (!project || !asset || !asset.is_active || Number(asset.project_id) !== Number(projectId)) {
+            return res.status(404).json({ success: false, error: 'Asset not found' });
+        }
+        const phone = normalizePhone(req.body?.phone);
+        const caption = optionalString(req.body?.caption, 'caption', LIMITS.MESSAGE_BODY);
+        if (req.user.message_limit && (await getMonthlyOutgoingCount(req.user.id)) >= req.user.message_limit) {
+            return res.status(403).json({
+                success: false,
+                error: `Monthly message limit reached (${req.user.message_limit}). Contact your administrator to raise it.`,
+                code: 'MESSAGE_LIMIT'
+            });
+        }
+        const result = await sendMedia(req.user.id, phone, {
+            filePath: asset.storage_path,
+            mimeType: asset.mime_type,
+            caption,
+            idempotencyKey: `inventory-asset-${asset.id}-${Date.now()}`
+        });
+        res.json({ success: true, data: { assetId: asset.id, fileName: asset.file_name, ...result } });
     })
 );
 

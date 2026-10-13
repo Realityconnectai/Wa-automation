@@ -173,6 +173,11 @@ function navigateTo(section) {
         item.setAttribute('aria-current', active ? 'page' : 'false');
     });
 
+    document.addEventListener('click', (event) => {
+        const mediaButton = event.target.closest('[data-contact-media]');
+        if (mediaButton) viewContactMedia(mediaButton.dataset.contactMedia);
+    });
+
     // Show section
     document.querySelectorAll('.section').forEach(sec => {
         sec.classList.toggle('active', sec.id === `section-${section}`);
@@ -346,7 +351,7 @@ async function loadMessages() {
                     <strong>${escapeHtml(msg.contact_name || msg.phone)}</strong>
                     ${msg.contact_name ? `<br><small style="color:var(--color-text-secondary)">${escapeHtml(msg.phone)}</small>` : ''}
                 </td>
-                <td><span class="msg-truncate">${escapeHtml(msg.body)}</span></td>
+                <td><span class="msg-truncate">${escapeHtml(msg.body)}</span>${msg.message_type && msg.message_type !== 'text' ? ` <span class="badge badge-incoming">${escapeHtml(msg.message_type)}</span>` : ''}</td>
                 <td><span class="badge badge-${msg.status}">${escapeHtml(msg.status)}</span></td>
                 <td style="white-space:nowrap;color:var(--color-text-secondary)">${formatDate(msg.created_at)}</td>
             </tr>
@@ -1145,6 +1150,7 @@ async function loadChatbotRules() {
                     </div>
                 </div>
                 <div class="rule-actions">
+                    <button class="btn btn-sm btn-secondary contact-media-btn" type="button" data-contact-media="${escapeHtml(c.phone)}" aria-label="View received media from ${escapeHtml(c.name || c.phone)}">Media</button>
                     <button
                         class="btn btn-sm btn-secondary"
                         onclick="toggleRule(${rule.id}, ${rule.is_active ? 0 : 1})"
@@ -1357,6 +1363,18 @@ async function deleteContact(id) {
     } catch (err) {
         showToast('Failed to delete contact', 'error');
     }
+}
+
+// Incoming files are intentionally logged as metadata only: WhatsApp media is
+// not downloaded or persisted locally. This view therefore opens the existing
+// tenant-scoped message log rather than pretending a retained file is available.
+function viewContactMedia(phone) {
+    const search = document.getElementById('messageSearch');
+    const direction = document.getElementById('messageFilter');
+    if (search) search.value = phone;
+    if (direction) direction.value = 'incoming';
+    navigateTo('messages');
+    loadMessages();
 }
 
 // ─── CSV import ─────────────────────────────────────────────

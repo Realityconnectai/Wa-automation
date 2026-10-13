@@ -12,6 +12,11 @@
 
 const request = require('supertest');
 
+jest.mock('../src/services/messaging', () => {
+    const actual = jest.requireActual('../src/services/messaging');
+    return { ...actual, sendMedia: jest.fn().mockResolvedValue({ waMessageId: 'mock-media-id', sizeBytes: 12, fileName: 'test.pdf' }) };
+});
+
 describe('Inventory — projects, units, status transitions, assets', () => {
     let app, tenantA, tenantB;
 
@@ -78,6 +83,67 @@ describe('Inventory — projects, units, status transitions, assets', () => {
             const r = await request(app).post('/api/inventory/projects')
                 .set('Cookie', tenantA.cookie).send({ city: 'Ranchi' });
             expect(r.status).toBe(400);
+        });
+    });
+
+    describe('Manual project asset delivery', () => {
+        test('sends only the caller tenant’s asset for the selected project', async () => {
+            const { createMediaAsset } = require('../src/services/database');
+            const { sendMedia } = require('../src/services/messaging');
+            const project = await makeProject(tenantA.cookie);
+            const asset = await createMediaAsset(tenantA.user.id, {
+                projectId: project.id, assetType: 'brochure', fileName: 'test.pdf',
+                storagePath: 'C:/test-assets/test.pdf', mimeType: 'application/pdf', sizeBytes: 12
+            });
+
+            const response = await request(app)
+                .post(`/api/inventory/projects/${project.id}/assets/${asset.id}/send`)
+                .set('Cookie', tenantA.cookie)
+                .send({ phone: '919876543210', caption: 'Project brochure' });
+
+            expect(response.status).toBe(200);
+            expect(sendMedia).toHaveBeenCalledWith(tenantA.user.id, '919876543210', expect.objectContaining({
+                filePath: 'C:/test-assets/test.pdf', mimeType: 'application/pdf', caption: 'Project brochure'
+            }));
+        });
+
+        test('does not allow a different tenant to send another tenant’s asset', async () => {
+            const { createMediaAsset } = require('../src/services/database');
+            const { sendMedia } = require('../src/services/messaging');
+            const project = await makeProject(tenantA.cookie);
+            const asset = await createMediaAsset(tenantA.user.id, {
+                projectId: project.id, assetType: 'brochure', fileName: 'private.pdf',
+                storagePath: 'C:/test-assets/private.pdf', mimeType: 'application/pdf', sizeBytes: 12
+            });
+            const response = await request(app)
+                .post(`/api/inventory/projects/${project.id}/assets/${asset.id}/send`)
+                .set('Cookie', tenantB.cookie)
+                .send({ phone: '919876543210' });
+            expect(response.status).toBe(404);
+            expect(sendMedia).not.toHaveBeenCalledWith(tenantB.user.id, expect.anything(), expect.anything());
+        });
+
+        test('enforces the sender monthly message limit before sending an asset', async () => {
+            const { createMediaAsset, logMessage, updateUser } = require('../src/services/database');
+            const { sendMedia } = require('../src/services/messaging');
+            const project = await makeProject(tenantA.cookie);
+            const asset = await createMediaAsset(tenantA.user.id, {
+                projectId: project.id, assetType: 'brochure', fileName: 'limited.pdf',
+                storagePath: 'C:/test-assets/limited.pdf', mimeType: 'application/pdf', sizeBytes: 12
+            });
+            await updateUser(tenantA.user.id, { message_limit: 1 });
+            await logMessage(tenantA.user.id, {
+                phone: '919876543210', direction: 'outgoing', messageType: 'text', body: 'Already sent'
+            });
+
+            const response = await request(app)
+                .post(`/api/inventory/projects/${project.id}/assets/${asset.id}/send`)
+                .set('Cookie', tenantA.cookie)
+                .send({ phone: '919876543210' });
+
+            expect(response.status).toBe(403);
+            expect(response.body.code).toBe('MESSAGE_LIMIT');
+            expect(sendMedia).not.toHaveBeenCalledWith(tenantA.user.id, expect.anything(), expect.anything());
         });
     });
 
