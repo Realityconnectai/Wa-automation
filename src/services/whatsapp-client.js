@@ -986,6 +986,39 @@ async function sendTextMessage(userId, phone, text) {
     return await s.client.sendMessage(`${digits}@c.us`, String(text));
 }
 
+/**
+ * Sends a media file on behalf of one account.
+ *
+ * @param {number} userId
+ * @param {string} phone   — digits only (normalised by caller)
+ * @param {object} opts
+ *   @param {string} opts.base64Data  — base64-encoded file content
+ *   @param {string} opts.mimeType    — MIME type (e.g. 'application/pdf')
+ *   @param {string} opts.fileName    — file name shown to recipient
+ *   @param {string} [opts.caption]   — optional message caption
+ *
+ * Returns the whatsapp-web.js result object (has .id._serialized).
+ */
+async function sendMediaMessage(userId, phone, { base64Data, mimeType, fileName, caption = '' }) {
+    const s = getSession(Number(userId), false);
+    if (!s || !s.isConnected || !s.client) {
+        const err = new Error('WhatsApp client is not connected');
+        err.code = 'WA_NOT_CONNECTED';
+        err.status = 409;
+        throw err;
+    }
+    const digits = String(phone).replace(/\D/g, '');
+    if (digits.length < 7 || digits.length > 15) {
+        const err = new Error('Invalid destination phone number');
+        err.status = 400;
+        throw err;
+    }
+    const { MessageMedia } = require('whatsapp-web.js');
+    const media = new MessageMedia(mimeType, base64Data, fileName);
+    const opts  = caption ? { caption } : {};
+    return await s.client.sendMessage(`${digits}@c.us`, media, opts);
+}
+
 module.exports = {
     initWhatsAppClient,
     destroyClientForUser,
@@ -995,6 +1028,7 @@ module.exports = {
     getStatus,
     getSessionMetrics,
     sendTextMessage,
+    sendMediaMessage,
     authDataPath,
     MAX_CONCURRENT_SESSIONS,
     MAX_SSE_CLIENTS_PER_USER,

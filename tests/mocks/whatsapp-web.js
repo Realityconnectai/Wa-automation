@@ -55,9 +55,9 @@ class FakeClient extends EventEmitter {
         return this.state;
     }
 
-    async sendMessage(chatId, text) {
+    async sendMessage(chatId, content, options) {
         if (FakeClient.sendError) throw new Error(FakeClient.sendError);
-        this.sent.push({ chatId, text });
+        this.sent.push({ chatId, content, options });
         return { id: { _serialized: `fake_${this.sent.length}_${Date.now()}` } };
     }
 
@@ -87,6 +87,14 @@ class LocalAuth {
 module.exports = {
     Client: FakeClient,
     LocalAuth,
+    // Minimal MessageMedia stub — holds mime+data+filename without reading the filesystem
+    MessageMedia: class MessageMedia {
+        constructor(mimetype, data, filename) {
+            this.mimetype = mimetype;
+            this.data     = data;
+            this.filename = filename || null;
+        }
+    },
     // Test helpers (not part of the real library's surface).
     __instances: instances,
     __reset() {
