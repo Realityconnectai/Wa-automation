@@ -6,6 +6,7 @@ const { generateReply } = require('./ai');
 const { scheduleAutoAnalysis } = require('./lead-analyzer');
 const { safeRegexTest } = require('../utils/validate');
 const { conversationQueue } = require('../utils/conversation-queue');
+const { tryBrochureDrop } = require('./brochure-drop');
 
 // ─── Anti-Ban Rate Limiting ─────────────────────────────────
 const userRateLimits = new Map();
@@ -214,6 +215,24 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
 
     const aiEnabled = await getSetting(userId, 'ai_enabled');
     const aiMode = (await getSetting(userId, 'ai_mode')) || 'ai_first';
+
+    // ── 0. BROCHURE DROP (rule-based, no AI latency) ──
+    // Runs BEFORE AI so real estate asset delivery is near-instant.
+    // inboundReceivedAt is Date.now() at the start of this handler (approximate).
+    try {
+        const dropResult = await tryBrochureDrop(
+            userId, phone, contactName, messageText, client, msg, Date.now()
+        );
+        if (dropResult.handled) {
+            if (dropResult.elapsedMs != null) {
+                console.log(`📦 Brochure drop: ${dropResult.action} for "${dropResult.projectName || 'N/A'}" in ${dropResult.elapsedMs}ms`);
+            }
+            return { replied: true, rule: 'brochure_drop', ...dropResult };
+        }
+    } catch (dropErr) {
+        // Non-fatal: fall through to normal chatbot/AI path
+        console.warn('⚠️ Brochure drop failed (non-fatal):', dropErr.message?.split('\n')[0]);
+    }
 
     // ── 1. AI-FIRST PERSONA MODE ──────
     if (aiEnabled === 'true' && aiMode === 'ai_first') {

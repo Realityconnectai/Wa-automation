@@ -483,7 +483,8 @@ const SETTINGS_SCHEMA = {
     business_offers:              { max: 2000 },
     business_currency:            { max: 8 },
     chatbot_throttle_reply:       { max: 500 },
-    chatbot_media_ack_reply:      { max: 500 }
+    chatbot_media_ack_reply:      { max: 500 },
+    brochure_triggers:            { max: 2000 }   // JSON array of trigger strings
 };
 
 /** Keys the server writes itself and a client must never be able to set. */
