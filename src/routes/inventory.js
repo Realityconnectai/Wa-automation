@@ -19,7 +19,7 @@ const os      = require('os');
 
 const {
     createProject, getProjects, getProjectById, updateProject, deleteProject,
-    createUnit, getUnits, getUnitById, searchUnits,
+    createUnit, getUnits, getUnitById, updateUnit, deleteUnit, getUnitStatusHistory, searchUnits,
     transitionUnitStatus, expireStaleHolds,
     createMediaAsset, getMediaAssets, getMediaAssetById, deleteMediaAsset,
     getMonthlyOutgoingCount,
@@ -183,6 +183,50 @@ router.get('/units/:id', asyncHandler(async (req, res) => {
     const unit = await getUnitById(req.user.id, id);
     if (!unit) return res.status(404).json({ success: false, error: 'Unit not found' });
     res.json({ success: true, data: unit });
+}));
+
+router.put('/units/:id', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
+    const id = requireId(req.params.id, 'unit id');
+    const b = req.body || {};
+    const rawUnitNumber = b.unitNumber ?? b.unit_number;
+    if (rawUnitNumber !== undefined && (!String(rawUnitNumber).trim())) {
+        return res.status(400).json({ success: false, error: 'unit_number cannot be blank.' });
+    }
+    const rawAreaUnit = b.areaUnit ?? b.area_unit;
+    if (rawAreaUnit !== undefined && !['sqft', 'sqm', 'sqyd'].includes(rawAreaUnit)) {
+        return res.status(400).json({ success: false, error: 'areaUnit must be sqft, sqm, or sqyd.' });
+    }
+    const unit = await updateUnit(req.user.id, id, {
+        tower: b.tower === undefined ? undefined : optionalString(b.tower, 'tower', 50),
+        unitNumber: rawUnitNumber === undefined ? undefined : optionalString(rawUnitNumber, 'unitNumber', 50),
+        bhk: b.bhk === undefined ? undefined : optionalString(b.bhk, 'bhk', 30),
+        area: b.area === undefined ? undefined : clampNumber(b.area, { min: 0, max: 100000, fallback: 0 }),
+        areaUnit: rawAreaUnit,
+        price: b.price === undefined ? undefined : clampNumber(b.price, { min: 0, max: 1e12, fallback: 0 }),
+        floor: b.floor === undefined ? undefined : (b.floor === null || b.floor === '' ? null : clampInt(b.floor, { min: -5, max: 200, fallback: null }))
+    });
+    if (!unit) return res.status(404).json({ success: false, error: 'Unit not found' });
+    res.json({ success: true, data: unit });
+}));
+
+router.delete('/units/:id', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
+    const id = requireId(req.params.id, 'unit id');
+    try {
+        await deleteUnit(req.user.id, id);
+        res.json({ success: true });
+    } catch (err) {
+        if (err.code === 'UNIT_NOT_FOUND') return res.status(404).json({ success: false, error: err.message });
+        if (err.code === 'UNIT_ACTIVE_RESERVATION') return res.status(409).json({ success: false, error: err.message, code: err.code });
+        throw err;
+    }
+}));
+
+router.get('/units/:id/history', asyncHandler(async (req, res) => {
+    const id = requireId(req.params.id, 'unit id');
+    const unit = await getUnitById(req.user.id, id);
+    if (!unit) return res.status(404).json({ success: false, error: 'Unit not found' });
+    const history = await getUnitStatusHistory(req.user.id, id);
+    res.json({ success: true, data: history });
 }));
 
 // Status transitions: hold / release / book

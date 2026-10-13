@@ -1600,7 +1600,61 @@ async function getUnits(userId, projectId, { status, bhk } = {}) {
 }
 
 async function getUnitById(userId, id) {
-    return queryGet('SELECT * FROM units WHERE id = $1 AND user_id = $2', [id, userId]);
+    return queryGet('SELECT * FROM units WHERE id = $1 AND user_id = $2 AND is_active = 1', [id, userId]);
+}
+
+async function updateUnit(userId, id, fields) {
+    const allowed = ['tower', 'unit_number', 'bhk', 'area', 'area_unit', 'price', 'floor'];
+    const column = { unitNumber: 'unit_number', areaUnit: 'area_unit' };
+    const sets = [], params = [];
+    let idx = 1;
+    for (const [key, value] of Object.entries(fields)) {
+        if (value === undefined) continue;
+        const name = column[key] || key;
+        if (allowed.includes(name)) {
+            sets.push(`${name}=$${idx++}`);
+            params.push(value);
+        }
+    }
+    if (!sets.length) return getUnitById(userId, id);
+    sets.push('updated_at=CURRENT_TIMESTAMP');
+    params.push(id, userId);
+    const result = await query(
+        `UPDATE units SET ${sets.join(', ')} WHERE id=$${idx++} AND user_id=$${idx} AND is_active=1 RETURNING *`,
+        params
+    );
+    return result.rows[0] || null;
+}
+
+async function deleteUnit(userId, id) {
+    return transaction(async (tx) => {
+        await tx.query('SELECT pg_advisory_xact_lock($1)', [id]);
+        const result = await tx.query(
+            'SELECT id,status FROM units WHERE id=$1 AND user_id=$2 AND is_active=1 FOR UPDATE',
+            [id, userId]
+        );
+        const unit = result.rows[0];
+        if (!unit) {
+            const err = new Error('Unit not found');
+            err.code = 'UNIT_NOT_FOUND';
+            throw err;
+        }
+        if (['ON_HOLD', 'BOOKED'].includes(unit.status)) {
+            const err = new Error('Release the hold or resolve the booking before deleting this unit');
+            err.code = 'UNIT_ACTIVE_RESERVATION';
+            throw err;
+        }
+        await tx.query('UPDATE units SET is_active=0,updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND user_id=$2', [id, userId]);
+        return true;
+    });
+}
+
+async function getUnitStatusHistory(userId, unitId) {
+    return queryAll(
+        `SELECT id,old_status,new_status,changed_by,reason,changed_at
+         FROM unit_status_history WHERE unit_id=$1 AND user_id=$2 ORDER BY changed_at DESC,id DESC`,
+        [unitId, userId]
+    );
 }
 
 async function searchUnits(userId, { city, locality, bhk, minPrice, maxPrice, propertyType, status } = {}) {
@@ -1822,6 +1876,9 @@ module.exports = {
     createUnit,
     getUnits,
     getUnitById,
+    updateUnit,
+    deleteUnit,
+    getUnitStatusHistory,
     searchUnits,
     transitionUnitStatus,
     expireStaleHolds,

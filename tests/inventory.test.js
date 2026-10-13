@@ -279,6 +279,64 @@ describe('Inventory — projects, units, status transitions, assets', () => {
         });
     });
 
+    describe('Unit editing, deletion, and history', () => {
+        test('updates editable unit fields but not its status', async () => {
+            const proj = await makeProject(tenantA.cookie);
+            const unit = await makeUnit(tenantA.cookie, proj.id, { unit_number: 'E-101', area: 950, price: 4500000 });
+            const response = await request(app).put(`/api/inventory/units/${unit.id}`)
+                .set('Cookie', tenantA.cookie)
+                .send({ tower: 'B', unit_number: 'E-102', bhk: '2BHK', area: 1050, areaUnit: 'sqm', price: 4800000, floor: 4, status: 'BOOKED' });
+
+            expect(response.status).toBe(200);
+            expect(response.body.data).toMatchObject({ tower: 'B', unit_number: 'E-102', bhk: '2BHK', area_unit: 'sqm', floor: 4, status: 'VACANT' });
+            expect(Number(response.body.data.area)).toBe(1050);
+            expect(Number(response.body.data.price)).toBe(4800000);
+        });
+
+        test('validates unit edit input', async () => {
+            const proj = await makeProject(tenantA.cookie);
+            const unit = await makeUnit(tenantA.cookie, proj.id);
+            await request(app).put(`/api/inventory/units/${unit.id}`).set('Cookie', tenantA.cookie)
+                .send({ unit_number: '   ' }).expect(400);
+            await request(app).put(`/api/inventory/units/${unit.id}`).set('Cookie', tenantA.cookie)
+                .send({ areaUnit: 'acre' }).expect(400);
+        });
+
+        test('soft-deletes a vacant unit and no longer exposes it', async () => {
+            const proj = await makeProject(tenantA.cookie);
+            const unit = await makeUnit(tenantA.cookie, proj.id);
+            await request(app).delete(`/api/inventory/units/${unit.id}`).set('Cookie', tenantA.cookie).expect(200);
+            await request(app).get(`/api/inventory/units/${unit.id}`).set('Cookie', tenantA.cookie).expect(404);
+            const list = await request(app).get(`/api/inventory/projects/${proj.id}/units`).set('Cookie', tenantA.cookie);
+            expect(list.body.data).toHaveLength(0);
+        });
+
+        test('blocks deletion while a hold or booking is active', async () => {
+            const proj = await makeProject(tenantA.cookie);
+            const held = await makeUnit(tenantA.cookie, proj.id, { unit_number: 'H-101' });
+            await request(app).post(`/api/inventory/units/${held.id}/hold`).set('Cookie', tenantA.cookie).send({ holdBy: 'Buyer' }).expect(200);
+            const heldDelete = await request(app).delete(`/api/inventory/units/${held.id}`).set('Cookie', tenantA.cookie);
+            expect(heldDelete.status).toBe(409);
+            expect(heldDelete.body.code).toBe('UNIT_ACTIVE_RESERVATION');
+
+            const booked = await makeUnit(tenantA.cookie, proj.id, { unit_number: 'B-101' });
+            await request(app).post(`/api/inventory/units/${booked.id}/book`).set('Cookie', tenantA.cookie).send({ bookingRef: 'BK-1' }).expect(200);
+            await request(app).delete(`/api/inventory/units/${booked.id}`).set('Cookie', tenantA.cookie).expect(409);
+        });
+
+        test('returns the tenant-scoped status history with actor and reason', async () => {
+            const proj = await makeProject(tenantA.cookie);
+            const unit = await makeUnit(tenantA.cookie, proj.id);
+            await request(app).post(`/api/inventory/units/${unit.id}/hold`)
+                .set('Cookie', tenantA.cookie).send({ holdBy: 'Buyer', reason: 'Requested a day to decide' }).expect(200);
+
+            const ownHistory = await request(app).get(`/api/inventory/units/${unit.id}/history`).set('Cookie', tenantA.cookie);
+            expect(ownHistory.status).toBe(200);
+            expect(ownHistory.body.data[0]).toMatchObject({ old_status: 'VACANT', new_status: 'ON_HOLD', changed_by: String(tenantA.user.id), reason: 'Requested a day to decide' });
+            await request(app).get(`/api/inventory/units/${unit.id}/history`).set('Cookie', tenantB.cookie).expect(404);
+        });
+    });
+
     // ─── Double-hold concurrency ───────────────────────────────────────────
     describe('Double-hold concurrency', () => {
         test('two concurrent holds on the same unit — exactly one succeeds', async () => {
