@@ -177,6 +177,29 @@ describe('sendMedia via mocked WA session (DB)', () => {
         } finally { try { fs.unlinkSync(p); } catch (_) {} }
     }, 15000);
 
+    test('a durable idempotency key prevents a retry from sending media twice', async () => {
+        const { sendMedia } = require('../src/services/messaging');
+        const { getMessages } = require('../src/services/database');
+        const wwjs = require('whatsapp-web.js');
+        const phone = '919876500009';
+        const key = 'asset-retry-key';
+        const p = writeTmp('retry.pdf', Buffer.concat([MAGIC.pdf, Buffer.alloc(200)]));
+        try {
+            const first = await sendMedia(userId, phone, {
+                filePath: p, mimeType: 'application/pdf', idempotencyKey: key
+            });
+            const second = await sendMedia(userId, phone, {
+                filePath: p, mimeType: 'application/pdf', idempotencyKey: key
+            });
+
+            expect(first.duplicate).not.toBe(true);
+            expect(second.duplicate).toBe(true);
+            expect(second.waMessageId).toBe(first.waMessageId);
+            expect(wwjs.__last().sent).toHaveLength(1);
+            expect(await getMessages(userId, { phone, direction: 'outgoing' })).toHaveLength(1);
+        } finally { try { fs.unlinkSync(p); } catch (_) {} }
+    }, 15000);
+
     test('rejected MIME type throws MEDIA_TYPE_NOT_ALLOWED — nothing logged', async () => {
         delete process.env.MAX_MEDIA_IMAGE_PDF_MB;
         const { sendMedia }     = require('../src/services/messaging');

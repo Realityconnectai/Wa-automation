@@ -99,12 +99,32 @@ describe('Inventory — projects, units, status transitions, assets', () => {
             const response = await request(app)
                 .post(`/api/inventory/projects/${project.id}/assets/${asset.id}/send`)
                 .set('Cookie', tenantA.cookie)
+                .set('Idempotency-Key', 'asset-send-once')
                 .send({ phone: '919876543210', caption: 'Project brochure' });
 
             expect(response.status).toBe(200);
             expect(sendMedia).toHaveBeenCalledWith(tenantA.user.id, '919876543210', expect.objectContaining({
-                filePath: 'C:/test-assets/test.pdf', mimeType: 'application/pdf', caption: 'Project brochure'
+                filePath: 'C:/test-assets/test.pdf', mimeType: 'application/pdf', caption: 'Project brochure', idempotencyKey: 'asset-send-once'
             }));
+        });
+
+        test('forwards the same caller idempotency key on a retry', async () => {
+            const { createMediaAsset } = require('../src/services/database');
+            const { sendMedia } = require('../src/services/messaging');
+            const project = await makeProject(tenantA.cookie);
+            const asset = await createMediaAsset(tenantA.user.id, {
+                projectId: project.id, assetType: 'brochure', fileName: 'retry.pdf',
+                storagePath: 'C:/test-assets/retry.pdf', mimeType: 'application/pdf', sizeBytes: 12
+            });
+            const requestBody = { phone: '919876543210' };
+            const first = await request(app).post(`/api/inventory/projects/${project.id}/assets/${asset.id}/send`)
+                .set('Cookie', tenantA.cookie).set('Idempotency-Key', 'retry-key').send(requestBody);
+            const second = await request(app).post(`/api/inventory/projects/${project.id}/assets/${asset.id}/send`)
+                .set('Cookie', tenantA.cookie).set('Idempotency-Key', 'retry-key').send(requestBody);
+
+            expect(first.status).toBe(200);
+            expect(second.status).toBe(200);
+            expect(sendMedia.mock.calls.filter(([, , opts]) => opts.idempotencyKey === 'retry-key')).toHaveLength(2);
         });
 
         test('does not allow a different tenant to send another tenant’s asset', async () => {
@@ -139,6 +159,7 @@ describe('Inventory — projects, units, status transitions, assets', () => {
             const response = await request(app)
                 .post(`/api/inventory/projects/${project.id}/assets/${asset.id}/send`)
                 .set('Cookie', tenantA.cookie)
+                .set('Idempotency-Key', 'monthly-limit-key')
                 .send({ phone: '919876543210' });
 
             expect(response.status).toBe(403);

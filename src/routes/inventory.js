@@ -29,7 +29,7 @@ const {
 const { validateMediaFile, sendMedia } = require('../services/messaging');
 const { asyncHandler }      = require('../utils/errors');
 const { perUser }           = require('../middleware/rateLimit');
-const { requireId, optionalString, clampNumber, clampInt, requireEnum, normalizePhone, LIMITS }
+const { requireId, requireString, optionalString, clampNumber, clampInt, requireEnum, normalizePhone, LIMITS }
     = require('../utils/validate');
 
 const writeLimiter = perUser('inventory-write', {
@@ -287,6 +287,8 @@ router.post('/projects/:projectId/assets/:assetId/send', writeLimiter, requireDu
         }
         const phone = normalizePhone(req.body?.phone);
         const caption = optionalString(req.body?.caption, 'caption', LIMITS.MESSAGE_BODY);
+        const rawKey = req.get('Idempotency-Key') || req.body?.idempotencyKey;
+        const idempotencyKey = requireString(String(rawKey || ''), 'Idempotency-Key', { max: 120 });
         if (req.user.message_limit && (await getMonthlyOutgoingCount(req.user.id)) >= req.user.message_limit) {
             return res.status(403).json({
                 success: false,
@@ -298,7 +300,7 @@ router.post('/projects/:projectId/assets/:assetId/send', writeLimiter, requireDu
             filePath: asset.storage_path,
             mimeType: asset.mime_type,
             caption,
-            idempotencyKey: `inventory-asset-${asset.id}-${Date.now()}`
+            idempotencyKey
         });
         res.json({ success: true, data: { assetId: asset.id, fileName: asset.file_name, ...result } });
     })

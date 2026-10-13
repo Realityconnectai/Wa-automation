@@ -608,28 +608,27 @@ async function logMessage(userId, { waMessageId, phone, contactName, direction, 
 }
 
 async function logOutgoingMessageIdempotent(userId, idempotencyKey, fields) {
-    const key = `idem:${idempotencyKey}`;
     const existing = await queryGet(
-        'SELECT * FROM messages WHERE user_id = $1 AND wa_message_id = $2',
-        [userId, key]
+        'SELECT * FROM messages WHERE user_id = $1 AND idempotency_key = $2',
+        [userId, idempotencyKey]
     );
     if (existing) return { created: false, row: existing };
 
     try {
         const res = await query(
-            `INSERT INTO messages (user_id, wa_message_id, phone, contact_name, direction, message_type, body, status, template_name)
+        `INSERT INTO messages (user_id, idempotency_key, phone, contact_name, direction, message_type, body, status, template_name)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              RETURNING *`,
             [
-                userId, key, fields.phone, fields.contactName || '',
+                userId, idempotencyKey, fields.phone, fields.contactName || '',
                 fields.direction || 'outgoing', fields.messageType || 'text',
                 fields.body || '', fields.status || 'sent', fields.templateName || null
             ]
         );
         return { created: true, row: res.rows[0] };
     } catch (err) {
-        if (err.code === '23505' || /UNIQUE constraint failed|idx_messages_idempotency/i.test(String(err.message))) {
-            const row = await queryGet('SELECT * FROM messages WHERE user_id = $1 AND wa_message_id = $2', [userId, key]);
+        if (err.code === '23505' || /UNIQUE constraint failed|idx_messages_user_idempotency_key/i.test(String(err.message))) {
+            const row = await queryGet('SELECT * FROM messages WHERE user_id = $1 AND idempotency_key = $2', [userId, idempotencyKey]);
             if (row) return { created: false, row };
         }
         throw err;
@@ -638,8 +637,8 @@ async function logOutgoingMessageIdempotent(userId, idempotencyKey, fields) {
 
 async function findMessageByIdempotencyKey(userId, idempotencyKey) {
     return queryGet(
-        'SELECT * FROM messages WHERE user_id = $1 AND wa_message_id = $2',
-        [userId, `idem:${idempotencyKey}`]
+        'SELECT * FROM messages WHERE user_id = $1 AND idempotency_key = $2',
+        [userId, idempotencyKey]
     );
 }
 
