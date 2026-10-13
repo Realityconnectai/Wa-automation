@@ -104,8 +104,28 @@ describe('Inventory — projects, units, status transitions, assets', () => {
 
             expect(response.status).toBe(200);
             expect(sendMedia).toHaveBeenCalledWith(tenantA.user.id, '919876543210', expect.objectContaining({
-                filePath: 'C:/test-assets/test.pdf', mimeType: 'application/pdf', caption: 'Project brochure', idempotencyKey: 'asset-send-once'
+                filePath: 'C:/test-assets/test.pdf', mimeType: 'application/pdf', caption: 'Project brochure', idempotencyKey: 'asset-send-once', mediaAssetId: asset.id
             }));
+        });
+
+        test('returns only masked, tenant-scoped send history for an asset', async () => {
+            const { createMediaAsset, logMessage } = require('../src/services/database');
+            const { runSql } = require('../src/services/db-pool');
+            const project = await makeProject(tenantA.cookie);
+            const asset = await createMediaAsset(tenantA.user.id, {
+                projectId: project.id, assetType: 'brochure', fileName: 'history.pdf',
+                storagePath: 'C:/test-assets/history.pdf', mimeType: 'application/pdf', sizeBytes: 12
+            });
+            const message = await logMessage(tenantA.user.id, {
+                phone: '919876543210', contactName: 'Buyer', direction: 'outgoing', messageType: 'document', body: '[history.pdf]', status: 'delivered'
+            });
+            await runSql('UPDATE messages SET media_asset_id=$1 WHERE id=$2 AND user_id=$3', [asset.id, message.id, tenantA.user.id]);
+
+            const own = await request(app).get(`/api/inventory/assets/${asset.id}/history`).set('Cookie', tenantA.cookie);
+            expect(own.status).toBe(200);
+            expect(own.body.data[0]).toMatchObject({ contact_name: 'Buyer', phone_last4: '3210', status: 'delivered', message_type: 'document' });
+            expect(own.body.data[0].phone).toBeUndefined();
+            await request(app).get(`/api/inventory/assets/${asset.id}/history`).set('Cookie', tenantB.cookie).expect(404);
         });
 
         test('forwards the same caller idempotency key on a retry', async () => {

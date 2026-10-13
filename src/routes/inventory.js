@@ -21,7 +21,7 @@ const {
     createProject, getProjects, getProjectById, updateProject, deleteProject,
     createUnit, getUnits, getUnitById, updateUnit, deleteUnit, getUnitStatusHistory, searchUnits,
     transitionUnitStatus, expireStaleHolds,
-    createMediaAsset, getMediaAssets, getMediaAssetById, deleteMediaAsset,
+    createMediaAsset, getMediaAssets, getMediaAssetById, deleteMediaAsset, getMediaAssetSendHistory,
     getMonthlyOutgoingCount,
     assertPersistable
 } = require('../services/database');
@@ -344,11 +344,19 @@ router.post('/projects/:projectId/assets/:assetId/send', writeLimiter, requireDu
             filePath: asset.storage_path,
             mimeType: asset.mime_type,
             caption,
-            idempotencyKey
+            idempotencyKey,
+            mediaAssetId: asset.id
         });
         res.json({ success: true, data: { assetId: asset.id, fileName: asset.file_name, ...result } });
     })
 );
+
+router.get('/assets/:id/history', asyncHandler(async (req, res) => {
+    const id = requireId(req.params.id, 'asset id');
+    const asset = await getMediaAssetById(req.user.id, id);
+    if (!asset || !asset.is_active) return res.status(404).json({ success: false, error: 'Asset not found' });
+    res.json({ success: true, data: await getMediaAssetSendHistory(req.user.id, id) });
+}));
 
 // Serve a file — authenticated, tenant-scoped, never from public folder
 router.get('/assets/:id/file', asyncHandler(async (req, res) => {
@@ -361,7 +369,8 @@ router.get('/assets/:id/file', asyncHandler(async (req, res) => {
         return res.status(404).json({ success: false, error: 'File not found on server' });
     }
     res.setHeader('Content-Type', asset.mime_type);
-    res.setHeader('Content-Disposition', `inline; filename="${asset.file_name}"`);
+    const disposition = req.query.download === '1' ? 'attachment' : 'inline';
+    res.setHeader('Content-Disposition', `${disposition}; filename="${asset.file_name}"`);
     res.setHeader('Cache-Control', 'private, max-age=3600');
     res.sendFile(path.resolve(asset.storage_path));
 }));

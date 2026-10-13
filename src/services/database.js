@@ -1756,6 +1756,16 @@ async function deleteMediaAsset(userId, id) {
     return runSql('UPDATE media_assets SET is_active=0 WHERE id=$1 AND user_id=$2', [id, userId]);
 }
 
+async function getMediaAssetSendHistory(userId, assetId) {
+    return queryAll(
+        `SELECT id,RIGHT(phone,4) AS phone_last4,contact_name,status,message_type,body,created_at
+         FROM messages
+         WHERE user_id=$1 AND media_asset_id=$2 AND direction='outgoing'
+         ORDER BY created_at DESC,id DESC`,
+        [userId, assetId]
+    );
+}
+
 module.exports = {
     initDatabase,
     closeDatabase,
@@ -1885,5 +1895,6 @@ module.exports = {
     createMediaAsset,
     getMediaAssets,
     getMediaAssetById,
-    deleteMediaAsset
+    deleteMediaAsset,
+    getMediaAssetSendHistory
 };

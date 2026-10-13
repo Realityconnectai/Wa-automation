@@ -182,7 +182,7 @@ async function sendText(userId, phone, text) {
  * @returns {{ waMessageId: string|null, sizeBytes: number, fileName: string }}
  * @throws  Error with .code if validation fails or WA client not connected
  */
-async function sendMedia(userId, phone, { filePath, mimeType, caption = '', idempotencyKey = null }) {
+async function sendMedia(userId, phone, { filePath, mimeType, caption = '', idempotencyKey = null, mediaAssetId = null }) {
     const digits = String(phone).replace(/\D/g, '');
 
     // Validate before reading the file into memory
@@ -227,6 +227,9 @@ async function sendMedia(userId, phone, { filePath, mimeType, caption = '', idem
             return { waMessageId: claim.row.wa_message_id, sizeBytes, fileName, duplicate: true };
         }
         logRow = claim.row;
+        if (mediaAssetId) {
+            await runSql('UPDATE messages SET media_asset_id=$1 WHERE id=$2 AND user_id=$3', [mediaAssetId, logRow.id, userId]);
+        }
     }
 
     let result;
@@ -248,10 +251,13 @@ async function sendMedia(userId, phone, { filePath, mimeType, caption = '', idem
             [waId, logRow.id]);
     } else {
         // No idempotency key — just log
-        await logMessage(userId, {
+        const created = await logMessage(userId, {
             waMessageId: waId, phone: digits, direction: 'outgoing',
             messageType, body: bodyText, status: 'sent'
         });
+        if (mediaAssetId) {
+            await runSql('UPDATE messages SET media_asset_id=$1 WHERE id=$2 AND user_id=$3', [mediaAssetId, created.id, userId]);
+        }
     }
 
     return { waMessageId: waId, sizeBytes, fileName };

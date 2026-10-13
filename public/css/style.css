@@ -1959,6 +1959,18 @@ h1, h2, h3, h4 { font-family: var(--font-display); letter-spacing: -0.015em; }
     overflow-y: auto;
 }
 
+.asset-preview-media {
+    display: block;
+    width: 100%;
+    max-height: 60vh;
+    object-fit: contain;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--cream-subtle);
+}
+
+iframe.asset-preview-media { min-height: 48vh; }
+
 .deal-detail-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
