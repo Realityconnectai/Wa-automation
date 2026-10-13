@@ -714,8 +714,9 @@ function attachHandlers(userId, s, client) {
     });
 
     // ── Delivery acks ────────────────────────────────────────
-    // whatsapp-web.js MessageAck: 0=ERROR, 1=PENDING, 2=SERVER(sent),
-    // 3=DEVICE(delivered), 4=READ, 5=PLAYED(voice=read)
+    // Source: node_modules/whatsapp-web.js/src/util/Constants.js
+    //   MessageAck: -1=ERROR, 0=PENDING, 1=ACK_SERVER(sent),
+    //               2=ACK_DEVICE(delivered), 3=ACK_READ, 4=ACK_PLAYED(=read)
     //
     // We never downgrade: once a message is 'read' it stays 'read'
     // even if a later ack arrives with a lower value (e.g. out-of-order

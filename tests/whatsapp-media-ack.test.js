@@ -138,7 +138,7 @@ describe('Incoming media + delivery acks', () => {
 
     // ─── 2. Delivery ack updates status in order ─────────────────────────
     describe('Delivery ack status updates', () => {
-        test('ack 2 (sent) updates status from pending to sent', async () => {
+        test('ack 1 (ACK_SERVER = sent to server) updates status from pending to sent', async () => {
             const { logMessage, getMessages, updateMessageAckStatus } = require('../src/services/database');
             const phone = '919876543220';
             const waId  = 'fake_wa_id_1';
@@ -148,14 +148,14 @@ describe('Incoming media + delivery acks', () => {
                 messageType: 'text', body: 'Hello', status: 'pending'
             });
 
-            const updated = await updateMessageAckStatus(userId, waId, 2); // 2=server/sent
+            const updated = await updateMessageAckStatus(userId, waId, 1); // 1=ACK_SERVER → sent
             expect(updated).toBe(true);
 
             const rows = await getMessages(userId, { phone, direction: 'outgoing' });
             expect(rows[0].status).toBe('sent');
         });
 
-        test('ack 3 (delivered) advances status from sent to delivered', async () => {
+        test('ack 2 (ACK_DEVICE = delivered to device) advances status from sent to delivered', async () => {
             const { logMessage, getMessages, updateMessageAckStatus } = require('../src/services/database');
             const phone = '919876543221';
             const waId  = 'fake_wa_id_2';
@@ -165,13 +165,13 @@ describe('Incoming media + delivery acks', () => {
                 messageType: 'text', body: 'Hello', status: 'sent'
             });
 
-            await updateMessageAckStatus(userId, waId, 3); // 3=device/delivered
+            await updateMessageAckStatus(userId, waId, 2); // 2=ACK_DEVICE → delivered
 
             const rows = await getMessages(userId, { phone, direction: 'outgoing' });
             expect(rows[0].status).toBe('delivered');
         });
 
-        test('ack 4 (read) advances status from delivered to read', async () => {
+        test('ack 3 (ACK_READ) advances status from delivered to read', async () => {
             const { logMessage, getMessages, updateMessageAckStatus } = require('../src/services/database');
             const phone = '919876543222';
             const waId  = 'fake_wa_id_3';
@@ -181,10 +181,43 @@ describe('Incoming media + delivery acks', () => {
                 messageType: 'text', body: 'Hello', status: 'delivered'
             });
 
-            await updateMessageAckStatus(userId, waId, 4); // 4=read
+            await updateMessageAckStatus(userId, waId, 3); // 3=ACK_READ
 
             const rows = await getMessages(userId, { phone, direction: 'outgoing' });
             expect(rows[0].status).toBe('read');
+        });
+
+        test('ack 4 (ACK_PLAYED = voice played) also advances to read', async () => {
+            const { logMessage, getMessages, updateMessageAckStatus } = require('../src/services/database');
+            const phone = '919876543223';
+            const waId  = 'fake_wa_id_4';
+
+            await logMessage(userId, {
+                waMessageId: waId, phone, direction: 'outgoing',
+                messageType: 'audio', body: '[voice note]', status: 'delivered'
+            });
+
+            await updateMessageAckStatus(userId, waId, 4); // 4=ACK_PLAYED
+
+            const rows = await getMessages(userId, { phone, direction: 'outgoing' });
+            expect(rows[0].status).toBe('read');
+        });
+
+        test('ack -1 (ACK_ERROR) does not change message status', async () => {
+            const { logMessage, getMessages, updateMessageAckStatus } = require('../src/services/database');
+            const phone = '919876543224';
+            const waId  = 'fake_wa_id_err';
+
+            await logMessage(userId, {
+                waMessageId: waId, phone, direction: 'outgoing',
+                messageType: 'text', body: 'Hello', status: 'pending'
+            });
+
+            const updated = await updateMessageAckStatus(userId, waId, -1); // -1=ACK_ERROR
+            expect(updated).toBe(false); // no update
+
+            const rows = await getMessages(userId, { phone, direction: 'outgoing' });
+            expect(rows[0].status).toBe('pending'); // unchanged
         });
     });
 

@@ -666,14 +666,20 @@ async function updateMessageAckStatus(userId, waMessageId, ackStatus) {
     if (!waMessageId || typeof waMessageId !== 'string') return false;
 
     // Map WhatsApp ack integer → status string and ordinal rank
-    // whatsapp-web.js MessageAck values: 0=ERROR, 1=PENDING, 2=SERVER, 3=DEVICE, 4=READ, 5=PLAYED
+    // Source: node_modules/whatsapp-web.js/src/util/Constants.js MessageAck enum
+    //   -1 = ACK_ERROR   (don't touch — error state)
+    //    0 = ACK_PENDING  (not yet delivered — don't touch)
+    //    1 = ACK_SERVER   (delivered to WhatsApp server → 'sent')
+    //    2 = ACK_DEVICE   (delivered to recipient device → 'delivered')
+    //    3 = ACK_READ     (opened/read by recipient → 'read')
+    //    4 = ACK_PLAYED   (voice/video played by recipient → 'read')
     const ACK_MAP = {
-        0: null,       // error — don't touch status
-        1: null,       // pending — don't touch status
-        2: { status: 'sent',      rank: 1 },
-        3: { status: 'delivered', rank: 2 },
-        4: { status: 'read',      rank: 3 },
-        5: { status: 'read',      rank: 3 }  // played (voice) = read
+        [-1]: null,    // error — don't touch status
+        0:    null,    // pending — don't touch status
+        1: { status: 'sent',      rank: 1 },
+        2: { status: 'delivered', rank: 2 },
+        3: { status: 'read',      rank: 3 },
+        4: { status: 'read',      rank: 3 }  // played (voice) = read
     };
     const mapped = ACK_MAP[ackStatus];
     if (!mapped) return false;
