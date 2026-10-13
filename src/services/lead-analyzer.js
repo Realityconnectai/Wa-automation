@@ -36,13 +36,15 @@ Analyze the ENTIRE conversation and respond with ONLY a valid JSON object (no ma
   "estimated_value": estimated potential deal value as a plain number in ${currency || 'the business currency'} (use catalog prices when they match; 0 if unknown or not a sales conversation),
   "suggested_stage": "new" | "contacted" | "qualified" | "proposal" | "negotiation" | "won" | "lost",
   "is_sales_conversation": true | false (false for personal chats, spam, and anything with no business relevance),
-  "lead_type": "buy" | "rent" | "invest" | "sell" | "broker" | "" (intent inferred from conversation),
+  "lead_type": "buy" | "rent" | "invest" | null (intent inferred from conversation),
   "budget_min": minimum budget in numbers only (no currency symbol), or null,
   "budget_max": maximum budget in numbers only (no currency symbol), or null,
   "preferred_bhk": e.g. "2BHK" or "3BHK" or "" if not mentioned,
   "preferred_locality": locality or area mentioned, or "",
   "timeline": possession/move-in timeline mentioned, e.g. "6 months", "immediately", or "",
-  "financing_needed": "yes" | "no" | "unknown"
+  "financing_needed": "yes" | "no" | "unknown" | null,
+  "site_visit_pref": preferred time/date for a site visit, or null,
+  "interested_project_id": numeric project ID only when it is explicitly present in the supplied business context; otherwise null
 }
 
 Priority guidance:
@@ -105,19 +107,21 @@ function normalizeAnalysis(raw, messageCount, contactName) {
         suggestedStage,
         isSalesConversation: raw.is_sales_conversation !== false,
         // Real estate qualification fields — extracted by the model but validated here
-        leadType:          _reEnum(raw.lead_type,          ['buy','rent','invest','sell','broker']),
+        leadType:          _reEnum(raw.lead_type,          ['buy','rent','invest']),
         budgetMin:         _reNumber(raw.budget_min,        0, 1e12),
         budgetMax:         _reNumber(raw.budget_max,        0, 1e12),
         preferredBhk:      _reStr(raw.preferred_bhk,        30),
         preferredLocality: _reStr(raw.preferred_locality,   200),
         timeline:          _reStr(raw.timeline,             200),
-        financingNeeded:   _reEnum(raw.financing_needed,    ['yes','no','unknown'])
+        financingNeeded:   _reEnum(raw.financing_needed,    ['yes','no','unknown']),
+        siteVisitPref:     _reStr(raw.site_visit_pref,       200),
+        interestedProjectId: _reInteger(raw.interested_project_id, 1)
     };
 }
 
 function _reEnum(val, allowed) {
     const v = String(val || '').toLowerCase().trim();
-    return allowed.includes(v) ? v : '';
+    return allowed.includes(v) ? v : null;
 }
 function _reNumber(val, min, max) {
     const n = parseFloat(val);
@@ -127,6 +131,10 @@ function _reNumber(val, min, max) {
 function _reStr(val, maxLen) {
     const s = String(val || '').trim().slice(0, maxLen);
     return s || null;
+}
+function _reInteger(val, min) {
+    const n = Number(val);
+    return Number.isSafeInteger(n) && n >= min ? n : null;
 }
 
 // ─── Contact auto-labeling ──────────────────────────────────
@@ -279,13 +287,15 @@ async function analyzeConversation(userId, phone) {
                 estimatedValue: analysis.estimatedValue,
                 productInterest: analysis.productInterest,
                 // RE qualification fields (only set if model extracted them)
-                leadType:          analysis.leadType          || undefined,
-                budgetMin:         analysis.budgetMin         || undefined,
-                budgetMax:         analysis.budgetMax         || undefined,
-                preferredBhk:      analysis.preferredBhk      || undefined,
-                preferredLocality: analysis.preferredLocality || undefined,
-                timeline:          analysis.timeline          || undefined,
-                financingNeeded:   analysis.financingNeeded   || undefined,
+                leadType:          analysis.leadType,
+                budgetMin:         analysis.budgetMin,
+                budgetMax:         analysis.budgetMax,
+                preferredBhk:      analysis.preferredBhk,
+                preferredLocality: analysis.preferredLocality,
+                timeline:          analysis.timeline,
+                financingNeeded:   analysis.financingNeeded,
+                siteVisitPref:     analysis.siteVisitPref,
+                interestedProjectId: analysis.interestedProjectId,
                 leadTemp,
                 leadTempReason
             });

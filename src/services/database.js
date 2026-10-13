@@ -1003,8 +1003,18 @@ async function deleteCrmDeal(userId, id) {
     return runSql('DELETE FROM crm_deals WHERE user_id = $1 AND id = $2', [userId, id]);
 }
 
-async function aiUpsertCrmDeal(userId, phone, { contactName = '', suggestedStage = 'new', estimatedValue = 0, productInterest = '' }) {
+async function aiUpsertCrmDeal(userId, phone, {
+    contactName = '', suggestedStage = 'new', estimatedValue = 0, productInterest = '',
+    leadType = null, budgetMin = null, budgetMax = null, preferredBhk = null,
+    preferredLocality = null, timeline = null, financingNeeded = null,
+    siteVisitPref = null, interestedProjectId = null
+}) {
     if (!CRM_STAGES.includes(suggestedStage)) suggestedStage = 'new';
+    // A bare FK only proves the project exists. This scoped lookup proves it
+    // belongs to the deal's tenant before AI output can link the two records.
+    if (interestedProjectId != null && !(await getProjectById(userId, interestedProjectId))) {
+        interestedProjectId = null;
+    }
     const existing = await getCrmDealByPhone(userId, phone);
 
     if (!existing) {
@@ -1026,6 +1036,10 @@ async function aiUpsertCrmDeal(userId, phone, { contactName = '', suggestedStage
             'ai',
             `AI created this deal — suggested stage: ${suggestedStage}${estimatedValue ? `, estimated value: ${estimatedValue}` : ''}${productInterest ? `, product: ${productInterest}` : ''}`
         );
+        await updateAiQualificationFields(userId, phone, {
+            leadType, budgetMin, budgetMax, preferredBhk, preferredLocality,
+            timeline, financingNeeded, siteVisitPref, interestedProjectId
+        });
         return getCrmDealById(userId, deal.id);
     }
 
@@ -1040,7 +1054,32 @@ async function aiUpsertCrmDeal(userId, phone, { contactName = '', suggestedStage
          WHERE user_id = $7 AND phone = $8`,
         [contactName, productInterest, suggestedStage, estimatedValue || 0, estimatedValue || 0, estimatedValue || 0, userId, phone]
     );
+    await updateAiQualificationFields(userId, phone, {
+        leadType, budgetMin, budgetMax, preferredBhk, preferredLocality,
+        timeline, financingNeeded, siteVisitPref, interestedProjectId
+    });
     return getCrmDealByPhone(userId, phone);
+}
+
+/** Merge extracted details without replacing known values with null/unknown AI output. */
+async function updateAiQualificationFields(userId, phone, fields) {
+    return runSql(
+        `UPDATE crm_deals SET
+            lead_type = COALESCE($1, lead_type),
+            budget_min = COALESCE($2, budget_min),
+            budget_max = COALESCE($3, budget_max),
+            preferred_bhk = COALESCE($4, preferred_bhk),
+            preferred_locality = COALESCE($5, preferred_locality),
+            timeline = COALESCE($6, timeline),
+            financing_needed = COALESCE($7, financing_needed),
+            site_visit_pref = COALESCE($8, site_visit_pref),
+            interested_project_id = COALESCE($9, interested_project_id),
+            updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = $10 AND phone = $11`,
+        [fields.leadType, fields.budgetMin, fields.budgetMax, fields.preferredBhk,
+         fields.preferredLocality, fields.timeline, fields.financingNeeded,
+         fields.siteVisitPref, fields.interestedProjectId, userId, phone]
+    );
 }
 
 async function getCrmStats(userId) {
