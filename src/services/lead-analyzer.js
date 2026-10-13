@@ -162,28 +162,35 @@ function labelForAnalysis(analysis) {
  *
  * Returns { temp: 'HOT'|'WARM'|'COLD', reason: string }
  */
-function computeLeadTemp(analysis) {
+const LEAD_TEMPERATURE_RULES = Object.freeze({
+    hotScore: 80,
+    warmScore: 50,
+    hotStages: Object.freeze(['qualified', 'proposal', 'negotiation', 'won']),
+    warmStages: Object.freeze(['contacted'])
+});
+
+function computeLeadTemp(analysis, rules = LEAD_TEMPERATURE_RULES) {
     const { interestStatus, interestScore, priority, suggestedStage } = analysis;
-    const hotStages  = new Set(['qualified','proposal','negotiation','won']);
-    const warmStages = new Set(['contacted']);
+    const hotStages  = new Set(rules.hotStages);
+    const warmStages = new Set(rules.warmStages);
 
     if (
         (priority === 'high' && interestStatus === 'interested') ||
-        interestScore >= 80 ||
+        interestScore >= rules.hotScore ||
         hotStages.has(suggestedStage)
     ) {
-        return { temp: 'HOT', reason: `interest_score=${interestScore}, priority=${priority}, stage=${suggestedStage}` };
+        return { temp: 'HOT', reason: `hot rule: score=${interestScore}/${rules.hotScore}, priority=${priority}, stage=${suggestedStage}` };
     }
 
     if (
         (priority === 'medium' && ['interested','neutral'].includes(interestStatus)) ||
-        (interestScore >= 50 && interestScore < 80) ||
+        (interestScore >= rules.warmScore && interestScore < rules.hotScore) ||
         warmStages.has(suggestedStage)
     ) {
-        return { temp: 'WARM', reason: `interest_score=${interestScore}, priority=${priority}, stage=${suggestedStage}` };
+        return { temp: 'WARM', reason: `warm rule: score=${interestScore}/${rules.warmScore}, priority=${priority}, stage=${suggestedStage}` };
     }
 
-    return { temp: 'COLD', reason: `interest_score=${interestScore}, priority=${priority}, interest=${interestStatus}` };
+    return { temp: 'COLD', reason: `cold rule: score=${interestScore}, priority=${priority}, interest=${interestStatus}` };
 }
 
 // ─── Core: analyze one conversation ─────────────────────────
@@ -427,6 +434,8 @@ module.exports = {
     scheduleAutoAnalysis,
     clearPendingAutoAnalyses,
     normalizeAnalysis,
+    computeLeadTemp,
+    LEAD_TEMPERATURE_RULES,
     MAX_CONVERSATIONS_PER_RUN,
     MAX_TRANSCRIPT_MESSAGES
 };

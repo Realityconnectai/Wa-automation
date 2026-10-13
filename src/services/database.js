@@ -1007,7 +1007,8 @@ async function aiUpsertCrmDeal(userId, phone, {
     contactName = '', suggestedStage = 'new', estimatedValue = 0, productInterest = '',
     leadType = null, budgetMin = null, budgetMax = null, preferredBhk = null,
     preferredLocality = null, timeline = null, financingNeeded = null,
-    siteVisitPref = null, interestedProjectId = null
+    siteVisitPref = null, interestedProjectId = null, leadTemp = null,
+    leadTempReason = null
 }) {
     if (!CRM_STAGES.includes(suggestedStage)) suggestedStage = 'new';
     // A bare FK only proves the project exists. This scoped lookup proves it
@@ -1040,6 +1041,7 @@ async function aiUpsertCrmDeal(userId, phone, {
             leadType, budgetMin, budgetMax, preferredBhk, preferredLocality,
             timeline, financingNeeded, siteVisitPref, interestedProjectId
         });
+        await updateAiTemperatureFields(userId, phone, leadTemp, leadTempReason);
         return getCrmDealById(userId, deal.id);
     }
 
@@ -1058,7 +1060,19 @@ async function aiUpsertCrmDeal(userId, phone, {
         leadType, budgetMin, budgetMax, preferredBhk, preferredLocality,
         timeline, financingNeeded, siteVisitPref, interestedProjectId
     });
+    await updateAiTemperatureFields(userId, phone, leadTemp, leadTempReason);
     return getCrmDealByPhone(userId, phone);
+}
+
+async function updateAiTemperatureFields(userId, phone, leadTemp, leadTempReason) {
+    if (!['HOT', 'WARM', 'COLD'].includes(leadTemp)) return;
+    return runSql(
+        `UPDATE crm_deals SET lead_temp = $1,
+            lead_temp_reason = COALESCE($2, lead_temp_reason),
+            updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = $3 AND phone = $4`,
+        [leadTemp, leadTempReason, userId, phone]
+    );
 }
 
 /** Merge extracted details without replacing known values with null/unknown AI output. */
