@@ -86,11 +86,7 @@ async function matchProjects(userId, text) {
     const textLower = text.toLowerCase();
 
     // Named matches
-    const named = projects.filter(p =>
-        (p.name && textLower.includes(p.name.toLowerCase())) ||
-        (p.rera_number && p.rera_number.trim() && textLower.includes(p.rera_number.toLowerCase())) ||
-        (p.listing_url && p.listing_url.trim() && textLower.includes(p.listing_url.toLowerCase()))
-    );
+    const named = projects.filter(p => projectReferences(p).some(ref => textLower.includes(ref)));
     if (named.length === 1) return { matched: named, reason: 'name_match' };
     if (named.length > 1) return { matched: named, reason: 'ambiguous_name' };
 
@@ -102,6 +98,34 @@ async function matchProjects(userId, text) {
 }
 
 /**
+ * Returns the tenant's stored, customer-facing project identifiers.  A portal
+ * listing URL is often shared as its final path segment (for example
+ * "SUN-009"), rather than as the full URL.  Keep this deterministic and
+ * database-backed: it never guesses identifiers from another tenant.
+ */
+function projectReferences(project) {
+    const refs = [project.name, project.rera_number, project.listing_url]
+        .map(v => String(v || '').trim().toLowerCase())
+        .filter(Boolean);
+
+    if (project.listing_url) {
+        try {
+            const url = new URL(project.listing_url);
+            const segment = url.pathname.split('/').filter(Boolean).pop();
+            const listingId = url.searchParams.get('listing_id') || url.searchParams.get('listingId') || url.searchParams.get('id');
+            for (const value of [segment, listingId]) {
+                const ref = String(value || '').trim().toLowerCase();
+                if (ref && ref.length >= 3) refs.push(ref);
+            }
+        } catch (_) {
+            // A tenant may store an opaque portal listing ID instead of a URL.
+        }
+    }
+
+    return [...new Set(refs)];
+}
+
+/**
  * Attempts a brochure drop for an inbound message.
  *
  * Returns:
@@ -109,14 +133,15 @@ async function matchProjects(userId, text) {
  *   { handled: false, reason }                          — message not triggered
  */
 async function tryBrochureDrop(userId, phone, contactName, text, client, msg, inboundReceivedAt) {
-    // 1. Check for trigger
-    const triggered = await hasTrigger(userId, text);
-    if (!triggered) return { handled: false, reason: 'no_trigger' };
-
-    // 2. Find matching project(s)
+    // 1. Match tenant-scoped project references before rejecting a message.
+    // Project names and stored portal/RERA listing identifiers are themselves
+    // valid triggers; generic real-estate keywords still use hasTrigger().
     const { matched, reason } = await matchProjects(userId, text);
+    const triggered = await hasTrigger(userId, text);
+    const hasProjectReference = reason === 'name_match' || reason === 'ambiguous_name';
+    if (!triggered && !hasProjectReference) return { handled: false, reason: 'no_trigger' };
 
-    // 3. Ambiguous — ask clarification, send nothing
+    // 2. Ambiguous — ask clarification, send nothing
     if (matched.length !== 1) {
         const projects = await getProjects(userId, { activeOnly: true });
         let clarification;
@@ -132,7 +157,7 @@ async function tryBrochureDrop(userId, phone, contactName, text, client, msg, in
 
     const project = matched[0];
 
-    // 4. Fetch active assets (brochure first, then walkthrough)
+    // 3. Fetch active assets (brochure first, then walkthrough)
     const assets = await getMediaAssets(userId, project.id, { activeOnly: true });
     const brochures    = assets.filter(a => a.asset_type === 'brochure');
     const walkthroughs = assets.filter(a => a.asset_type === 'walkthrough');

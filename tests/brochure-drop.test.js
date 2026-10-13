@@ -48,7 +48,8 @@ describe('Brochure drop — trigger matching and asset delivery', () => {
 
         projectA = await dbCreateProject(userAId, {
             name: 'Sunrise Towers', city: 'Ranchi',
-            propertyType: 'residential', reraStatus: 'verified', reraNumber: 'JH/001'
+            propertyType: 'residential', reraStatus: 'verified', reraNumber: 'JH/001',
+            listingUrl: 'https://portal.example/listings/SUN-009'
         });
         projectB = await dbCreateProject(userAId, {
             name: 'Green Valley Plots', city: 'Ranchi',
@@ -142,6 +143,32 @@ describe('Brochure drop — trigger matching and asset delivery', () => {
         expect(result.projectName).toBe('Sunrise Towers');
         expect(mediaCalls.length).toBeGreaterThanOrEqual(1);
         mediaCalls.forEach(c => { expect(c.filePath || '').not.toContain('valley'); });
+    });
+
+    test('project-name-only message triggers the matching tenant project', async () => {
+        const mediaCalls = [];
+        jest.mock('../src/services/messaging', () => ({ sendMedia: async (_uid, _phone, opts) => { mediaCalls.push(opts); }, sendText: async () => {} }));
+        const { tryBrochureDrop } = require('../src/services/brochure-drop');
+        const result = await tryBrochureDrop(userAId, '919876543211', 'Buyer', 'Sunrise Towers', null, makeMockMsg('919876543211', ''), Date.now());
+        jest.unmock('../src/services/messaging');
+        expect(result.action).toBe('assets_sent');
+        expect(mediaCalls).not.toHaveLength(0);
+    });
+
+    test('listing-ID-only message triggers the matching tenant project', async () => {
+        const mediaCalls = [];
+        jest.mock('../src/services/messaging', () => ({ sendMedia: async (_uid, _phone, opts) => { mediaCalls.push(opts); }, sendText: async () => {} }));
+        const { tryBrochureDrop } = require('../src/services/brochure-drop');
+        const result = await tryBrochureDrop(userAId, '919876543212', 'Buyer', 'SUN-009', null, makeMockMsg('919876543212', ''), Date.now());
+        jest.unmock('../src/services/messaging');
+        expect(result.action).toBe('assets_sent');
+        expect(mediaCalls).not.toHaveLength(0);
+    });
+
+    test('unrelated text does not trigger a drop when no generic keyword or project reference exists', async () => {
+        const { tryBrochureDrop } = require('../src/services/brochure-drop');
+        const result = await tryBrochureDrop(userAId, '919876543213', 'Buyer', 'What is the weather today?', null, makeMockMsg('919876543213', ''), Date.now());
+        expect(result).toEqual({ handled: false, reason: 'no_trigger' });
     });
 
     // ─── 3. RERA label — only when rera_verified=true ──────────────────
