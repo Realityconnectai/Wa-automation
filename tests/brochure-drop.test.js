@@ -244,13 +244,15 @@ describe('Brochure drop — trigger matching and asset delivery', () => {
         await tryBrochureDrop(userBId, '919876500005', 'Spy',
             'I want Sunrise Towers brochure', null, makeMockMsg('919876500005', ''), Date.now());
         jest.unmock('../src/services/messaging');
+        expect(mediaCalls).toHaveLength(0);
         mediaCalls.forEach(uid => expect(uid).toBe(userBId));
     });
 
     // ─── 7. Prompt injection cannot trigger wrong project's assets ──────
     test('prompt injection in customer message does not crash or send wrong data', async () => {
+        const mediaCalls = [];
         jest.mock('../src/services/messaging', () => ({
-            sendMedia: async () => ({}),
+            sendMedia: async (_uid, _phone, opts) => { mediaCalls.push(opts); return {}; },
             sendText: async () => {}
         }));
         const { tryBrochureDrop } = require('../src/services/brochure-drop');
@@ -258,7 +260,9 @@ describe('Brochure drop — trigger matching and asset delivery', () => {
         const result = await tryBrochureDrop(userAId, '919876500006', 'Attacker',
             injectionMsg, null, makeMockMsg('919876500006', ''), Date.now());
         jest.unmock('../src/services/messaging');
-        // Must not throw; result.handled is acceptable either way
+        // The deterministic matcher can only send assets for the named tenant
+        // project, never an arbitrary asset selected by prompt-injection text.
         expect(typeof result).toBe('object');
+        mediaCalls.forEach(call => expect(call.filePath).toContain('valley'));
     });
 });
