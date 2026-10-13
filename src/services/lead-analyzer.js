@@ -35,7 +35,14 @@ Analyze the ENTIRE conversation and respond with ONLY a valid JSON object (no ma
   "product_interest": "which product(s)/service(s) from the catalog the contact is interested in, matched by name — or '' if none/unknown",
   "estimated_value": estimated potential deal value as a plain number in ${currency || 'the business currency'} (use catalog prices when they match; 0 if unknown or not a sales conversation),
   "suggested_stage": "new" | "contacted" | "qualified" | "proposal" | "negotiation" | "won" | "lost",
-  "is_sales_conversation": true | false (false for personal chats, spam, and anything with no business relevance)
+  "is_sales_conversation": true | false (false for personal chats, spam, and anything with no business relevance),
+  "lead_type": "buy" | "rent" | "invest" | "sell" | "broker" | "" (intent inferred from conversation),
+  "budget_min": minimum budget in numbers only (no currency symbol), or null,
+  "budget_max": maximum budget in numbers only (no currency symbol), or null,
+  "preferred_bhk": e.g. "2BHK" or "3BHK" or "" if not mentioned,
+  "preferred_locality": locality or area mentioned, or "",
+  "timeline": possession/move-in timeline mentioned, e.g. "6 months", "immediately", or "",
+  "financing_needed": "yes" | "no" | "unknown"
 }
 
 Priority guidance:
@@ -96,8 +103,30 @@ function normalizeAnalysis(raw, messageCount, contactName) {
         productInterest: String(raw.product_interest || '').slice(0, 300),
         estimatedValue,
         suggestedStage,
-        isSalesConversation: raw.is_sales_conversation !== false
+        isSalesConversation: raw.is_sales_conversation !== false,
+        // Real estate qualification fields — extracted by the model but validated here
+        leadType:          _reEnum(raw.lead_type,          ['buy','rent','invest','sell','broker']),
+        budgetMin:         _reNumber(raw.budget_min,        0, 1e12),
+        budgetMax:         _reNumber(raw.budget_max,        0, 1e12),
+        preferredBhk:      _reStr(raw.preferred_bhk,        30),
+        preferredLocality: _reStr(raw.preferred_locality,   200),
+        timeline:          _reStr(raw.timeline,             200),
+        financingNeeded:   _reEnum(raw.financing_needed,    ['yes','no','unknown'])
     };
+}
+
+function _reEnum(val, allowed) {
+    const v = String(val || '').toLowerCase().trim();
+    return allowed.includes(v) ? v : '';
+}
+function _reNumber(val, min, max) {
+    const n = parseFloat(val);
+    if (!Number.isFinite(n) || n < min || n > max) return null;
+    return n;
+}
+function _reStr(val, maxLen) {
+    const s = String(val || '').trim().slice(0, maxLen);
+    return s || null;
 }
 
 // ─── Contact auto-labeling ──────────────────────────────────
@@ -110,6 +139,43 @@ function labelForAnalysis(analysis) {
         return 'Needs Support';
     }
     return '';
+}
+
+/**
+ * Computes Hot/Warm/Cold temperature from explicit, coded rules.
+ * Never uses a free-form LLM label — the rules are deterministic and
+ * change only through code review, not prompt tuning.
+ *
+ * HOT  — ready to act: high priority, interested, qualified+ stage,
+ *         or interest score ≥ 80
+ * WARM — engaged but not urgent: medium priority, interested/neutral,
+ *         or interest score 50–79
+ * COLD — low engagement, not interested, or unclear intent
+ *
+ * Returns { temp: 'HOT'|'WARM'|'COLD', reason: string }
+ */
+function computeLeadTemp(analysis) {
+    const { interestStatus, interestScore, priority, suggestedStage } = analysis;
+    const hotStages  = new Set(['qualified','proposal','negotiation','won']);
+    const warmStages = new Set(['contacted']);
+
+    if (
+        (priority === 'high' && interestStatus === 'interested') ||
+        interestScore >= 80 ||
+        hotStages.has(suggestedStage)
+    ) {
+        return { temp: 'HOT', reason: `interest_score=${interestScore}, priority=${priority}, stage=${suggestedStage}` };
+    }
+
+    if (
+        (priority === 'medium' && ['interested','neutral'].includes(interestStatus)) ||
+        (interestScore >= 50 && interestScore < 80) ||
+        warmStages.has(suggestedStage)
+    ) {
+        return { temp: 'WARM', reason: `interest_score=${interestScore}, priority=${priority}, stage=${suggestedStage}` };
+    }
+
+    return { temp: 'COLD', reason: `interest_score=${interestScore}, priority=${priority}, interest=${interestStatus}` };
 }
 
 // ─── Core: analyze one conversation ─────────────────────────
@@ -198,8 +264,12 @@ async function analyzeConversation(userId, phone) {
         console.warn('   ⚠️ Could not auto-label contact:', labelErr.message);
     }
 
+    // Compute deterministic temperature from coded rules
+    const { temp: leadTemp, reason: leadTempReason } = computeLeadTemp(analysis);
+
     // Create/refresh the CRM deal for sales conversations (skips personal chats & spam).
     // Manual stage/value set by the owner in the CRM is never overridden.
+    // RE qualification fields are merged in (never overwriting a known non-empty value with null).
     try {
         const isPersonalOrSpam = /personal chat|spam/i.test(analysis.issueCategory);
         if (analysis.isSalesConversation && !isPersonalOrSpam) {
@@ -207,7 +277,17 @@ async function analyzeConversation(userId, phone) {
                 contactName: analysis.contactName,
                 suggestedStage: analysis.suggestedStage,
                 estimatedValue: analysis.estimatedValue,
-                productInterest: analysis.productInterest
+                productInterest: analysis.productInterest,
+                // RE qualification fields (only set if model extracted them)
+                leadType:          analysis.leadType          || undefined,
+                budgetMin:         analysis.budgetMin         || undefined,
+                budgetMax:         analysis.budgetMax         || undefined,
+                preferredBhk:      analysis.preferredBhk      || undefined,
+                preferredLocality: analysis.preferredLocality || undefined,
+                timeline:          analysis.timeline          || undefined,
+                financingNeeded:   analysis.financingNeeded   || undefined,
+                leadTemp,
+                leadTempReason
             });
         }
     } catch (crmErr) {
