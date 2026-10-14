@@ -116,9 +116,9 @@ function initSignupForm() {
                 const notice = document.getElementById('pendingApprovalNotice');
                 const emailText = document.getElementById('registeredEmailText');
                 if (section && notice) {
-                    section.style.display = 'none';
+                    section.hidden = true;
                     if (emailText) emailText.textContent = email;
-                    notice.style.display = 'block';
+                    notice.hidden = false;
                     if (typeof hydrateIcons === 'function') hydrateIcons(notice);
                     return;
                 }

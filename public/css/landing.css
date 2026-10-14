@@ -1139,3 +1139,12 @@ img, svg { display: block; }
 .toast .icon { width: 17px; height: 17px; }
 .toast.success .icon { color: var(--green-600); }
 .toast.error .icon { color: #C4553D; }
+/* CSP-safe auth utilities */
+.auth-brand-light { color: #fff; }
+.icon-flip { transform: rotate(180deg); }
+.pending-approval-notice { text-align: center; padding: 10px 0 20px; }
+.pending-approval-icon { width: 68px; height: 68px; border-radius: 50%; background: #FEF3C7; color: #D97706; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 18px; }
+.pending-approval-icon-glyph { width: 36px; height: 36px; }
+.pending-approval-title { font-size: 1.6rem; margin-bottom: 8px; }
+.pending-approval-copy { color: var(--text-secondary); line-height: 1.6; margin-bottom: 20px; }
+.pending-approval-email { background: var(--cream-subtle); border: 1px solid var(--border-color); border-radius: 10px; padding: 12px; margin-bottom: 24px; font-size: .9rem; }

@@ -12,7 +12,7 @@
 <div class="auth-shell">
     <div class="auth-visual">
         <div class="auth-visual-inner">
-            <span class="brand" style="color:#fff"><span class="brand-mark"><span data-icon="message-circle" aria-hidden="true"></span></span> WA Automation</span>
+            <span class="brand auth-brand-light"><span class="brand-mark"><span data-icon="message-circle" aria-hidden="true"></span></span> WA Automation</span>
             <h2>Your own AI-powered WhatsApp, ready in minutes.</h2>
             <p>Every account gets its own private dashboard, its own WhatsApp connection, and its own AI — completely separate from every other business on the platform.</p>
             <ul class="auth-points">
@@ -25,7 +25,7 @@
 
     <div class="auth-form-side">
         <div class="auth-card">
-            <a href="/" class="back-home"><span data-icon="chevron-right" style="transform:rotate(180deg)" aria-hidden="true"></span> Back to home</a>
+            <a href="/" class="back-home"><span data-icon="chevron-right" class="icon-flip" aria-hidden="true"></span> Back to home</a>
             <span class="brand"><span class="brand-mark"><span data-icon="message-circle" aria-hidden="true"></span></span> WA Automation</span>
 
             <div id="signupFormSection">
@@ -72,19 +72,19 @@
                 <p class="auth-switch">By signing up you agree this is your own private workspace — your WhatsApp number and data are never shared with other accounts.</p>
             </div>
 
-            <div id="pendingApprovalNotice" style="display:none; text-align:center; padding: 10px 0 20px;">
-                <div style="width:68px; height:68px; border-radius:50%; background:#FEF3C7; color:#D97706; display:inline-flex; align-items:center; justify-content:center; margin-bottom: 18px;">
-                    <span data-icon="clock" style="width:36px; height:36px;" aria-hidden="true"></span>
+            <div id="pendingApprovalNotice" hidden class="pending-approval-notice">
+                <div class="pending-approval-icon">
+                    <span data-icon="clock" class="pending-approval-icon-glyph" aria-hidden="true"></span>
                 </div>
-                <h1 style="font-size:1.6rem; margin-bottom:8px;">Approval Required</h1>
-                <p style="color:var(--text-secondary); line-height:1.6; margin-bottom: 20px;">
+                <h1 class="pending-approval-title">Approval Required</h1>
+                <p class="pending-approval-copy">
                     Your account has been created and submitted to the administrator for approval. You will be able to log in once an admin approves your account.
                 </p>
-                <div style="background:var(--cream-subtle); border:1px solid var(--border-color); border-radius:10px; padding:12px; margin-bottom:24px; font-size:0.9rem;">
+                <div class="pending-approval-email">
                     Account Email: <strong id="registeredEmailText"></strong>
                 </div>
                 <a href="/login" class="btn btn-primary btn-block btn-lg">
-                    <span data-icon="log-out" style="transform:rotate(180deg)" aria-hidden="true"></span> Go to Login
+                    <span data-icon="log-out" class="icon-flip" aria-hidden="true"></span> Go to Login
                 </a>
             </div>
         </div>
