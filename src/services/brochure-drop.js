@@ -21,7 +21,7 @@
  */
 'use strict';
 
-const { getSetting, getProjects, getMediaAssets, logMessage } = require('./database');
+const { getSetting, getProjects, getMediaAssets, logMessage, logBrochureDropEvent } = require('./database');
 // messaging is required lazily at call time so tests can mock it via jest.mock
 // without needing to patch module-scope references.
 function getMessaging() { return require('./messaging'); }
@@ -65,6 +65,19 @@ async function getTriggers(userId) {
 async function hasTrigger(userId, text) {
     const triggers = await getTriggers(userId);
     return triggers.some(re => re.test(text));
+}
+
+async function getSelectedAssetIds(userId, projectId) {
+    try {
+        const raw = await getSetting(userId, 'brochure_asset_selection');
+        if (!raw) return null; // No configuration preserves the safe legacy default.
+        const config = JSON.parse(raw);
+        const selected = config?.[String(projectId)];
+        if (!Array.isArray(selected)) return null;
+        return new Set(selected.map(Number).filter(Number.isInteger));
+    } catch (_) {
+        return null;
+    }
 }
 
 /**
@@ -152,13 +165,16 @@ async function tryBrochureDrop(userId, phone, contactName, text, client, msg, in
             clarification = `Great to hear from you! We have a few projects — which one interests you?\n\n${names}\n\nJust reply with the project name and I'll send the brochure right away! 🏡`;
         }
         await _sendReply(userId, phone, contactName, clarification, client, msg);
+        await logBrochureDropEvent(userId, { phone, contactName, action: 'clarification_sent' });
         return { handled: true, action: 'clarification_sent', reason };
     }
 
     const project = matched[0];
 
     // 3. Fetch active assets (brochure first, then walkthrough)
-    const assets = await getMediaAssets(userId, project.id, { activeOnly: true });
+    let assets = await getMediaAssets(userId, project.id, { activeOnly: true });
+    const selectedAssetIds = await getSelectedAssetIds(userId, project.id);
+    if (selectedAssetIds) assets = assets.filter(asset => selectedAssetIds.has(Number(asset.id)));
     const brochures    = assets.filter(a => a.asset_type === 'brochure');
     const walkthroughs = assets.filter(a => a.asset_type === 'walkthrough');
 
@@ -166,6 +182,7 @@ async function tryBrochureDrop(userId, phone, contactName, text, client, msg, in
         // No assets — graceful reply
         const reply = `Hi${contactName ? ' ' + contactName : ''}! Thanks for your interest in *${project.name}*. 🏡\nOur team will send you detailed brochure shortly. Please stay tuned!`;
         await _sendReply(userId, phone, contactName, reply, client, msg);
+        await logBrochureDropEvent(userId, { projectId: project.id, phone, contactName, action: 'no_assets_reply' });
         return { handled: true, action: 'no_assets_reply', projectName: project.name };
     }
 
@@ -209,9 +226,11 @@ async function tryBrochureDrop(userId, phone, contactName, text, client, msg, in
         }
     }
 
+    const action = sentCount > 0 ? 'assets_sent' : 'assets_failed';
+    await logBrochureDropEvent(userId, { projectId: project.id, phone, contactName, action, assetCount: sentCount });
     return {
         handled: true,
-        action: sentCount > 0 ? 'assets_sent' : 'assets_failed',
+        action,
         projectName: project.name,
         sentCount,
         elapsedMs

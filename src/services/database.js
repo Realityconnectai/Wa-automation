@@ -1774,6 +1774,28 @@ async function getMediaAssetSendHistory(userId, assetId) {
     );
 }
 
+async function logBrochureDropEvent(userId, { projectId = null, phone, contactName = '', action, assetCount = 0 }) {
+    const res = await query(
+        `INSERT INTO brochure_drop_events (user_id, project_id, phone, contact_name, action, asset_count)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+        [userId, projectId, phone, contactName, action, assetCount]
+    );
+    return res.rows[0];
+}
+
+async function getRecentBrochureDropEvents(userId, limit = 50) {
+    return queryAll(
+        `SELECT e.id, e.action, e.asset_count, e.created_at, e.contact_name,
+                RIGHT(e.phone, 4) AS phone_last4, p.name AS project_name
+         FROM brochure_drop_events e
+         LEFT JOIN projects p ON p.id = e.project_id AND p.user_id = e.user_id
+         WHERE e.user_id = $1
+         ORDER BY e.created_at DESC, e.id DESC
+         LIMIT $2`,
+        [userId, limit]
+    );
+}
+
 module.exports = {
     initDatabase,
     closeDatabase,
@@ -1904,5 +1926,7 @@ module.exports = {
     getMediaAssets,
     getMediaAssetById,
     deleteMediaAsset,
-    getMediaAssetSendHistory
+    getMediaAssetSendHistory,
+    logBrochureDropEvent,
+    getRecentBrochureDropEvents
 };

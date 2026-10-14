@@ -165,6 +165,23 @@ describe('Brochure drop — trigger matching and asset delivery', () => {
         expect(mediaCalls).not.toHaveLength(0);
     });
 
+    test('configured asset selection limits a brochure drop and records a tenant-scoped event', async () => {
+        const { getMediaAssets, setSetting, getRecentBrochureDropEvents } = require('../src/services/database');
+        const assets = await getMediaAssets(userAId, projectA.id);
+        const brochure = assets.find(asset => asset.asset_type === 'brochure');
+        await setSetting(userAId, 'brochure_asset_selection', JSON.stringify({ [projectA.id]: [brochure.id] }));
+        const mediaCalls = [];
+        jest.mock('../src/services/messaging', () => ({ sendMedia: async (_uid, _phone, opts) => { mediaCalls.push(opts); return {}; }, sendText: async () => {} }));
+        const { tryBrochureDrop } = require('../src/services/brochure-drop');
+        await tryBrochureDrop(userAId, '919876543214', 'Selected Buyer', 'Sunrise Towers', null, makeMockMsg('919876543214', ''), Date.now());
+        jest.unmock('../src/services/messaging');
+        expect(mediaCalls).toHaveLength(1);
+        expect(mediaCalls[0].filePath).toContain('sunrise_brochure');
+        const events = await getRecentBrochureDropEvents(userAId);
+        expect(events[0]).toMatchObject({ action: 'assets_sent', project_name: 'Sunrise Towers', phone_last4: '3214', asset_count: 1 });
+        expect(await getRecentBrochureDropEvents(userBId)).toHaveLength(0);
+    });
+
     test('unrelated text does not trigger a drop when no generic keyword or project reference exists', async () => {
         const { tryBrochureDrop } = require('../src/services/brochure-drop');
         const result = await tryBrochureDrop(userAId, '919876543213', 'Buyer', 'What is the weather today?', null, makeMockMsg('919876543213', ''), Date.now());

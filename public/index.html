@@ -832,6 +832,8 @@
                     aria-controls="inv-panel-projects" data-inventory-tab="projects" type="button">Projects</button>
                 <button class="settings-tab" id="inv-tab-grid" role="tab" aria-selected="false"
                     aria-controls="inv-panel-grid" data-inventory-tab="grid" type="button">Availability Grid</button>
+                <button class="settings-tab" id="inv-tab-brochure" role="tab" aria-selected="false"
+                    aria-controls="inv-panel-brochure" data-inventory-tab="brochure" type="button">Brochure Drops</button>
             </div>
 
             <!-- Projects panel -->
@@ -889,6 +891,12 @@
 
                 <!-- Tower × floor grid -->
                 <div id="invGridContainer" style="overflow-x:auto"></div>
+            </div>
+
+            <div id="inv-panel-brochure" role="tabpanel" aria-labelledby="inv-tab-brochure" style="display:none">
+                <div id="invBrochureLoading" class="empty-state" style="display:none">Loading brochure-drop configuration…</div>
+                <div id="invBrochureError" style="display:none"></div>
+                <div id="invBrochureContent"></div>
             </div>
         </div>
     </section>

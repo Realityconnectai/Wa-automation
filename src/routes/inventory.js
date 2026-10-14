@@ -22,6 +22,7 @@ const {
     createUnit, getUnits, getUnitById, updateUnit, deleteUnit, getUnitStatusHistory, searchUnits,
     transitionUnitStatus, expireStaleHolds,
     createMediaAsset, getMediaAssets, getMediaAssetById, deleteMediaAsset, getMediaAssetSendHistory,
+    getRecentBrochureDropEvents,
     getMonthlyOutgoingCount,
     assertPersistable
 } = require('../services/database');
@@ -356,6 +357,11 @@ router.get('/assets/:id/history', asyncHandler(async (req, res) => {
     const asset = await getMediaAssetById(req.user.id, id);
     if (!asset || !asset.is_active) return res.status(404).json({ success: false, error: 'Asset not found' });
     res.json({ success: true, data: await getMediaAssetSendHistory(req.user.id, id) });
+}));
+
+router.get('/brochure-drops', asyncHandler(async (req, res) => {
+    const limit = clampInt(req.query.limit, { min: 1, max: 100, fallback: 50 });
+    res.json({ success: true, data: await getRecentBrochureDropEvents(req.user.id, limit) });
 }));
 
 // Serve a file — authenticated, tenant-scoped, never from public folder
