@@ -1977,6 +1977,16 @@ h1, h2, h3, h4 { font-family: var(--font-display); letter-spacing: -0.015em; }
 
 iframe.asset-preview-media { min-height: 48vh; }
 
+.conversation-modal { max-width: 760px; }
+.conversation-thread { display: flex; flex-direction: column; gap: 10px; max-height: 52vh; overflow-y: auto; padding: 4px; }
+.conversation-message { max-width: 82%; padding: 10px 12px; border-radius: 14px; background: var(--cream-subtle); border: 1px solid var(--color-border); }
+.conversation-message.outgoing { align-self: flex-end; background: rgba(16, 185, 129, 0.12); }
+.conversation-message.incoming { align-self: flex-start; }
+.conversation-message p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.conversation-meta { display: block; margin-top: 5px; color: var(--color-text-secondary); font-size: .74rem; }
+.conversation-media { margin: 0 0 6px; color: var(--color-text-secondary); font-size: .8rem; }
+@media (max-width: 600px) { .modal.conversation-modal { max-height: 94vh; } .conversation-thread { max-height: 48vh; } .conversation-message { max-width: 94%; } }
+
 .deal-detail-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;

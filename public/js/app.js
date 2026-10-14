@@ -317,6 +317,11 @@ function animateValue(elementId, target) {
 // ═══════════════════════════════════════════════════════════
 //  MESSAGES
 // ═══════════════════════════════════════════════════════════
+function maskConversationPhone(phone) {
+    const digits = String(phone || '').replace(/\D/g, '');
+    return digits ? `••••${digits.slice(-4)}` : 'Unknown contact';
+}
+
 async function loadMessages() {
     clearErrorBanner('messagesError');
     try {
@@ -348,8 +353,8 @@ async function loadMessages() {
             <tr>
                 <td><span class="badge badge-${msg.direction}">${msg.direction === 'incoming' ? Icon('arrow-down-left') + ' In' : Icon('arrow-up-right') + ' Out'}</span></td>
                 <td>
-                    <strong>${escapeHtml(msg.contact_name || msg.phone)}</strong>
-                    ${msg.contact_name ? `<br><small style="color:var(--color-text-secondary)">${escapeHtml(msg.phone)}</small>` : ''}
+                    <button class="btn btn-secondary btn-sm" type="button" data-open-conversation="${escapeHtml(msg.phone)}">${escapeHtml(msg.contact_name || maskConversationPhone(msg.phone))}</button>
+                    ${msg.contact_name ? `<br><small style="color:var(--color-text-secondary)">${maskConversationPhone(msg.phone)}</small>` : ''}
                 </td>
                 <td><span class="msg-truncate">${escapeHtml(msg.body)}</span>${msg.message_type && msg.message_type !== 'text' ? ` <span class="badge badge-incoming">${escapeHtml(msg.message_type)}</span>` : ''}</td>
                 <td><span class="badge badge-${msg.status}">${escapeHtml(msg.status)}</span></td>
@@ -360,6 +365,59 @@ async function loadMessages() {
         showErrorBanner('messagesError', 'Failed to load messages.', loadMessages);
         document.getElementById('messagesBody').innerHTML =
             '<tr><td colspan="5" class="empty-state">Could not load messages.</td></tr>';
+    }
+}
+
+function closeConversationModal() {
+    document.getElementById('conversationModalBackdrop').style.display = 'none';
+}
+
+async function openConversation(phone) {
+    const backdrop = document.getElementById('conversationModalBackdrop');
+    const body = document.getElementById('conversationModalBody');
+    const title = document.getElementById('conversationModalTitle');
+    title.textContent = `Conversation · ${maskConversationPhone(phone)}`;
+    body.innerHTML = '<div class="empty-state">Loading conversation…</div>';
+    backdrop.style.display = 'flex';
+    try {
+        const messages = await api(`/api/messages/conversation/${encodeURIComponent(phone)}?limit=500`);
+        if (!messages.length) {
+            body.innerHTML = '<div class="empty-state"><p>No messages in this conversation yet.</p></div>';
+            return;
+        }
+        const contactName = messages.find(message => message.contact_name)?.contact_name || '';
+        title.textContent = contactName ? `Conversation · ${contactName}` : `Conversation · ${maskConversationPhone(phone)}`;
+        body.innerHTML = `<div class="conversation-thread" aria-live="polite">${messages.map(message => `<article class="conversation-message ${message.direction === 'outgoing' ? 'outgoing' : 'incoming'}"><div class="conversation-media">${message.message_type !== 'text' ? `${escapeHtml(message.message_type)} attachment${message.media_asset_id ? ` <button class="btn btn-secondary btn-sm" type="button" data-message-media="${message.media_asset_id}">Preview</button>` : ' (metadata only)'}` : ''}</div><p>${escapeHtml(message.body || '(no text)')}</p><small class="conversation-meta">${escapeHtml(formatDate(message.created_at))} · ${escapeHtml(message.status || 'unknown')}</small></article>`).join('')}</div><form id="conversationReplyForm" class="form-group" style="margin-top:14px"><label for="conversationReply">Manual reply</label><textarea id="conversationReply" rows="3" maxlength="4000" required placeholder="Write a reply…"></textarea><div class="modal-actions"><button class="btn btn-primary" type="submit">Send reply</button><button class="btn btn-secondary" type="button" id="conversationCloseBtn">Close</button></div></form>`;
+        body.querySelector('#conversationCloseBtn').addEventListener('click', closeConversationModal);
+        body.querySelectorAll('[data-message-media]').forEach(button => button.addEventListener('click', async () => {
+            button.disabled = true;
+            try {
+                const response = await fetch(`/api/inventory/assets/${button.dataset.messageMedia}/file`, { credentials: 'include', headers: CURRENT_ACCESS_TOKEN ? { Authorization: `Bearer ${CURRENT_ACCESS_TOKEN}` } : {} });
+                if (!response.ok) throw new Error('Media is unavailable');
+                const objectUrl = URL.createObjectURL(await response.blob());
+                window.open(objectUrl, '_blank', 'noopener');
+                setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+            } catch (err) { showToast(err.message || 'Could not preview media', 'error'); }
+            finally { button.disabled = false; }
+        }));
+        body.querySelector('#conversationReplyForm').addEventListener('submit', async event => {
+            event.preventDefault();
+            const input = body.querySelector('#conversationReply');
+            const button = event.target.querySelector('[type="submit"]');
+            const text = input.value.trim();
+            if (!text) return;
+            button.disabled = true;
+            try {
+                const idempotencyKey = window.crypto?.randomUUID?.() || `reply-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                await api('/api/messages/send', { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ phone, body: text }) });
+                showToast('Reply sent', 'success');
+                await openConversation(phone); loadMessages();
+            } catch (err) { showToast(err.message || 'Could not send reply', 'error'); }
+            finally { button.disabled = false; }
+        });
+    } catch (err) {
+        body.innerHTML = `<div class="error-banner" role="alert"><span>${escapeHtml(`Could not load conversation: ${err.message}`)}</span><button class="error-retry" type="button" id="conversationRetryBtn">Retry</button></div>`;
+        body.querySelector('#conversationRetryBtn').addEventListener('click', () => openConversation(phone));
     }
 }
 
@@ -2384,6 +2442,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         messageSearchTimeout = setTimeout(loadMessages, 300);
     });
     document.getElementById('messageFilter').addEventListener('change', loadMessages);
+    document.getElementById('messagesBody').addEventListener('click', (event) => {
+        const button = event.target.closest('[data-open-conversation]');
+        if (button) openConversation(button.dataset.openConversation);
+    });
+    document.getElementById('conversationModalClose').addEventListener('click', closeConversationModal);
+    document.getElementById('conversationModalBackdrop').addEventListener('click', (event) => {
+        if (event.target.id === 'conversationModalBackdrop') closeConversationModal();
+    });
 
     // ── Global (topbar) search — jumps to Contacts and filters there,
     // since that's the most common "find someone" lookup. Also mirrors

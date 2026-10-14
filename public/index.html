@@ -1300,6 +1300,17 @@
 <!-- ── Screen-reader only utility ── -->
 <style>.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}</style>
 
+<!-- ── Conversation Detail Modal ── -->
+<div class="modal-backdrop" id="conversationModalBackdrop" style="display:none" role="dialog" aria-modal="true" aria-labelledby="conversationModalTitle">
+    <div class="modal conversation-modal">
+        <div class="modal-header">
+            <h2 id="conversationModalTitle">Conversation</h2>
+            <button class="modal-close" id="conversationModalClose" aria-label="Close" type="button">×</button>
+        </div>
+        <div class="modal-body" id="conversationModalBody"></div>
+    </div>
+</div>
+
 <!-- ── Deal Detail Modal ── -->
 <div class="modal-backdrop" id="dealModalBackdrop" style="display:none" role="dialog" aria-modal="true" aria-labelledby="dealModalTitle">
     <div class="modal" id="dealModal">
