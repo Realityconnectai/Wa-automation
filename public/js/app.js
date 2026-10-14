@@ -384,11 +384,13 @@ async function loadLeads() {
     try {
         const interest = document.getElementById('leadInterestFilter')?.value || '';
         const priority = document.getElementById('leadPriorityFilter')?.value || '';
+        const temperature = document.getElementById('leadTemperatureFilter')?.value || '';
 
         let endpoint = '/api/leads';
         const params = [];
         if (interest) params.push(`interest=${encodeURIComponent(interest)}`);
         if (priority) params.push(`priority=${encodeURIComponent(priority)}`);
+        if (temperature) params.push(`temperature=${encodeURIComponent(temperature)}`);
         if (params.length) endpoint += `?${params.join('&')}`;
 
         const { leads, stats, pending } = await api(endpoint);
@@ -456,6 +458,7 @@ function renderLeadCard(lead) {
                 <div class="lead-badges">
                     <span class="lead-badge ${interest.cls}">${interest.label()}</span>
                     <span class="lead-badge ${priority.cls}">${priority.label()}</span>
+                    ${lead.crm_lead_temp ? `<span class="lead-badge lead-temp-${escapeHtml(lead.crm_lead_temp.toLowerCase())}">${escapeHtml(lead.crm_lead_temp)}</span>` : ''}
                     <span class="lead-badge lead-badge-score" title="Interest score">${lead.interest_score}/100</span>
                 </div>
             </div>
@@ -760,8 +763,10 @@ function renderCrmCharts(a) {
 async function loadCrm() {
     clearErrorBanner('crmError');
     try {
+        const temperature = document.getElementById('crmTemperatureFilter')?.value || '';
+        const endpoint = temperature ? `/api/crm/deals?temperature=${encodeURIComponent(temperature)}` : '/api/crm/deals';
         const [{ deals, stats, stages, currency }, analytics] = await Promise.all([
-            api('/api/crm/deals'),
+            api(endpoint),
             api('/api/crm/analytics').catch(() => null)
         ]);
         crmCurrency = currency || '₹';
@@ -816,8 +821,7 @@ function renderDealCard(deal) {
         : '';
 
     return `
-        <div class="deal-card" onclick="openDealModal(${jsAttr(deal.phone)})" role="button" tabindex="0"
-             onkeydown="if(event.key==='Enter')openDealModal(${jsAttr(deal.phone)})">
+        <button class="deal-card" type="button" data-open-deal="${escapeHtml(deal.phone)}">
             <div class="deal-card-top">
                 <strong>${escapeHtml(deal.contact_name || deal.phone)}</strong>
                 ${deal.deal_value ? `<span class="deal-value">${fmtMoney(deal.deal_value)}</span>` : ''}
@@ -825,10 +829,11 @@ function renderDealCard(deal) {
             ${deal.product_interest ? `<div class="deal-product">${Icon('package', 'icon-inline')}${escapeHtml(deal.product_interest)}</div>` : ''}
             <div class="deal-card-badges">
                 ${priorityBadge}
+                ${deal.lead_temp ? `<span class="lead-badge lead-temp-${escapeHtml(deal.lead_temp.toLowerCase())}">${escapeHtml(deal.lead_temp)}</span>` : ''}
                 ${deal.interest_score ? `<span class="lead-badge lead-badge-score">${deal.interest_score}/100</span>` : ''}
                 ${followupDue ? `<span class="lead-badge lead-priority-high">${Icon('clock')} Follow up!</span>` : ''}
             </div>
-        </div>`;
+        </button>`;
 }
 
 // ─── Deal detail modal ──────────────────────────────────────
@@ -844,7 +849,10 @@ async function openDealModal(phone) {
     body.innerHTML = '<div class="empty-state">Loading deal…</div>';
 
     try {
-        const { deal, analysis, activities } = await api(`/api/crm/deals/phone/${encodeURIComponent(phone)}`);
+        const [{ deal, analysis, activities }, projects] = await Promise.all([
+            api(`/api/crm/deals/phone/${encodeURIComponent(phone)}`),
+            api('/api/inventory/projects')
+        ]);
         title.textContent = deal.contact_name || deal.phone;
 
         const followupVal = deal.next_followup_at ? deal.next_followup_at.replace(' ', 'T').slice(0, 16) : '';
@@ -881,9 +889,25 @@ async function openDealModal(phone) {
                 <textarea id="modalDealNotes" rows="2">${escapeHtml(deal.notes || '')}</textarea>
             </div>
 
+            <div class="modal-section">
+                <h3>${Icon('target', 'icon-inline')}Qualification</h3>
+                <div class="deal-detail-grid">
+                    <div class="form-group"><label for="modalLeadType">Intent</label><select id="modalLeadType"><option value="">Not set</option>${['buy','rent','invest'].map(v => `<option value="${v}" ${deal.lead_type === v ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+                    <div class="form-group"><label for="modalPreferredBhk">BHK / type</label><input id="modalPreferredBhk" value="${escapeHtml(deal.preferred_bhk || '')}"></div>
+                    <div class="form-group"><label for="modalBudgetMin">Minimum budget</label><input id="modalBudgetMin" type="number" min="0" value="${escapeHtml(deal.budget_min ?? '')}"></div>
+                    <div class="form-group"><label for="modalBudgetMax">Maximum budget</label><input id="modalBudgetMax" type="number" min="0" value="${escapeHtml(deal.budget_max ?? '')}"></div>
+                    <div class="form-group"><label for="modalLocality">Preferred locality</label><input id="modalLocality" value="${escapeHtml(deal.preferred_locality || '')}"></div>
+                    <div class="form-group"><label for="modalTimeline">Timeline</label><input id="modalTimeline" value="${escapeHtml(deal.timeline || '')}"></div>
+                    <div class="form-group"><label for="modalFinancing">Financing needed</label><select id="modalFinancing"><option value="">Not set</option>${['yes','no','unknown'].map(v => `<option value="${v}" ${deal.financing_needed === v ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+                    <div class="form-group"><label for="modalVisitPref">Site-visit preference</label><input id="modalVisitPref" value="${escapeHtml(deal.site_visit_pref || '')}"></div>
+                    <div class="form-group"><label for="modalProject">Interested project</label><select id="modalProject"><option value="">Not set</option>${projects.map(p => `<option value="${p.id}" ${Number(deal.interested_project_id) === Number(p.id) ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}</select></div>
+                    <div class="form-group"><label>Temperature</label><p class="form-text"><span class="lead-badge lead-temp-${escapeHtml((deal.lead_temp || 'COLD').toLowerCase())}">${escapeHtml(deal.lead_temp || 'COLD')}</span> ${escapeHtml(deal.lead_temp_reason || 'Set by deterministic analysis rules.')}</p></div>
+                </div>
+            </div>
+
             <div class="modal-actions">
-                <button class="btn btn-primary btn-sm" onclick="saveDealFromModal(${deal.id})" type="button">${Icon('save', 'icon-inline')}Save Changes</button>
-                <button class="btn btn-danger btn-sm" onclick="deleteDealFromModal(${deal.id})" type="button">${Icon('trash-2', 'icon-inline')}Delete Deal</button>
+                <button class="btn btn-primary btn-sm" data-deal-action="save" data-deal-id="${deal.id}" type="button">${Icon('save', 'icon-inline')}Save Changes</button>
+                <button class="btn btn-danger btn-sm" data-deal-action="delete" data-deal-id="${deal.id}" type="button">${Icon('trash-2', 'icon-inline')}Delete Deal</button>
                 <small style="color:var(--color-text-secondary)">${escapeHtml(deal.phone)} · Source: ${escapeHtml(deal.source || 'whatsapp')}</small>
             </div>
 
@@ -902,7 +926,7 @@ async function openDealModal(phone) {
                 <h3>${Icon('sticky-note', 'icon-inline')}Activity & Notes</h3>
                 <div class="note-form">
                     <input type="text" id="modalNewNote" placeholder="Add a note… (e.g. called them, sent quote)">
-                    <button class="btn btn-secondary btn-sm" onclick="addNoteFromModal()" type="button">Add</button>
+                    <button class="btn btn-secondary btn-sm" data-deal-action="note" type="button">Add</button>
                 </div>
                 <div class="activity-timeline" id="modalActivities">
                     ${activities.length ? activities.map(renderActivity).join('') : '<p style="color:var(--color-text-secondary);font-size:0.85rem">No activity yet.</p>'}
@@ -941,6 +965,15 @@ async function saveDealFromModal(dealId) {
                 next_followup_at: document.getElementById('modalDealFollowup').value
                                     ? document.getElementById('modalDealFollowup').value.replace('T', ' ') : null,
                 notes:            document.getElementById('modalDealNotes').value
+                ,lead_type:       document.getElementById('modalLeadType').value || null
+                ,budget_min:      document.getElementById('modalBudgetMin').value || null
+                ,budget_max:      document.getElementById('modalBudgetMax').value || null
+                ,preferred_bhk:   document.getElementById('modalPreferredBhk').value
+                ,preferred_locality: document.getElementById('modalLocality').value
+                ,timeline:        document.getElementById('modalTimeline').value
+                ,financing_needed: document.getElementById('modalFinancing').value || null
+                ,site_visit_pref: document.getElementById('modalVisitPref').value
+                ,interested_project_id: document.getElementById('modalProject').value || null
             })
         });
         showToast('Deal updated', 'success');
@@ -2373,12 +2406,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('analyzeAllBtn')?.addEventListener('click', analyzeAllLeads);
     document.getElementById('leadInterestFilter')?.addEventListener('change', loadLeads);
     document.getElementById('leadPriorityFilter')?.addEventListener('change', loadLeads);
+    document.getElementById('leadTemperatureFilter')?.addEventListener('change', loadLeads);
 
     // ── CRM controls ────────────────────────────────────────
     document.getElementById('addDealBtn')?.addEventListener('click', () => {
         const card = document.getElementById('addDealCard');
         card.style.display = card.style.display === 'none' ? '' : 'none';
     });
+    document.getElementById('crmTemperatureFilter')?.addEventListener('change', loadCrm);
 
     document.getElementById('addDealForm')?.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -2413,6 +2448,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (e.key === 'Escape') closeDealModal();
     });
     document.getElementById('dealModal')?.addEventListener('click', (e) => e.stopPropagation());
+    document.addEventListener('click', (event) => {
+        const dealCard = event.target.closest('[data-open-deal]');
+        if (dealCard) return openDealModal(dealCard.dataset.openDeal);
+        const action = event.target.closest('[data-deal-action]');
+        if (!action) return;
+        if (action.dataset.dealAction === 'save') return saveDealFromModal(action.dataset.dealId);
+        if (action.dataset.dealAction === 'delete') return deleteDealFromModal(action.dataset.dealId);
+        if (action.dataset.dealAction === 'note') return addNoteFromModal();
+    });
 
     // ── Business Setup controls ─────────────────────────────
     document.getElementById('businessForm')?.addEventListener('submit', async (e) => {

@@ -361,6 +361,10 @@
                         <option value="medium">Medium</option>
                         <option value="low">Low</option>
                     </select>
+                    <select id="leadTemperatureFilter" aria-label="Filter by lead temperature">
+                        <option value="">All temperatures</option>
+                        <option value="HOT">Hot</option><option value="WARM">Warm</option><option value="COLD">Cold</option>
+                    </select>
                 </div>
                 <div class="topbar-spacer"></div>
                 <button class="btn btn-primary" id="analyzeAllBtn" type="button">
@@ -448,6 +452,10 @@
             <div class="toolbar">
                 <div class="filter-group">
                     <button class="btn btn-secondary btn-sm" id="addDealBtn" type="button"><span class="btn-icon" data-icon="plus" aria-hidden="true"></span> Add Deal</button>
+                    <select id="crmTemperatureFilter" aria-label="Filter deals by lead temperature">
+                        <option value="">All temperatures</option>
+                        <option value="HOT">Hot</option><option value="WARM">Warm</option><option value="COLD">Cold</option>
+                    </select>
                 </div>
                 <div class="topbar-spacer"></div>
                 <small style="color:var(--color-text-secondary)">Deals are auto-created when the AI analyzes a sales chat. Personal chats are skipped.</small>

@@ -992,7 +992,7 @@ async function deleteProduct(userId, id) {
 
 const CRM_STAGES = ['new', 'contacted', 'qualified', 'proposal', 'negotiation', 'won', 'lost'];
 
-async function getCrmDeals(userId, { stage = '' } = {}) {
+async function getCrmDeals(userId, { stage = '', leadTemp = '' } = {}) {
     let sql = `
         SELECT cd.*,
                la.interest_status, la.interest_score, la.priority, la.summary,
@@ -1001,10 +1001,9 @@ async function getCrmDeals(userId, { stage = '' } = {}) {
         LEFT JOIN lead_analysis la ON la.phone = cd.phone AND la.user_id = cd.user_id
         WHERE cd.user_id = $1`;
     const params = [userId];
-    if (stage) {
-        sql += ' AND cd.stage = $2';
-        params.push(stage);
-    }
+    let idx = 2;
+    if (stage) { sql += ` AND cd.stage = $${idx++}`; params.push(stage); }
+    if (leadTemp) { sql += ` AND cd.lead_temp = $${idx++}`; params.push(leadTemp); }
     sql += ' ORDER BY cd.deal_value DESC, cd.updated_at DESC';
     return queryAll(sql, params);
 }
@@ -1029,11 +1028,16 @@ async function createCrmDeal(userId, { phone, contactName = '', stage = 'new', d
 }
 
 async function updateCrmDeal(userId, id, fields) {
-    const allowed = ['contact_name', 'stage', 'deal_value', 'product_interest', 'notes', 'next_followup_at'];
+    const allowed = ['contact_name', 'stage', 'deal_value', 'product_interest', 'notes', 'next_followup_at',
+        'lead_type', 'budget_min', 'budget_max', 'preferred_bhk', 'preferred_locality', 'timeline',
+        'financing_needed', 'site_visit_pref', 'interested_project_id'];
     const sets = [];
     const params = [];
     let idx = 1;
 
+    if (fields.interested_project_id != null && !(await getProjectById(userId, fields.interested_project_id))) {
+        const err = new Error('Selected project was not found'); err.code = 'PROJECT_NOT_FOUND'; throw err;
+    }
     for (const [key, value] of Object.entries(fields)) {
         if (!allowed.includes(key)) continue;
         if (key === 'stage') {
@@ -1243,12 +1247,12 @@ async function getLeadAnalysis(userId, phone) {
     return queryGet('SELECT * FROM lead_analysis WHERE user_id = $1 AND phone = $2', [userId, phone]);
 }
 
-async function getLeadAnalyses(userId, { interestStatus = '', priority = '' } = {}) {
+async function getLeadAnalyses(userId, { interestStatus = '', priority = '', leadTemp = '' } = {}) {
     let sql = `
         SELECT la.*,
                cd.stage as crm_stage,
                cd.deal_value as crm_value,
-               cd.product_interest as crm_product
+               cd.product_interest as crm_product, cd.lead_temp as crm_lead_temp
         FROM lead_analysis la
         LEFT JOIN crm_deals cd ON cd.phone = la.phone AND cd.user_id = la.user_id
         WHERE la.user_id = $1`;
@@ -1262,6 +1266,10 @@ async function getLeadAnalyses(userId, { interestStatus = '', priority = '' } = 
     if (priority) {
         sql += ` AND la.priority = $${idx++}`;
         params.push(priority);
+    }
+    if (leadTemp) {
+        sql += ` AND cd.lead_temp = $${idx++}`;
+        params.push(leadTemp);
     }
     sql += ` ORDER BY
         CASE la.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,

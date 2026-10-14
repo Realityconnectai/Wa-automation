@@ -664,8 +664,9 @@ router.get('/leads', asyncHandler(async (req, res) => {
     const uid = req.user.id;
     const interest = optionalEnum(req.query.interest, ['interested', 'not_interested', 'neutral', 'unclear'], 'interest');
     const priority = optionalEnum(req.query.priority, ['high', 'medium', 'low'], 'priority');
+    const leadTemp = optionalEnum(req.query.temperature, ['HOT', 'WARM', 'COLD'], 'temperature');
 
-    const leads = await getLeadAnalyses(uid, { interestStatus: interest || '', priority: priority || '' });
+    const leads = await getLeadAnalyses(uid, { interestStatus: interest || '', priority: priority || '', leadTemp: leadTemp || '' });
     const stats = await getLeadStats(uid);
     // Conversations that exist but haven't been analyzed yet (or have new messages)
     const phones = await getConversationPhones(uid);
@@ -823,7 +824,8 @@ router.get('/business', asyncHandler(async (req, res) => {
 router.get('/crm/deals', asyncHandler(async (req, res) => {
     const uid = req.user.id;
     const stage = optionalEnum(req.query.stage, CRM_STAGES, 'stage');
-    const deals = await getCrmDeals(uid, { stage: stage || '' });
+    const leadTemp = optionalEnum(req.query.temperature, ['HOT', 'WARM', 'COLD'], 'temperature');
+    const deals = await getCrmDeals(uid, { stage: stage || '', leadTemp: leadTemp || '' });
     const stats = await getCrmStats(uid);
     const currency = (await getSetting(uid, 'business_currency')) || '₹';
     res.json({ success: true, data: { deals, stats, stages: CRM_STAGES, currency } });
@@ -887,6 +889,15 @@ router.put('/crm/deals/:id', writeLimiter, requireDurableWrite, asyncHandler(asy
     if (body.next_followup_at !== undefined) {
         fields.next_followup_at = body.next_followup_at ? toSqliteUtc(body.next_followup_at, 'next_followup_at') : null;
     }
+    if (body.lead_type !== undefined) fields.lead_type = requireEnum(body.lead_type, ['buy', 'rent', 'invest'], 'lead_type');
+    if (body.budget_min !== undefined) fields.budget_min = body.budget_min === null || body.budget_min === '' ? null : clampNumber(body.budget_min, { min: 0, max: 1e12 });
+    if (body.budget_max !== undefined) fields.budget_max = body.budget_max === null || body.budget_max === '' ? null : clampNumber(body.budget_max, { min: 0, max: 1e12 });
+    if (body.preferred_bhk !== undefined) fields.preferred_bhk = optionalString(body.preferred_bhk, 'preferred_bhk', 30);
+    if (body.preferred_locality !== undefined) fields.preferred_locality = optionalString(body.preferred_locality, 'preferred_locality', 200);
+    if (body.timeline !== undefined) fields.timeline = optionalString(body.timeline, 'timeline', 200);
+    if (body.financing_needed !== undefined) fields.financing_needed = requireEnum(body.financing_needed, ['yes', 'no', 'unknown'], 'financing_needed');
+    if (body.site_visit_pref !== undefined) fields.site_visit_pref = optionalString(body.site_visit_pref, 'site_visit_pref', 200);
+    if (body.interested_project_id !== undefined) fields.interested_project_id = body.interested_project_id === null || body.interested_project_id === '' ? null : requireId(body.interested_project_id, 'interested_project_id');
 
     const updated = await updateCrmDeal(uid, id, fields);
 

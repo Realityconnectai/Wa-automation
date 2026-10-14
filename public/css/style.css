@@ -1646,6 +1646,9 @@ h1, h2, h3, h4 { font-family: var(--font-display); letter-spacing: -0.015em; }
 .lead-priority-high   { background: rgba(196, 85, 61, 0.13);   color: #A93F2B; }
 .lead-priority-medium { background: rgba(192, 138, 45, 0.15);  color: #96691C; }
 .lead-priority-low    { background: var(--cream-subtle);       color: var(--color-text-secondary); }
+.lead-temp-hot        { background: rgba(196, 85, 61, 0.14);  color: #A93F2B; }
+.lead-temp-warm       { background: rgba(192, 138, 45, 0.16); color: #96691C; }
+.lead-temp-cold       { background: var(--cream-subtle);      color: var(--color-text-secondary); }
 
 .lead-summary {
     font-size: 0.88rem;
@@ -1773,6 +1776,9 @@ h1, h2, h3, h4 { font-family: var(--font-display); letter-spacing: -0.015em; }
     border-radius: var(--radius-md);
     padding: 11px;
     cursor: pointer;
+    width: 100%;
+    text-align: left;
+    font: inherit;
     transition: box-shadow 0.2s var(--ease), transform 0.2s var(--ease), border-color 0.2s var(--ease);
 }
 

@@ -70,6 +70,27 @@ describe('Real-estate qualification', () => {
         expect(deal.interested_project_id).toBe(projectA.id);
     });
 
+    test('manual qualification update is tenant-scoped and temperature remains deterministic', async () => {
+        await freshDatabase();
+        const db = require('../src/services/database');
+        const tenantA = await createUserDirect();
+        const tenantB = await createUserDirect();
+        const projectA = await db.createProject(tenantA.user.id, { name: 'A Project' });
+        const projectB = await db.createProject(tenantB.user.id, { name: 'B Project' });
+        const deal = await db.createCrmDeal(tenantA.user.id, { phone: '919800000003', contactName: 'Buyer' });
+        await db.updateCrmDeal(tenantA.user.id, deal.id, {
+            lead_type: 'buy', budget_min: 100, budget_max: 200, preferred_bhk: '2BHK',
+            preferred_locality: 'Ranchi', timeline: 'soon', financing_needed: 'yes',
+            site_visit_pref: 'Sunday', interested_project_id: projectA.id
+        });
+        const updated = await db.getCrmDealById(tenantA.user.id, deal.id);
+        expect(updated).toMatchObject({ lead_type: 'buy', preferred_bhk: '2BHK', interested_project_id: projectA.id });
+        expect(updated.lead_temp).toBe('COLD');
+        await expect(db.updateCrmDeal(tenantA.user.id, deal.id, { interested_project_id: projectB.id }))
+            .rejects.toMatchObject({ code: 'PROJECT_NOT_FOUND' });
+        expect(await db.getCrmDeals(tenantA.user.id, { leadTemp: 'COLD' })).toHaveLength(1);
+    });
+
     test('reply context includes only the current tenant’s active vacant inventory', async () => {
         await freshDatabase();
         const db = require('../src/services/database');
