@@ -352,6 +352,21 @@ async function initWhatsAppClient(userId) {
         throw new Error('initWhatsAppClient requires a positive integer userId');
     }
 
+    // E2E/database tests must never create a browser-backed WhatsApp client,
+    // including for administrators (whose production role normally bypasses
+    // the per-account wa_enabled switch). This is deliberately in the
+    // initialization path so every caller is protected, not just the harness.
+    if (process.env.NODE_ENV === 'test' && process.env.ALLOW_DESTRUCTIVE_TESTING === 'true') {
+        try {
+            require('../utils/test-db-guard').validateTestDatabaseTarget({ requireDestructiveOptIn: true });
+            console.warn(`⚠️ [user ${userId}] WhatsApp client initialization disabled for guarded test database.`);
+            return { accepted: false, reason: 'WhatsApp client initialization is disabled for guarded tests.' };
+        } catch (_) {
+            // A test process without an approved disposable database retains
+            // ordinary mocked-client behavior; it is not an E2E DB run.
+        }
+    }
+
     try {
         const { getUserById } = require('./database');
         const user = await getUserById(userId);
