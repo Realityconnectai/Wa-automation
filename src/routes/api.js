@@ -32,6 +32,7 @@ const {
     requireId, requireEnum, optionalEnum, toSqliteUtc,
     assertSafeRegexSource, sanitizeSpreadsheetCell, validateSettingsPatch
 } = require('../utils/validate');
+const { maskEntityPhones, resolvePhoneForTenant } = require('../utils/phone-mask');
 
 // One request importing tens of thousands of rows would block the whole
 // (single-threaded) server for everyone else while it parses and writes —
@@ -149,7 +150,7 @@ router.get('/dashboard/stats', asyncHandler(async (req, res) => {
     stats.messageLimit = req.user.message_limit;
     stats.messagesThisMonth = await getMonthlyOutgoingCount(uid);
 
-    res.json({ success: true, data: stats });
+    res.json({ success: true, data: maskEntityPhones(stats, req.user) });
 }));
 
 router.get('/status', (req, res) => {
@@ -205,7 +206,7 @@ router.get('/contacts', asyncHandler(async (req, res) => {
     const contacts = await getContacts(req.user.id, search, label, { limit, offset });
     res.json({
         success: true,
-        data: contacts,
+        data: maskEntityPhones(contacts, req.user),
         meta: { limit, offset, total: await countContacts(req.user.id) }
     });
 }));
@@ -345,16 +346,17 @@ router.get('/messages', asyncHandler(async (req, res) => {
     const messages = await getMessages(req.user.id, { phone, direction, limit, offset });
     res.json({
         success: true,
-        data: messages,
+        data: maskEntityPhones(messages, req.user),
         meta: { limit, offset, total: await countMessages(req.user.id, { phone, direction }) }
     });
 }));
 
 router.get('/messages/conversation/:phone', asyncHandler(async (req, res) => {
-    const phone = normalizePhone(req.params.phone);
+    // resolvePhoneForTenant handles masked phone URL params for non-admin roles
+    const phone = await resolvePhoneForTenant(req.user.id, req.params.phone);
     const limit = clampInt(req.query.limit, { min: 1, max: 2000, fallback: 500 });
     const messages = await getConversation(req.user.id, phone, { limit });
-    res.json({ success: true, data: messages });
+    res.json({ success: true, data: maskEntityPhones(messages, req.user) });
 }));
 
 // Danger Zone → Clear Message History: permanently deletes this account's own message log.
@@ -676,22 +678,25 @@ router.get('/leads', asyncHandler(async (req, res) => {
         return !existing || existing.message_count < p.message_count;
     }).map(p => ({ phone: p.phone, contact_name: p.contact_name, message_count: p.message_count }));
 
-    res.json({ success: true, data: { leads, stats, pending } });
+    res.json({
+        success: true,
+        data: maskEntityPhones({ leads, stats, pending }, req.user)
+    });
 }));
 
 // Get one lead's analysis
 router.get('/leads/:phone', asyncHandler(async (req, res) => {
-    const phone = normalizePhone(req.params.phone);
+    const phone = await resolvePhoneForTenant(req.user.id, req.params.phone);
     const lead = await getLeadAnalysis(req.user.id, phone);
     if (!lead) return res.status(404).json({ success: false, error: 'No analysis found for this contact yet.' });
-    res.json({ success: true, data: lead });
+    res.json({ success: true, data: maskEntityPhones(lead, req.user) });
 }));
 
 // Analyze (or re-analyze) one conversation now
 router.post('/leads/analyze/:phone', aiLimiter, withAiSlot(async (req, res) => {
-    const phone = normalizePhone(req.params.phone);
+    const phone = await resolvePhoneForTenant(req.user.id, req.params.phone);
     const lead = await analyzeConversation(req.user.id, phone);
-    res.json({ success: true, data: lead });
+    res.json({ success: true, data: maskEntityPhones(lead, req.user) });
 }));
 
 // Analyze all conversations (skips up-to-date ones unless ?force=true)
@@ -828,7 +833,10 @@ router.get('/crm/deals', asyncHandler(async (req, res) => {
     const deals = await getCrmDeals(uid, { stage: stage || '', leadTemp: leadTemp || '' });
     const stats = await getCrmStats(uid);
     const currency = (await getSetting(uid, 'business_currency')) || '₹';
-    res.json({ success: true, data: { deals, stats, stages: CRM_STAGES, currency } });
+    res.json({
+        success: true,
+        data: maskEntityPhones({ deals, stats, stages: CRM_STAGES, currency }, req.user)
+    });
 }));
 
 router.get('/crm/analytics', asyncHandler(async (req, res) => {
@@ -918,12 +926,15 @@ router.delete('/crm/deals/:id', writeLimiter, asyncHandler(async (req, res) => {
 // One deal with its lead analysis + activity timeline (for the detail view)
 router.get('/crm/deals/phone/:phone', asyncHandler(async (req, res) => {
     const uid = req.user.id;
-    const phone = normalizePhone(req.params.phone);
+    const phone = await resolvePhoneForTenant(uid, req.params.phone);
     const deal = await getCrmDealByPhone(uid, phone);
     if (!deal) return res.status(404).json({ success: false, error: 'Deal not found' });
     const analysis = (await getLeadAnalysis(uid, phone)) || null;
     const activities = await getCrmActivities(uid, phone);
-    res.json({ success: true, data: { deal, analysis, activities } });
+    res.json({
+        success: true,
+        data: maskEntityPhones({ deal, analysis, activities }, req.user)
+    });
 }));
 
 router.post('/crm/deals/phone/:phone/notes', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
