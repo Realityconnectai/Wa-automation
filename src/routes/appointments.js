@@ -78,13 +78,14 @@ router.post('/', writeLimiter, requireDurableWrite, asyncHandler(async (req, res
     const phone = normalizePhone(body.phone);
     const contactName = optionalString(body.contactName, 'contactName', 200);
     const notes = optionalString(body.notes, 'notes', LIMITS.APPOINTMENT_NOTES);
+    const projectId = body.projectId ? requireId(body.projectId, 'projectId') : null;
     if (!body.startIso) {
         throw new ValidationError('startIso is required.', 'startIso');
     }
 
     try {
         const appt = await bookAppointment(req.user.id, {
-            phone, contactName, startIso: body.startIso, notes, source: 'dashboard'
+            phone, contactName, startIso: body.startIso, notes, source: 'dashboard', projectId
         });
         res.json({ success: true, data: appt });
     } catch (err) {

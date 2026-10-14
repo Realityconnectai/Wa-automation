@@ -25,6 +25,7 @@ const {
     cancelAppointment: dbCancelAppointment
 } = require('./database');
 const { getBusyBlocks, createAppointmentEvent, cancelAppointmentEvent } = require('./google-calendar');
+const { scheduleAppointmentReminders, cancelAppointmentReminders } = require('./appointment-reminders');
 const { zonedWallTimeToUtc, utcToZonedParts, isValidTimeZone, formatInZone } = require('../utils/tz');
 const { ValidationError, toSqliteUtc, assertHHMM, normalizeWorkingDays, LIMITS } = require('../utils/validate');
 
@@ -198,7 +199,7 @@ function isValidSlotBoundary(settings, start) {
     return (minuteOfDay - dayStartMin) % stepMin === 0;
 }
 
-async function bookAppointment(userId, { phone, contactName = '', startIso, notes = '', source = 'chatbot' }) {
+async function bookAppointment(userId, { phone, contactName = '', startIso, notes = '', source = 'chatbot', projectId = null }) {
     if (!phone) throw new ValidationError('phone is required.', 'phone');
     const start = new Date(startIso);
     if (isNaN(start.getTime())) {
@@ -251,7 +252,7 @@ async function bookAppointment(userId, { phone, contactName = '', startIso, note
     });
 
     const appointment = await createAppointment(userId, {
-        phone, contactName, startAt: startSql, endAt: endSql, source, notes: trimmedNotes, calendarEventId
+        phone, contactName, startAt: startSql, endAt: endSql, source, notes: trimmedNotes, calendarEventId, projectId
     });
 
     if (!appointment) {
@@ -261,14 +262,27 @@ async function bookAppointment(userId, { phone, contactName = '', startIso, note
         throw err;
     }
 
+    try {
+        await scheduleAppointmentReminders(userId, appointment);
+    } catch (remErr) {
+        console.warn('⚠️ Could not schedule appointment reminders (non-fatal):', remErr.message);
+    }
+
     return appointment;
 }
 
-/** Cancels an appointment and best-effort removes its calendar event. Returns the cancelled row, or null if it didn't exist. */
+/** Cancels an appointment and best-effort removes its calendar event and scheduled reminders. Returns the cancelled row, or null if it didn't exist. */
 async function cancelAppointment(userId, id) {
     const row = await dbCancelAppointment(userId, id);
-    if (row && row.calendar_event_id) {
-        await cancelAppointmentEvent(userId, row.calendar_event_id);
+    if (row) {
+        try {
+            await cancelAppointmentReminders(userId, id);
+        } catch (remErr) {
+            console.warn('⚠️ Could not cancel appointment reminders (non-fatal):', remErr.message);
+        }
+        if (row.calendar_event_id) {
+            await cancelAppointmentEvent(userId, row.calendar_event_id);
+        }
     }
     return row;
 }

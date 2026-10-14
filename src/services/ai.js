@@ -340,7 +340,8 @@ async function generateReplyWithBooking(userId, phone, contactName, systemInstru
                         contactName,
                         startIso: call.args && call.args.start_iso,
                         notes: call.args && call.args.notes,
-                        source: 'chatbot'
+                        source: 'chatbot',
+                        projectId: call.args && (call.args.project_id || call.args.projectId) ? Number(call.args.project_id || call.args.projectId) : null
                     });
                     result = { booked: true, start_at: appt.start_at, end_at: appt.end_at };
                 } catch (bookErr) {

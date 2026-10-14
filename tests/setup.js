@@ -94,6 +94,8 @@ async function freshDatabase() {
         '../src/services/business',
         '../src/services/ai',
         '../src/services/gemini-client',
+        '../src/services/appointment-reminders',
+        '../src/services/availability',
         '../src/services/calendar-sync',
         '../src/services/google-calendar',
         '../src/utils/metrics',

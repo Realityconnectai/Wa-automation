@@ -909,6 +909,32 @@ async function cancelScheduledMessage(userId, id) {
     );
 }
 
+async function createAppointmentReminder(userId, appointmentId, phone, body, scheduledAt, reminderType) {
+    const res = await query(
+        `INSERT INTO scheduled_messages (user_id, appointment_id, phone, body, scheduled_at, reminder_type, status)
+         VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+         ON CONFLICT (appointment_id, reminder_type) WHERE status = 'pending' AND appointment_id IS NOT NULL
+         DO NOTHING
+         RETURNING *`,
+        [userId, appointmentId, phone, body, scheduledAt, reminderType]
+    );
+    return res.rows[0] || null;
+}
+
+async function cancelAppointmentReminders(userId, appointmentId) {
+    return runSql(
+        "UPDATE scheduled_messages SET status = 'cancelled' WHERE user_id = $1 AND appointment_id = $2 AND status = 'pending'",
+        [userId, appointmentId]
+    );
+}
+
+async function getAppointmentReminders(userId, appointmentId) {
+    return queryAll(
+        'SELECT * FROM scheduled_messages WHERE user_id = $1 AND appointment_id = $2 ORDER BY scheduled_at ASC',
+        [userId, appointmentId]
+    );
+}
+
 // ─── Durable outreach jobs ──────────────────────────────────────────────
 async function createOutreachJob(userId, id, messageTemplate, contacts) {
     return transaction(async (tx) => {
@@ -1041,13 +1067,13 @@ async function getCrmDealById(userId, id) {
     return queryGet('SELECT * FROM crm_deals WHERE user_id = $1 AND id = $2', [userId, id]);
 }
 
-async function createCrmDeal(userId, { phone, contactName = '', stage = 'new', dealValue = 0, productInterest = '', source = 'whatsapp', notes = '', nextFollowupAt = null }) {
+async function createCrmDeal(userId, { phone, contactName = '', stage = 'new', dealValue = 0, productInterest = '', source = 'whatsapp', notes = '', nextFollowupAt = null, interested_project_id = null }) {
     if (!CRM_STAGES.includes(stage)) stage = 'new';
     const res = await query(
-        `INSERT INTO crm_deals (user_id, phone, contact_name, stage, deal_value, product_interest, source, notes, next_followup_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `INSERT INTO crm_deals (user_id, phone, contact_name, stage, deal_value, product_interest, source, notes, next_followup_at, interested_project_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING *`,
-        [userId, phone, contactName, stage, dealValue || 0, productInterest, source, notes, nextFollowupAt]
+        [userId, phone, contactName, stage, dealValue || 0, productInterest, source, notes, nextFollowupAt, interested_project_id || null]
     );
     return res.rows[0];
 }
@@ -1538,7 +1564,7 @@ async function countAppointments(userId) {
  * Uses a PostgreSQL transaction-level advisory lock on the tenant's user_id
  * to serialize booking attempts per tenant, preventing double-booking races.
  */
-async function createAppointment(userId, { phone, contactName = '', startAt, endAt, source = 'chatbot', notes = '', calendarEventId = null }) {
+async function createAppointment(userId, { phone, contactName = '', startAt, endAt, source = 'chatbot', notes = '', calendarEventId = null, projectId = null }) {
     return transaction(async (tx) => {
         // Advisory lock on tenant user_id guarantees serialized execution for this tenant
         await tx.query('SELECT pg_advisory_xact_lock($1)', [userId]);
@@ -1554,10 +1580,10 @@ async function createAppointment(userId, { phone, contactName = '', startAt, end
         }
 
         const res = await tx.query(
-            `INSERT INTO appointments (user_id, phone, contact_name, start_at, end_at, source, notes, calendar_event_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            `INSERT INTO appointments (user_id, phone, contact_name, start_at, end_at, source, notes, calendar_event_id, project_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              RETURNING *`,
-            [userId, phone, contactName, startAt, endAt, source, notes, calendarEventId]
+            [userId, phone, contactName, startAt, endAt, source, notes, calendarEventId, projectId || null]
         );
         return res.rows[0];
     });
@@ -1571,7 +1597,19 @@ async function cancelAppointment(userId, id) {
     const row = await queryGet("SELECT * FROM appointments WHERE id = $1 AND user_id = $2 AND status = 'confirmed'", [id, userId]);
     if (!row) return null;
     await runSql("UPDATE appointments SET status = 'cancelled' WHERE id = $1 AND user_id = $2", [id, userId]);
-    return row;
+    await cancelAppointmentReminders(userId, id);
+    return { ...row, status: 'cancelled' };
+}
+
+async function getUpcomingConfirmedAppointments(userId = null, fromDate = new Date()) {
+    let sql = "SELECT * FROM appointments WHERE status = 'confirmed' AND start_at > $1";
+    const params = [fromDate];
+    if (userId) {
+        sql += ' AND user_id = $2';
+        params.push(userId);
+    }
+    sql += ' ORDER BY start_at ASC';
+    return queryAll(sql, params);
 }
 
 // ─── Dashboard Stats ────────────────────────────────────────
@@ -1990,6 +2028,10 @@ module.exports = {
     createAppointment,
     getAppointmentById,
     cancelAppointment,
+    createAppointmentReminder,
+    cancelAppointmentReminders,
+    getAppointmentReminders,
+    getUpcomingConfirmedAppointments,
     // Inventory — projects, units, media assets
     createProject,
     getProjects,

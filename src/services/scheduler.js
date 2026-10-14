@@ -29,9 +29,9 @@ const cron = require('node-cron');
 const {
     getPendingScheduledMessages, updateScheduledMessageStatus, logMessage,
     claimScheduledMessage, reclaimStuckScheduledMessages, getUserById,
-    getMonthlyOutgoingCount, expireStaleHolds
+    getMonthlyOutgoingCount, expireStaleHolds, getAppointmentById
 } = require('./database');
-const { sendTextMessage } = require('./whatsapp-client');
+const whatsappClient = require('./whatsapp-client');
 const { tryNormalizePhone } = require('../utils/validate');
 const { logOutreachEvent } = require('./google-calendar');
 
@@ -135,6 +135,15 @@ async function processPendingMessages() {
                     continue;
                 }
 
+                // If message is linked to an appointment, verify the appointment is still confirmed
+                if (msg.appointment_id) {
+                    const appt = await getAppointmentById(msg.user_id, msg.appointment_id);
+                    if (!appt || appt.status !== 'confirmed') {
+                        await updateScheduledMessageStatus(msg.id, 'cancelled', 'Appointment is no longer active or was cancelled');
+                        continue;
+                    }
+                }
+
                 const phone = tryNormalizePhone(msg.phone);
                 if (!phone) {
                     await updateScheduledMessageStatus(msg.id, 'failed', 'Stored phone number is not valid');
@@ -144,7 +153,7 @@ async function processPendingMessages() {
 
                 // Timeout guard: don't let a single message block the tick.
                 const result = await Promise.race([
-                    sendTextMessage(msg.user_id, phone, msg.body),
+                    whatsappClient.sendTextMessage(msg.user_id, phone, msg.body),
                     new Promise((_, rej) => setTimeout(() => rej(new Error('sendTextMessage timeout')), SEND_TIMEOUT_MS))
                 ]);
 
