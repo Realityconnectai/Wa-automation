@@ -41,7 +41,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // ─── Event delegation for table action buttons ────────────
-    // Replaces all onclick="" attributes (blocked by CSP script-src-attr 'none').
+    // All action controls use delegated data attributes, compatible with CSP.
     // All buttons use data-action + data-id (+ data-value for toggles).
     document.getElementById('usersBody').addEventListener('click', (e) => {
         const btn = e.target.closest('[data-action]');
@@ -268,7 +268,7 @@ function renderUsers() {
         const isPending = u.status === 'pending';
 
         // ── WA Access cell ──
-        // Uses data-action / data-id / data-value instead of onclick="" (CSP)
+        // Uses data-action / data-id / data-value for CSP-safe delegation.
         const waAccessCell = u.role === 'admin'
             ? `<span class="pill pill-admin" title="Admins always have access">${Icon('crown')} Always</span>`
             : `<button class="btn btn-tiny" style="background:${u.wa_enabled ? 'var(--color-success)' : 'var(--color-error)'};color:#fff;font-size:.75rem;"

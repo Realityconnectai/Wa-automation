@@ -110,9 +110,10 @@ function showToast(message, type = 'info') {
     toast.innerHTML = `
         <span class="toast-icon" aria-hidden="true">${Icon(iconNames[type])}</span>
         <span class="toast-text">${escapeHtml(message)}</span>
-        <button class="toast-close" aria-label="Dismiss notification" onclick="this.parentElement.remove()">×</button>
+        <button class="toast-close" aria-label="Dismiss notification" type="button">×</button>
     `;
     container.appendChild(toast);
+    toast.querySelector('.toast-close').addEventListener('click', () => toast.remove());
 
     setTimeout(() => {
         toast.style.animation = 'slideOut 0.35s ease forwards';
@@ -474,7 +475,7 @@ async function loadLeads() {
                                     <strong>${escapeHtml(p.contact_name || p.phone)}</strong>
                                     <small style="color:var(--color-text-secondary);margin-left:8px">${escapeHtml(p.phone)} · ${p.message_count} msgs</small>
                                 </div>
-                                <button class="btn btn-sm btn-secondary" onclick="analyzeLead(${jsAttr(p.phone)})" type="button">${Icon('brain', 'icon-inline')}Analyze</button>
+                                <button class="btn btn-sm btn-secondary" data-action="analyze-lead" data-phone="${escapeHtml(p.phone)}" type="button">${Icon('brain', 'icon-inline')}Analyze</button>
                             </div>
                         `).join('')}
                     </div>
@@ -541,7 +542,7 @@ function renderLeadCard(lead) {
                     · ${lead.message_count} msgs
                     · Analyzed ${timeAgo(lead.last_analyzed_at)}
                 </span>
-                <button class="btn btn-sm btn-secondary" onclick="analyzeLead(${jsAttr(lead.phone)})" type="button" title="Re-analyze with latest messages">${Icon('refresh-cw', 'icon-inline')}Re-analyze</button>
+                <button class="btn btn-sm btn-secondary" data-action="analyze-lead" data-phone="${escapeHtml(lead.phone)}" type="button" title="Re-analyze with latest messages">${Icon('refresh-cw', 'icon-inline')}Re-analyze</button>
             </div>
         </div>`;
 }
@@ -1115,8 +1116,8 @@ function renderProductList(products) {
                 ${p.url ? `<div class="product-row-desc"><a href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(p.url)}</a></div>` : ''}
             </div>
             <div class="rule-actions">
-                <button class="btn btn-sm btn-secondary" onclick="toggleProduct(${p.id}, ${p.is_active ? 0 : 1})" title="${p.is_active ? 'Hide from AI' : 'Show to AI'}" type="button">${Icon(p.is_active ? 'pause' : 'play')}</button>
-                <button class="btn btn-sm btn-danger" onclick="deleteProductRow(${p.id})" title="Delete" type="button">${Icon('trash-2')}</button>
+                <button class="btn btn-sm btn-secondary" data-action="toggle-product" data-id="${p.id}" data-value="${p.is_active ? 0 : 1}" title="${p.is_active ? 'Hide from AI' : 'Show to AI'}" type="button">${Icon(p.is_active ? 'pause' : 'play')}</button>
+                <button class="btn btn-sm btn-danger" data-action="delete-product" data-id="${p.id}" title="Delete" type="button">${Icon('trash-2')}</button>
             </div>
         </div>
     `).join('');
@@ -1244,7 +1245,7 @@ async function loadChatbotRules() {
                     <button class="btn btn-sm btn-secondary contact-media-btn" type="button" data-contact-media="${escapeHtml(c.phone)}" aria-label="View received media from ${escapeHtml(c.name || c.phone)}">Media</button>
                     <button
                         class="btn btn-sm btn-secondary"
-                        onclick="toggleRule(${rule.id}, ${rule.is_active ? 0 : 1})"
+                        data-action="toggle-rule" data-id="${rule.id}" data-value="${rule.is_active ? 0 : 1}"
                         title="${rule.is_active ? 'Disable rule' : 'Enable rule'}"
                         aria-label="${rule.is_active ? 'Disable' : 'Enable'} rule: ${escapeHtml(rule.trigger_keyword)}"
                         type="button">
@@ -1252,7 +1253,7 @@ async function loadChatbotRules() {
                     </button>
                     <button
                         class="btn btn-sm btn-danger"
-                        onclick="deleteRule(${rule.id})"
+                        data-action="delete-rule" data-id="${rule.id}"
                         title="Delete rule"
                         aria-label="Delete rule: ${escapeHtml(rule.trigger_keyword)}"
                         type="button">
@@ -1383,7 +1384,7 @@ async function loadContacts() {
                 <td>
                     <button
                         class="btn btn-sm btn-danger"
-                        onclick="deleteContact(${c.id})"
+                        data-action="delete-contact" data-id="${c.id}"
                         title="Delete contact"
                         aria-label="Delete contact ${escapeHtml(c.name || c.phone)}"
                         type="button">${Icon('trash-2')}</button>
@@ -1654,7 +1655,7 @@ async function loadScheduled() {
                 </td>
                 <td>
                     ${msg.status === 'pending'
-                        ? `<button class="btn btn-sm btn-danger" onclick="cancelScheduled(${msg.id})" aria-label="Cancel scheduled message" type="button">Cancel</button>`
+                        ? `<button class="btn btn-sm btn-danger" data-action="cancel-scheduled" data-id="${msg.id}" aria-label="Cancel scheduled message" type="button">Cancel</button>`
                         : '—'}
                 </td>
             </tr>
@@ -1709,7 +1710,7 @@ async function loadAppointments() {
                     </td>
                     <td>
                         ${a.status === 'confirmed'
-                            ? `<button class="btn btn-sm btn-danger" onclick="cancelAppointment(${a.id})" aria-label="Cancel appointment" type="button">Cancel</button>`
+                            ? `<button class="btn btn-sm btn-danger" data-action="cancel-appointment" data-id="${a.id}" aria-label="Cancel appointment" type="button">Cancel</button>`
                             : '—'}
                     </td>
                 </tr>
@@ -2193,11 +2194,6 @@ function escapeHtml(str) {
         .replace(/'/g, '&#39;');
 }
 
-/** Safely embed an arbitrary string as an argument inside an inline onclick="fn(...)" handler. */
-function jsAttr(str) {
-    return escapeHtml(JSON.stringify(str == null ? '' : String(str)));
-}
-
 function formatDate(dateStr) {
     if (!dateStr) return '—';
     const d = new Date(dateStr + (dateStr.includes('Z') || dateStr.includes('+') ? '' : 'Z'));
@@ -2230,6 +2226,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     // an inline SVG (see js/icons.js). Dynamic content rendered by this file
     // calls Icon() directly inside its template strings instead.
     if (typeof hydrateIcons === 'function') hydrateIcons();
+
+    document.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-action]');
+        if (!button) return;
+        const id = Number(button.dataset.id);
+        switch (button.dataset.action) {
+            case 'analyze-lead': analyzeLead(button.dataset.phone); break;
+            case 'toggle-product': toggleProduct(id, Number(button.dataset.value)); break;
+            case 'delete-product': deleteProductRow(id); break;
+            case 'toggle-rule': toggleRule(id, Number(button.dataset.value)); break;
+            case 'delete-rule': deleteRule(id); break;
+            case 'delete-contact': deleteContact(id); break;
+            case 'cancel-scheduled': cancelScheduled(id); break;
+            case 'cancel-appointment': cancelAppointment(id); break;
+        }
+    });
 
     // ── Auth gate ────────────────────────────────────────────
     // Redirects to /login if there's no valid session — nothing else on
