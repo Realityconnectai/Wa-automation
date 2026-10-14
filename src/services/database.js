@@ -25,6 +25,13 @@ const {
     closePool,
     sanitizeErrorMessage
 } = require('./db-pool');
+const {
+    encryptToken,
+    decryptToken,
+    isEncrypted,
+    getEncryptionKey
+} = require('../utils/token-crypto');
+
 
 // ─── Versioned Migrations ───────────────────────────────────
 
@@ -132,6 +139,24 @@ async function initDatabase() {
 
     // Provision bootstrap admin if configured
     await ensureBootstrapAdmin();
+
+    // Migrate any legacy plaintext Google Calendar OAuth tokens
+    try {
+        const { migrated } = await migratePlaintextCalendarTokens();
+        if (migrated > 0) {
+            console.log(`🔐 Google Calendar: migrated ${migrated} account(s) to encrypted OAuth tokens.`);
+        }
+    } catch (err) {
+        if (err.message && err.message.includes('TOKEN_ENCRYPTION_KEY is required in production')) {
+            const countRow = await queryGet('SELECT COUNT(*)::int as cnt FROM google_calendar_accounts');
+            if (countRow && countRow.cnt > 0) {
+                throw err;
+            }
+            console.warn('⚠️  [token-crypto] TOKEN_ENCRYPTION_KEY is not set in production. Google Calendar encryption is not active.');
+        } else {
+            throw err;
+        }
+    }
 
     return getPool();
 }
@@ -1334,6 +1359,11 @@ async function getAllSettings(userId) {
 
 async function saveGoogleCalendarTokens(userId, tokens) {
     const existing = await queryGet('SELECT calendar_id, check_availability FROM google_calendar_accounts WHERE user_id = $1', [userId]);
+
+    const encAccess = encryptToken(tokens.access_token);
+    const hasRefresh = tokens.refresh_token !== undefined && tokens.refresh_token !== null && String(tokens.refresh_token).trim() !== '';
+    const encRefresh = hasRefresh ? encryptToken(tokens.refresh_token) : null;
+
     return runSql(
         `INSERT INTO google_calendar_accounts (user_id, access_token, refresh_token, scope, token_type, expiry_date, calendar_id, check_availability)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -1344,7 +1374,7 @@ async function saveGoogleCalendarTokens(userId, tokens) {
             token_type = EXCLUDED.token_type,
             expiry_date = EXCLUDED.expiry_date`,
         [
-            userId, tokens.access_token, tokens.refresh_token || null, tokens.scope || null,
+            userId, encAccess, encRefresh, tokens.scope || null,
             tokens.token_type || null, tokens.expiry_date || null,
             existing ? existing.calendar_id : 'primary',
             existing ? existing.check_availability : 0
@@ -1353,7 +1383,59 @@ async function saveGoogleCalendarTokens(userId, tokens) {
 }
 
 async function getGoogleCalendarAccount(userId) {
-    return queryGet('SELECT * FROM google_calendar_accounts WHERE user_id = $1', [userId]);
+    const row = await queryGet('SELECT * FROM google_calendar_accounts WHERE user_id = $1', [userId]);
+    if (!row) return null;
+    return {
+        ...row,
+        access_token: decryptToken(row.access_token),
+        refresh_token: row.refresh_token ? decryptToken(row.refresh_token) : null
+    };
+}
+
+/**
+ * Idempotently migrates existing plaintext tokens in google_calendar_accounts to AES-256-GCM.
+ * Validates the encryption key before modifying any rows.
+ * Runs atomically inside a transaction with row-level locks (FOR UPDATE).
+ * Never logs credentials.
+ */
+async function migratePlaintextCalendarTokens(keyOverride = null) {
+    const key = getEncryptionKey(keyOverride);
+
+    return transaction(async (tx) => {
+        const result = await tx.query(
+            `SELECT user_id, access_token, refresh_token
+             FROM google_calendar_accounts
+             WHERE access_token NOT LIKE 'enc:v1:%'
+                OR (refresh_token IS NOT NULL AND refresh_token != '' AND refresh_token NOT LIKE 'enc:v1:%')
+             FOR UPDATE`
+        );
+
+        const rows = result.rows || [];
+        if (rows.length === 0) {
+            return { migrated: 0 };
+        }
+
+        let migratedCount = 0;
+        for (const row of rows) {
+            const encAccess = isEncrypted(row.access_token)
+                ? row.access_token
+                : encryptToken(row.access_token, key);
+
+            const encRefresh = (row.refresh_token && !isEncrypted(row.refresh_token))
+                ? encryptToken(row.refresh_token, key)
+                : (row.refresh_token || null);
+
+            await tx.query(
+                `UPDATE google_calendar_accounts
+                 SET access_token = $1, refresh_token = $2
+                 WHERE user_id = $3`,
+                [encAccess, encRefresh, row.user_id]
+            );
+            migratedCount++;
+        }
+
+        return { migrated: migratedCount };
+    });
 }
 
 async function getAllConnectedCalendarUserIds() {
@@ -1892,6 +1974,7 @@ module.exports = {
     // Google Calendar
     saveGoogleCalendarTokens,
     getGoogleCalendarAccount,
+    migratePlaintextCalendarTokens,
     getAllConnectedCalendarUserIds,
     deleteGoogleCalendarAccount,
     setCalendarAvailabilityCheck,
