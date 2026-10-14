@@ -24,10 +24,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!ok) return;
 
     initFilterBar();
-    await Promise.all([loadPlatformStats(), loadUsers()]);
+    await Promise.all([loadPlatformStats(), loadUsers(), loadDiagnostics()]);
 
     document.getElementById('userSearch').addEventListener('input', renderUsers);
     document.getElementById('logoutBtn').addEventListener('click', logout);
+    document.getElementById('refreshDiagnosticsBtn').addEventListener('click', loadDiagnostics);
     document.getElementById('editCancelBtn').addEventListener('click', closeEditModal);
     document.getElementById('editSaveBtn').addEventListener('click', saveEditModal);
     document.getElementById('editModalBackdrop').addEventListener('click', (e) => {
@@ -69,6 +70,19 @@ function initFilterBar() {
             setFilter(filter);
         });
     });
+}
+
+async function loadDiagnostics() {
+    const target = document.getElementById('diagnosticsContent');
+    target.textContent = 'Loading diagnostics…';
+    try {
+        const data = await api('/api/admin/diagnostics');
+        const m = data.metrics;
+        const sessionRows = data.sessions.length ? data.sessions.map(s => `<tr><td>${escapeHtml(s.account)}</td><td>${s.connected ? 'Connected' : s.initializing ? 'Starting' : s.hibernated ? 'Hibernated' : 'Offline'}${s.hasError ? ' · needs attention' : ''}</td></tr>`).join('') : '<tr><td colspan="2">No accounts</td></tr>';
+        const jobs = data.outreach.length ? data.outreach.map(row => `${escapeHtml(row.status)}: ${row.count}`).join(' · ') : 'No outreach jobs';
+        const calendars = data.calendar.length ? data.calendar.map(row => `${escapeHtml(row.business_name || row.email)}: ${row.last_sync_at ? formatDate(row.last_sync_at) : 'never synced'}`).join('<br>') : 'No connected calendars';
+        target.innerHTML = `<div class="admin-stats-grid"><div class="admin-stat-card"><span><span class="num">${data.failedMedia}</span><span class="lbl">Failed media sends</span></span></div><div class="admin-stat-card"><span><span class="num">${m.ai.failures}</span><span class="lbl">Gemini failures since boot</span></span></div><div class="admin-stat-card"><span><span class="num">${m.scheduler.failed}</span><span class="lbl">Scheduler failures since boot</span></span></div><div class="admin-stat-card"><span><span class="num">${m.eventLoopLagMs}ms</span><span class="lbl">Event-loop lag</span></span></div></div><div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>WhatsApp tenant</th><th>Session health</th></tr></thead><tbody>${sessionRows}</tbody></table></div><p><strong>Outreach / recovery:</strong> ${jobs}</p><p><strong>Calendar sync:</strong><br>${calendars}</p>`;
+    } catch (err) { target.innerHTML = `<div class="admin-empty">Could not load diagnostics: ${escapeHtml(err.message)}</div>`; }
 }
 
 function setFilter(filter) {

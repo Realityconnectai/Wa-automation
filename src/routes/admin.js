@@ -6,6 +6,8 @@ const {
     getUserStats, getPlatformStats, countOrphanedRows
 } = require('../services/database');
 const { getStatus, destroyClientForUser } = require('../services/whatsapp-client');
+const { snapshot: metricsSnapshot } = require('../utils/metrics');
+const { queryAll, queryGet } = require('../services/db-pool');
 const { revokeAllSessionsForUser } = require('../config/auth');
 const { requireId, optionalString, clampInt, requireEnum, LIMITS } = require('../utils/validate');
 const { asyncHandler } = require('../utils/errors');
@@ -19,6 +21,22 @@ function publicUser(u) {
 // ─── Platform-wide overview ───────────────────────────────────
 router.get('/stats', asyncHandler(async (req, res) => {
     res.json({ success: true, data: await getPlatformStats() });
+}));
+
+// Aggregate diagnostics only: no QR credentials, message bodies, API keys, or phone numbers.
+router.get('/diagnostics', asyncHandler(async (req, res) => {
+    const users = await listUsers();
+    const sessions = users.map(user => {
+        const status = getStatus(user.id);
+        return { id: user.id, account: user.business_name || user.email, connected: status.connected,
+            initializing: !!status.initializing, hibernated: !!status.hibernated, hasError: !!status.error };
+    });
+    const [failedMedia, outreach, calendar] = await Promise.all([
+        queryGet("SELECT COUNT(*)::int AS count FROM messages WHERE direction='outgoing' AND status='failed' AND message_type <> 'text'"),
+        queryAll("SELECT status, COUNT(*)::int AS count FROM outreach_jobs GROUP BY status ORDER BY status"),
+        queryAll('SELECT u.business_name, u.email, c.last_sync_at, c.check_availability FROM google_calendar_accounts c JOIN users u ON u.id=c.user_id ORDER BY c.last_sync_at DESC NULLS LAST')
+    ]);
+    res.json({ success: true, data: { metrics: metricsSnapshot(), sessions, failedMedia: failedMedia.count, outreach, calendar } });
 }));
 
 // ─── List every account with usage + WhatsApp connection status ──
