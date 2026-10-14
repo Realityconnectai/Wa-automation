@@ -87,6 +87,7 @@ describe('Incoming media + delivery acks', () => {
             expect(rows[0].message_type).toBe('document');
             expect(rows[0].body).toContain('floorplan.pdf');
             expect(rows[0].status).toBe('received');
+            expect(rows[0].media_asset_id).toBeNull(); // inbound payload is deliberately metadata-only
         });
 
         test('image message is saved with type=image', async () => {
