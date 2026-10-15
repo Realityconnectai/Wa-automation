@@ -21,7 +21,15 @@
  */
 'use strict';
 
-const { getSetting, getProjects, getMediaAssets, logMessage, logBrochureDropEvent } = require('./database');
+const {
+    getSetting,
+    getProjects,
+    getMediaAssets,
+    logMessage,
+    logBrochureDropEvent,
+    hasBrochureBeenSentRecently,
+    getContactByPhone
+} = require('./database');
 // messaging is required lazily at call time so tests can mock it via jest.mock
 // without needing to patch module-scope references.
 function getMessaging() { return require('./messaging'); }
@@ -146,6 +154,18 @@ function projectReferences(project) {
  *   { handled: false, reason }                          — message not triggered
  */
 async function tryBrochureDrop(userId, phone, contactName, text, client, msg, inboundReceivedAt) {
+    // 0a. Check per-tenant brochure-drop enable/disable setting
+    const enabled = await getSetting(userId, 'brochure_drop_enabled');
+    if (enabled === 'false') {
+        return { handled: false, reason: 'brochure_drop_disabled' };
+    }
+
+    // 0b. Respect contact opt-out / DND status
+    const contact = await getContactByPhone(userId, phone);
+    if (contact && (contact.opted_out === true || /^(opt[-_]?out|dnd|do\s*not\s*contact|unsub(scribe)?)$/i.test(contact.label || ''))) {
+        return { handled: false, reason: 'opted_out' };
+    }
+
     // 1. Match tenant-scoped project references before rejecting a message.
     // Project names and stored portal/RERA listing identifiers are themselves
     // valid triggers; generic real-estate keywords still use hasTrigger().
@@ -170,6 +190,18 @@ async function tryBrochureDrop(userId, phone, contactName, text, client, msg, in
     }
 
     const project = matched[0];
+
+    // 2b. Duplicate-send prevention: check if brochure was already sent recently
+    const windowHours = Number(await getSetting(userId, 'brochure_dedup_window_hours')) || 24;
+    const alreadySent = await hasBrochureBeenSentRecently(userId, phone, project.id, windowHours);
+    if (alreadySent) {
+        return {
+            handled: true,
+            action: 'already_sent',
+            reason: 'dedupe',
+            projectName: project.name
+        };
+    }
 
     // 3. Fetch active assets (brochure first, then walkthrough)
     let assets = await getMediaAssets(userId, project.id, { activeOnly: true });

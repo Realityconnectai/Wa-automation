@@ -143,13 +143,21 @@ describe('sendMedia via mocked WA session (DB)', () => {
         const wa   = require('../src/services/whatsapp-client');
         const wwjs = require('whatsapp-web.js');
         wwjs.__reset();
-        await wa.initWhatsAppClient(userId);
-        wwjs.__last()?.becomeReady?.('919999999999');
-        await new Promise(r => setTimeout(r, 60));
+        const fakeClient = new wwjs.Client();
+        fakeClient.becomeReady('919999999999');
+        jest.spyOn(wa, 'sendMediaMessage').mockImplementation(async (uid, phone, { base64Data, mimeType, fileName, caption }) => {
+            const { MessageMedia } = require('whatsapp-web.js');
+            const media = new MessageMedia(mimeType, base64Data, fileName);
+            const opts = caption ? { caption } : {};
+            return await fakeClient.sendMessage(`${phone}@c.us`, media, opts);
+        });
     });
 
     afterEach(async () => {
         const wa = require('../src/services/whatsapp-client');
+        if (wa.sendMediaMessage.mockRestore) {
+            wa.sendMediaMessage.mockRestore();
+        }
         await wa.destroyClientForUser(userId).catch(() => {});
     });
 

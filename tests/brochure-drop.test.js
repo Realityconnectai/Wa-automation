@@ -282,4 +282,126 @@ describe('Brochure drop — trigger matching and asset delivery', () => {
         expect(typeof result).toBe('object');
         mediaCalls.forEach(call => expect(call.filePath).toContain('valley'));
     });
+
+    // ─── 8. brochure_drop_enabled setting ──────────────────────────────
+    test('brochure_drop_enabled=false suppresses brochure drop completely', async () => {
+        const { setSetting } = require('../src/services/database');
+        await setSetting(userAId, 'brochure_drop_enabled', 'false');
+
+        const mediaCalls = [];
+        jest.mock('../src/services/messaging', () => ({
+            sendMedia: async (_uid, _phone, opts) => { mediaCalls.push(opts); return {}; },
+            sendText: async () => {}
+        }));
+        const { tryBrochureDrop } = require('../src/services/brochure-drop');
+        const result = await tryBrochureDrop(
+            userAId, '919876500007', 'Lead', 'Sunrise Towers', null, makeMockMsg('919876500007', ''), Date.now()
+        );
+        jest.unmock('../src/services/messaging');
+
+        expect(result).toEqual({ handled: false, reason: 'brochure_drop_disabled' });
+        expect(mediaCalls).toHaveLength(0);
+    });
+
+    // ─── 9. Contact opt-out / DND suppression ──────────────────────────
+    test('opted-out contact does not receive brochure drop', async () => {
+        const { upsertContact } = require('../src/services/database');
+        await upsertContact(userAId, '919876500008', 'Opted Out User', 'opt_out');
+
+        const mediaCalls = [];
+        jest.mock('../src/services/messaging', () => ({
+            sendMedia: async (_uid, _phone, opts) => { mediaCalls.push(opts); return {}; },
+            sendText: async () => {}
+        }));
+        const { tryBrochureDrop } = require('../src/services/brochure-drop');
+        const result = await tryBrochureDrop(
+            userAId, '919876500008', 'Opted Out User', 'Sunrise Towers', null, makeMockMsg('919876500008', ''), Date.now()
+        );
+        jest.unmock('../src/services/messaging');
+
+        expect(result).toEqual({ handled: false, reason: 'opted_out' });
+        expect(mediaCalls).toHaveLength(0);
+    });
+
+    test('DND contact does not receive brochure drop', async () => {
+        const { upsertContact } = require('../src/services/database');
+        await upsertContact(userAId, '919876500009', 'DND User', 'dnd');
+
+        const mediaCalls = [];
+        jest.mock('../src/services/messaging', () => ({
+            sendMedia: async (_uid, _phone, opts) => { mediaCalls.push(opts); return {}; },
+            sendText: async () => {}
+        }));
+        const { tryBrochureDrop } = require('../src/services/brochure-drop');
+        const result = await tryBrochureDrop(
+            userAId, '919876500009', 'DND User', 'Sunrise Towers', null, makeMockMsg('919876500009', ''), Date.now()
+        );
+        jest.unmock('../src/services/messaging');
+
+        expect(result).toEqual({ handled: false, reason: 'opted_out' });
+        expect(mediaCalls).toHaveLength(0);
+    });
+
+    // ─── 10. Duplicate-send prevention ─────────────────────────────────
+    test('deduplicates brochure drop if already sent within cooldown window', async () => {
+        const { logBrochureDropEvent } = require('../src/services/database');
+        const phone = '919876500010';
+
+        // Log a recent send event
+        await logBrochureDropEvent(userAId, {
+            projectId: projectA.id,
+            phone,
+            contactName: 'Frequent Lead',
+            action: 'assets_sent',
+            assetCount: 1
+        });
+
+        const mediaCalls = [];
+        jest.mock('../src/services/messaging', () => ({
+            sendMedia: async (_uid, _phone, opts) => { mediaCalls.push(opts); return {}; },
+            sendText: async () => {}
+        }));
+        const { tryBrochureDrop } = require('../src/services/brochure-drop');
+        const result = await tryBrochureDrop(
+            userAId, phone, 'Frequent Lead', 'Sunrise Towers', null, makeMockMsg(phone, ''), Date.now()
+        );
+        jest.unmock('../src/services/messaging');
+
+        expect(result.handled).toBe(true);
+        expect(result.action).toBe('already_sent');
+        expect(result.reason).toBe('dedupe');
+        expect(result.projectName).toBe('Sunrise Towers');
+        expect(mediaCalls).toHaveLength(0);
+    });
+
+    test('allows brochure drop for a different project even if one was sent recently', async () => {
+        const { logBrochureDropEvent } = require('../src/services/database');
+        const phone = '919876500011';
+
+        // Log a send event for projectA
+        await logBrochureDropEvent(userAId, {
+            projectId: projectA.id,
+            phone,
+            contactName: 'Multi-Project Lead',
+            action: 'assets_sent',
+            assetCount: 1
+        });
+
+        const mediaCalls = [];
+        jest.mock('../src/services/messaging', () => ({
+            sendMedia: async (_uid, _phone, opts) => { mediaCalls.push(opts); return {}; },
+            sendText: async () => {}
+        }));
+        const { tryBrochureDrop } = require('../src/services/brochure-drop');
+        // Now requesting projectB (Green Valley Plots)
+        const result = await tryBrochureDrop(
+            userAId, phone, 'Multi-Project Lead', 'Green Valley Plots', null, makeMockMsg(phone, ''), Date.now()
+        );
+        jest.unmock('../src/services/messaging');
+
+        expect(result.handled).toBe(true);
+        expect(result.action).toBe('assets_sent');
+        expect(result.projectName).toBe('Green Valley Plots');
+        expect(mediaCalls).not.toHaveLength(0);
+    });
 });

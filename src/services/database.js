@@ -185,6 +185,7 @@ function forcePersist() {
 
 const DEFAULT_SETTINGS = {
     chatbot_enabled: 'true',
+    brochure_drop_enabled: 'true',
     default_reply: 'Thank you for your message! I will get back to you shortly. 🙏',
     business_name: '',
     owner_name: '',
@@ -1916,6 +1917,22 @@ async function getRecentBrochureDropEvents(userId, limit = 50) {
     );
 }
 
+async function hasBrochureBeenSentRecently(userId, phone, projectId, windowHours = 24) {
+    if (!userId || !phone || !projectId) return false;
+    const hours = Math.max(1, Math.min(720, Number(windowHours) || 24));
+    const row = await queryGet(
+        `SELECT id FROM brochure_drop_events
+         WHERE user_id = $1
+           AND phone = $2
+           AND project_id = $3
+           AND action = 'assets_sent'
+           AND created_at > NOW() - ($4 * INTERVAL '1 hour')
+         LIMIT 1`,
+        [userId, phone, projectId, hours]
+    );
+    return Boolean(row);
+}
+
 module.exports = {
     initDatabase,
     closeDatabase,
@@ -2053,5 +2070,6 @@ module.exports = {
     deleteMediaAsset,
     getMediaAssetSendHistory,
     logBrochureDropEvent,
-    getRecentBrochureDropEvents
+    getRecentBrochureDropEvents,
+    hasBrochureBeenSentRecently
 };

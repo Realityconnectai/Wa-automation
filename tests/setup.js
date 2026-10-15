@@ -131,7 +131,9 @@ async function freshDatabase() {
                 'contacts', 'messages', 'chatbot_rules', 'scheduled_messages',
                 'settings', 'products', 'crm_deals', 'crm_activities', 'lead_analysis',
                 'google_calendar_accounts', 'google_calendar_synced_events',
-                'availability_settings', 'appointments'
+                'availability_settings', 'appointments',
+                'projects', 'units', 'unit_status_history', 'media_assets',
+                'brochure_drop_events', 'outreach_jobs', 'outreach_recipients'
             ];
             for (const table of appTables) {
                 const check = await p.query(`SELECT COUNT(*) as count FROM ${table}`);

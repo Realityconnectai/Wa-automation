@@ -484,6 +484,8 @@ const SETTINGS_SCHEMA = {
     business_currency:            { max: 8 },
     chatbot_throttle_reply:       { max: 500 },
     chatbot_media_ack_reply:      { max: 500 },
+    brochure_drop_enabled:        { type: 'bool' },
+    brochure_dedup_window_hours:  { max: 10 },
     brochure_triggers:            { max: 2000 },  // JSON array of trigger strings
     brochure_asset_selection:     { max: 4000 }   // JSON object: project id -> media asset ids
 };
