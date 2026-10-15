@@ -94,6 +94,7 @@ async function freshDatabase() {
         '../src/services/business',
         '../src/services/ai',
         '../src/services/gemini-client',
+        '../src/services/lead-assignment',
         '../src/services/appointment-reminders',
         '../src/services/availability',
         '../src/services/calendar-sync',
@@ -133,7 +134,8 @@ async function freshDatabase() {
                 'google_calendar_accounts', 'google_calendar_synced_events',
                 'availability_settings', 'appointments',
                 'projects', 'units', 'unit_status_history', 'media_assets',
-                'brochure_drop_events', 'outreach_jobs', 'outreach_recipients'
+                'brochure_drop_events', 'outreach_jobs', 'outreach_recipients',
+                'agents', 'lead_assignment_history', 'round_robin_cursors'
             ];
             for (const table of appTables) {
                 const check = await p.query(`SELECT COUNT(*) as count FROM ${table}`);
@@ -160,7 +162,7 @@ function createTestApp() {
 }
 
 /** Signs up a user through the real HTTP route and returns their cookie. */
-async function signup(agentOrApp, { email, password = 'ValidPass123!', businessName, ownerName, autoApprove = true } = {}) {
+async function signup(agentOrApp, { email, password = 'ValidPass123!', businessName, ownerName, autoApprove = true, role } = {}) {
     const request = require('supertest');
     const res = await request(agentOrApp)
         .post('/api/auth/signup')
@@ -177,7 +179,10 @@ async function signup(agentOrApp, { email, password = 'ValidPass123!', businessN
     } else if (autoApprove && user) {
         const { updateUser, getUserById } = require('../src/services/database');
         const { createSessionToken } = require('../src/config/auth');
-        await updateUser(user.id, { status: 'active', wa_enabled: 1 });
+        // Apply role elevation + activation together
+        const updatePayload = { status: 'active', wa_enabled: 1 };
+        if (role && role !== 'user') updatePayload.role = role;
+        await updateUser(user.id, updatePayload);
         user = await getUserById(user.id);
         cookie = `wa_session=${encodeURIComponent(createSessionToken(user))}`;
     }

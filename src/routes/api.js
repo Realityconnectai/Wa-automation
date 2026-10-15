@@ -33,6 +33,7 @@ const {
     assertSafeRegexSource, sanitizeSpreadsheetCell, validateSettingsPatch
 } = require('../utils/validate');
 const { maskEntityPhones, resolvePhoneForTenant } = require('../utils/phone-mask');
+const leadAssignment = require('../services/lead-assignment');
 
 // One request importing tens of thousands of rows would block the whole
 // (single-threaded) server for everyone else while it parses and writes —
@@ -830,7 +831,13 @@ router.get('/crm/deals', asyncHandler(async (req, res) => {
     const uid = req.user.id;
     const stage = optionalEnum(req.query.stage, CRM_STAGES, 'stage');
     const leadTemp = optionalEnum(req.query.temperature, ['HOT', 'WARM', 'COLD'], 'temperature');
-    const deals = await getCrmDeals(uid, { stage: stage || '', leadTemp: leadTemp || '' });
+    const slaStatus = optionalEnum(req.query.sla_status, ['on_time', 'approaching_sla', 'sla_breached', 'escalated'], 'sla_status');
+    // Agent role: only see own leads
+    let agentId = req.query.agent_id ? requireId(req.query.agent_id, 'agent_id') : null;
+    if (req.user.role === 'agent' && req.user.agent_id) {
+        agentId = req.user.agent_id;
+    }
+    const deals = await getCrmDeals(uid, { stage: stage || '', leadTemp: leadTemp || '', agentId, slaStatus: slaStatus || '' });
     const stats = await getCrmStats(uid);
     const currency = (await getSetting(uid, 'business_currency')) || '₹';
     res.json({
@@ -917,6 +924,9 @@ router.put('/crm/deals/:id', writeLimiter, requireDurableWrite, asyncHandler(asy
 }));
 
 router.delete('/crm/deals/:id', writeLimiter, asyncHandler(async (req, res) => {
+    if (req.user.role === 'agent') {
+        return res.status(403).json({ success: false, error: 'Agents cannot delete deals' });
+    }
     const id = requireId(req.params.id, 'deal id');
     const { changes } = await deleteCrmDeal(req.user.id, id);
     if (!changes) return res.status(404).json({ success: false, error: 'Deal not found' });
@@ -944,6 +954,110 @@ router.post('/crm/deals/phone/:phone/notes', writeLimiter, requireDurableWrite, 
     );
     const activity = await addCrmActivity(req.user.id, phone, 'note', content);
     res.json({ success: true, data: activity });
+}));
+
+// ─────────────────────────────────────────────────────────────
+//  AGENTS & LEAD ASSIGNMENT
+// ─────────────────────────────────────────────────────────────
+
+/** Middleware: require admin or manager role */
+function requireManagerOrAdmin(req, res, next) {
+    if (req.user.role !== 'admin' && req.user.role !== 'manager') {
+        return res.status(403).json({ success: false, error: 'Only admins and managers can perform this action' });
+    }
+    next();
+}
+
+router.get('/crm/agents', asyncHandler(async (req, res) => {
+    const agents = await leadAssignment.getAgents(req.user.id, { status: req.query.status || '' });
+    res.json({ success: true, agents, data: agents });
+}));
+
+router.get('/crm/agents/workload', asyncHandler(async (req, res) => {
+    const workload = await leadAssignment.getAgentWorkload(req.user.id);
+    res.json({ success: true, agents: workload, data: workload });
+}));
+
+router.post('/crm/agents', writeLimiter, requireDurableWrite, requireManagerOrAdmin, asyncHandler(async (req, res) => {
+    const uid = req.user.id;
+    const body = req.body || {};
+    const agent = await leadAssignment.createAgent(uid, {
+        name: requireString(body.name, 'name', { max: 200 }),
+        email: optionalString(body.email, 'email', 255),
+        phone: optionalString(body.phone, 'phone', 30),
+        role: body.role || 'agent',
+        status: body.status || 'active',
+        // Accept both naming conventions from callers
+        routingWeight: body.weight || body.routing_weight || 1,
+        maxActiveLeads: body.max_concurrent_leads || body.max_active_leads || 20,
+        userAccountId: body.user_account_id ? requireId(body.user_account_id, 'user_account_id') : null
+    });
+    res.status(201).json({ success: true, agent, data: agent });
+}));
+
+router.get('/crm/agents/:id', asyncHandler(async (req, res) => {
+    const agent = await leadAssignment.getAgentById(req.user.id, requireId(req.params.id, 'agent id'));
+    if (!agent) return res.status(404).json({ success: false, error: 'Agent not found' });
+    res.json({ success: true, data: agent });
+}));
+
+router.put('/crm/agents/:id', writeLimiter, requireDurableWrite, requireManagerOrAdmin, asyncHandler(async (req, res) => {
+    const uid = req.user.id;
+    const agentId = requireId(req.params.id, 'agent id');
+    const body = req.body || {};
+    const fields = {};
+    if (body.name !== undefined) fields.name = requireString(body.name, 'name', { max: 200 });
+    if (body.email !== undefined) fields.email = optionalString(body.email, 'email', 255);
+    if (body.phone !== undefined) fields.phone = optionalString(body.phone, 'phone', 30);
+    if (body.role !== undefined) fields.role = body.role;
+    if (body.status !== undefined) fields.status = body.status;
+    if (body.routing_weight !== undefined) fields.routing_weight = body.routing_weight;
+    if (body.max_active_leads !== undefined) fields.max_active_leads = body.max_active_leads;
+    if (body.user_account_id !== undefined) fields.user_account_id = body.user_account_id;
+    const agent = await leadAssignment.updateAgent(uid, agentId, fields);
+    if (!agent) return res.status(404).json({ success: false, error: 'Agent not found' });
+    res.json({ success: true, data: agent });
+}));
+
+router.delete('/crm/agents/:id', writeLimiter, requireManagerOrAdmin, asyncHandler(async (req, res) => {
+    const result = await leadAssignment.deleteAgent(req.user.id, requireId(req.params.id, 'agent id'));
+    if (!result.changes) return res.status(404).json({ success: false, error: 'Agent not found' });
+    res.json({ success: true });
+}));
+
+// ─── Lead Assignment & SLA ─────────────────────────────────
+router.post('/crm/deals/:id/assign', writeLimiter, requireDurableWrite, requireManagerOrAdmin, asyncHandler(async (req, res) => {
+    const uid = req.user.id;
+    const dealId = requireId(req.params.id, 'deal id');
+    const body = req.body || {};
+    const toAgentId = body.agent_id ? requireId(body.agent_id, 'agent_id') : null;
+    const strategy = body.strategy || null;
+    const reason = body.reason || (toAgentId ? 'manual_assignment' : 'auto');
+
+    const deal = await leadAssignment.assignLead(uid, dealId, {
+        agentId: toAgentId,
+        strategy,
+        assignedByUserId: req.user.accountId || null,
+        reason
+    });
+    res.json({ success: true, deal, data: deal });
+}));
+
+router.get('/crm/deals/:id/assignments', asyncHandler(async (req, res) => {
+    const uid = req.user.id;
+    const dealId = requireId(req.params.id, 'deal id');
+    const history = await leadAssignment.getAssignmentHistory(uid, dealId);
+    res.json({ success: true, history, data: history });
+}));
+
+router.get('/crm/deals/overdue', asyncHandler(async (req, res) => {
+    const uid = req.user.id;
+    if (req.user.role === 'agent') {
+        return res.status(403).json({ success: false, error: 'Only managers and admins can view overdue dashboard' });
+    }
+    const limit = clampInt(req.query.limit || 50, { min: 1, max: 200 });
+    const deals = await leadAssignment.getOverdueDeals(uid, { limit });
+    res.json({ success: true, data: maskEntityPhones({ deals }, req.user) });
 }));
 
 // ─────────────────────────────────────────────────────────────
