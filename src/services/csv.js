@@ -148,4 +148,39 @@ function mapContactRow(rawRow) {
     };
 }
 
-module.exports = { parseCSV, parseRows, mapContactRow, FIELD_ALIASES };
+function escapeCsvCell(rawVal) {
+    if (rawVal === null || rawVal === undefined) return '';
+    let val = String(rawVal);
+    // Formula injection mitigation: prepend a single quote if the value starts with =, +, -, @, tab, or CR
+    if (/^[=+\-@\t\r]/.test(val)) {
+        val = `'${val}`;
+    }
+    // RFC 4180: If the string contains comma, double quote, or newline, escape double quotes and wrap in quotes
+    if (/[",\r\n]/.test(val)) {
+        return `"${val.replace(/"/g, '""')}"`;
+    }
+    return val;
+}
+
+/**
+ * Serializes an array of objects to RFC 4180 CSV string.
+ * @param {Array<{key: string, label: string}|string>} columns - Column definitions or header strings
+ * @param {Array<object>} rows - Array of data objects
+ * @returns {string} - Complete CSV text
+ */
+function serializeCSV(columns, rows) {
+    if (!Array.isArray(columns) || columns.length === 0) return '';
+    const normCols = columns.map(col => {
+        if (typeof col === 'string') return { key: col, label: col };
+        return { key: col.key, label: col.label || col.key };
+    });
+
+    const headerLine = normCols.map(c => escapeCsvCell(c.label)).join(',');
+    const dataLines = (rows || []).map(row => {
+        return normCols.map(c => escapeCsvCell(row[c.key])).join(',');
+    });
+
+    return [headerLine, ...dataLines].join('\r\n');
+}
+
+module.exports = { parseCSV, parseRows, mapContactRow, FIELD_ALIASES, serializeCSV, escapeCsvCell };

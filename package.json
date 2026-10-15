@@ -13,6 +13,7 @@
     "test:security": "jest tests/auth.security.test.js --detectOpenHandles",
     "test:watch": "jest --watch",
     "test:db": "node scripts/run-tests-with-db.js",
+    "test:e2e:ui": "node scripts/run-e2e-with-db.js",
     "lint": "node scripts/lint.js",
     "check:secrets": "node scripts/check-secrets.js",
     "package": "node scripts/create-safe-archive.js",
@@ -44,6 +45,7 @@
     "@types/jest": "^30.0.0",
     "@types/supertest": "^7.2.1",
     "jest": "^30.4.2",
+    "playwright": "^1.64.0",
     "supertest": "^7.2.2",
     "ts-jest": "^29.4.12"
   },

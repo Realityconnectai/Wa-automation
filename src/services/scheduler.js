@@ -29,11 +29,12 @@ const cron = require('node-cron');
 const {
     getPendingScheduledMessages, updateScheduledMessageStatus, logMessage,
     claimScheduledMessage, reclaimStuckScheduledMessages, getUserById,
-    getMonthlyOutgoingCount, expireStaleHolds, getAppointmentById
+    getMonthlyOutgoingCount, expireStaleHolds, getAppointmentById, listUsers
 } = require('./database');
 const whatsappClient = require('./whatsapp-client');
 const { tryNormalizePhone } = require('../utils/validate');
 const { logOutreachEvent } = require('./google-calendar');
+const { checkAndEscalateOverdueSlas } = require('./lead-assignment');
 
 let schedulerTask = null;
 let isRunning = false;
@@ -68,6 +69,18 @@ async function initScheduler() {
             // Expire stale unit holds (all tenants) on every tick — idempotent
             const expired = await expireStaleHolds(null);
             if (expired > 0) console.log(`🔓 Scheduler: reverted ${expired} expired unit hold(s) to VACANT`);
+
+            // Check SLA breaches and escalate for all tenants
+            try {
+                const users = await listUsers();
+                for (const u of (users || [])) {
+                    if (u.status === 'active') {
+                        await checkAndEscalateOverdueSlas(u.id);
+                    }
+                }
+            } catch (slaErr) {
+                console.error('❌ Scheduler SLA escalation error (non-fatal):', slaErr.message);
+            }
         } catch (err) {
             console.error('❌ Scheduler tick error (non-fatal):', err.message);
         }

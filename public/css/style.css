@@ -3,8 +3,6 @@
    Deep green gradients on warm cream — clean, calm, smooth.
    ═══════════════════════════════════════════════════════════ */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap');
-
 /* ─── Reset ──────────────────────────────────────────────── */
 *, *::before, *::after {
     margin: 0;
@@ -2361,4 +2359,277 @@ iframe.asset-preview-media { min-height: 48vh; }
         animation-duration: 0.01ms !important;
         transition-duration: 0.01ms !important;
     }
+}
+
+/* ─── CSP Utility Classes ─────────────────────────────────── */
+[hidden] { display: none !important; }
+.d-none { display: none !important; }
+.m-0 { margin: 0 !important; }
+.mt-md { margin-top: var(--space-md); }
+.text-secondary { color: var(--color-text-secondary) !important; }
+.text-secondary-nowrap { white-space: nowrap; color: var(--color-text-secondary); }
+.text-secondary-sm { color: var(--color-text-secondary); font-size: 0.85rem; }
+.text-secondary-xs { color: var(--color-text-secondary); font-size: 0.78rem; }
+.text-secondary-ml-8 { color: var(--color-text-secondary); margin-left: 8px; }
+.text-error { color: var(--color-error) !important; }
+.text-warning { color: var(--color-warning) !important; }
+.text-success-bold { color: var(--color-success); font-weight: 600; }
+.text-nowrap { white-space: nowrap; }
+.flex-1 { flex: 1; }
+.w-full { width: 100% !important; }
+.w-10 { width: 2.5rem; }
+.text-2xl { font-size: 2rem; }
+.text-md { font-size: .95rem; }
+.overflow-x-auto { overflow-x: auto; }
+.grid-col-all { grid-column: 1 / -1; }
+
+.mt-16 { margin-top: 16px; }
+.mt-14 { margin-top: 14px; }
+.mt-12 { margin-top: 12px; }
+.mt-8 { margin-top: 8px; }
+.mt-6 { margin-top: 6px; }
+.mt-4 { margin-top: 4px; }
+.mt-2 { margin-top: 2px; }
+.mt-8-only { margin: 8px 0 0; }
+.mb-16 { margin-bottom: 16px; }
+.mb-12 { margin-bottom: 12px; }
+.mb-0 { margin-bottom: 0 !important; }
+.mb-sm { margin-bottom: var(--space-sm); }
+.font-bold-mb-sm { font-weight: 600; margin-bottom: var(--space-sm); }
+
+.filter-min-200 { margin: 0; min-width: 200px; }
+.filter-min-160 { margin: 0; min-width: 160px; }
+.filter-max-140 { margin: 0; max-width: 140px; }
+.filter-max-180 { margin: 0; max-width: 180px; }
+.flex-min-220 { flex: 1; min-width: 220px; }
+
+.flex-wrap-center { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.flex-wrap-gap-8 { display: flex; gap: 8px; flex-wrap: wrap; }
+.flex-wrap-gap-8-mb { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.flex-center-gap-8 { display: flex; gap: 8px; align-items: center; }
+.flex-between-mb-6 { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.pref-row-border { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--color-border); }
+.pref-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; }
+.flex-col-gap-12 { display: flex; flex-direction: column; gap: 12px; }
+.flex-wrap-mt-12 { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.pref-title { font-weight: 600; font-size: 0.9rem; color: var(--color-text-primary); }
+.pref-desc { font-size: 0.8rem; color: var(--color-text-secondary); margin-top: 2px; }
+.help-text-sm { font-size: .78rem; color: var(--color-text-secondary); margin-top: 4px; }
+.crm-temp-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--color-border); border-radius: 20px; font-size: 0.85rem; color: var(--color-text-secondary); cursor: pointer; margin: 0; }
+.badge-cal-connected { background: rgba(16,185,129,0.15); color: #10b981; font-size: 0.75rem; padding: 2px 8px; border-radius: 12px; }
+.badge-cal-syncing { font-size: 0.75rem; padding: 2px 8px; border-radius: 12px; }
+.error-heading { color: var(--color-error); font-weight: 600; margin-bottom: 12px; }
+.inline-flex-center-gap-6 { display: inline-flex; align-items: center; gap: 6px; }
+.qr-error-subtext { color: var(--color-text-secondary); font-size: .9rem; max-width: 340px; margin: 0 auto; line-height: 1.6; }
+.cursor-pointer-secondary { cursor: pointer; color: var(--color-text-secondary); font-size: .85rem; }
+
+.kanban-header-new { border-top: 3px solid #6B7280; }
+.kanban-header-contacted { border-top: 3px solid #3B82F6; }
+.kanban-header-qualified { border-top: 3px solid #8B5CF6; }
+.kanban-header-proposal { border-top: 3px solid #F59E0B; }
+.kanban-header-negotiation { border-top: 3px solid #F97316; }
+.kanban-header-won { border-top: 3px solid #22C55E; }
+.kanban-header-lost { border-top: 3px solid #EF4444; }
+
+/* ─── CSP-safe display utilities ────────────────────────── */
+.d-flex  { display: flex  !important; }
+.d-block { display: block !important; }
+.d-inline-block { display: inline-block !important; }
+
+/* ─── Status indicator colours ──────────────────────────── */
+.mode-demo  { color: #E3C15C; }
+.mode-live  { color: #4ADE80; }
+.status-color-success { color: var(--color-success); }
+.status-color-error   { color: var(--color-error); }
+.status-color-warning { color: var(--color-warning); }
+
+/* ─── API-key status badges ─────────────────────────────── */
+.api-key-active  { display: inline-block; background: rgba(34,197,94,0.15); color: #22c55e; }
+.api-key-missing { display: inline-block; background: rgba(239,68,68,0.15); color: #ef4444; }
+
+/* ─── QR reconnect container ────────────────────────────── */
+.qr-reconnect-box { text-align: center; padding: 24px 16px; }
+
+/* ─── Custom model wrapper ──────────────────────────────── */
+.custom-model-visible { display: block; }
+
+/* ═══════════════════════════════════════════════════════════
+   ITEM 5: MULTI-AGENT LEAD ASSIGNMENT & SLA ROUTING
+═══════════════════════════════════════════════════════════ */
+.agent-badge {
+    background: rgba(59, 130, 246, 0.12);
+    color: #2563EB;
+    border: 1px solid rgba(59, 130, 246, 0.25);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.agent-badge-unassigned {
+    background: var(--cream-subtle);
+    color: var(--color-text-secondary);
+    border: 1px dashed var(--color-border);
+}
+
+/* SLA Status badges */
+.sla-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.sla-on-time {
+    background: rgba(34, 197, 94, 0.12);
+    color: #16A34A;
+    border: 1px solid rgba(34, 197, 94, 0.25);
+}
+.sla-approaching {
+    background: rgba(245, 158, 11, 0.14);
+    color: #D97706;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+.sla-breached {
+    background: rgba(239, 68, 68, 0.14);
+    color: #DC2626;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+.sla-escalated {
+    background: rgba(147, 51, 234, 0.14);
+    color: #9333EA;
+    border: 1px solid rgba(147, 51, 234, 0.3);
+}
+
+/* Agent Workload Grid & Cards */
+.card-header-flex {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+}
+.agent-workload-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 14px;
+    margin-top: 10px;
+}
+.agent-card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: box-shadow 0.2s ease;
+}
+.agent-card:hover {
+    box-shadow: var(--shadow-sm);
+}
+.agent-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+.agent-name {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--color-text-primary);
+}
+.agent-role-pill {
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.agent-role-agent {
+    background: rgba(59, 130, 246, 0.1);
+    color: #2563EB;
+}
+.agent-role-manager {
+    background: rgba(147, 51, 234, 0.1);
+    color: #7C3AED;
+}
+.agent-role-admin {
+    background: rgba(234, 88, 12, 0.1);
+    color: #C2410C;
+}
+.agent-contact-line {
+    font-size: 0.8rem;
+    color: var(--color-text-secondary);
+}
+.agent-load-meter {
+    margin-top: 4px;
+}
+.agent-load-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.78rem;
+    color: var(--color-text-secondary);
+    margin-bottom: 4px;
+}
+.agent-load-bar-wrap {
+    height: 6px;
+    background: var(--cream-subtle);
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+}
+.agent-load-bar-fill {
+    height: 100%;
+    background: var(--color-primary);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+.agent-load-high {
+    background: var(--color-warning);
+}
+.agent-load-full {
+    background: var(--color-error);
+}
+.agent-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+    justify-content: flex-end;
+}
+
+/* Deal Modal Assignment & SLA Box */
+.deal-assignment-box {
+    background: var(--cream-subtle);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 12px;
+    margin-bottom: 14px;
+}
+.deal-assignment-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.reassign-form {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+.reassign-form select,
+.reassign-form input {
+    margin-bottom: 0;
+    font-size: 0.85rem;
+}
+.assignment-history-item {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--color-border);
+    font-size: 0.82rem;
+    color: var(--color-text-secondary);
+}
+.assignment-history-item:last-child {
+    border-bottom: none;
+}
+.assignment-history-time {
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
 }

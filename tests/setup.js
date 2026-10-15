@@ -15,6 +15,24 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
+// ─── Load .env.test if present (ensures DATABASE_URL and opt-in flags are set) ──
+// This is needed for Windows where shell env propagation to Jest workers is unreliable.
+{
+    const envTestPath = path.resolve(__dirname, '..', '.env.test');
+    if (fs.existsSync(envTestPath)) {
+        const raw = fs.readFileSync(envTestPath, 'utf8');
+        for (const line of raw.split(/\r?\n/)) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) continue;
+            const eqIdx = trimmed.indexOf('=');
+            if (eqIdx < 1) continue;
+            const key = trimmed.slice(0, eqIdx).trim();
+            const val = trimmed.slice(eqIdx + 1).trim();
+            if (!process.env[key]) process.env[key] = val;
+        }
+    }
+}
+
 // ─── Scrub production-only env vars before any module load ──────────────────
 delete process.env.BOOTSTRAP_ADMIN_EMAIL;
 delete process.env.GOOGLE_CALENDAR_CLIENT_ID;

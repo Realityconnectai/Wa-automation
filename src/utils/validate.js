@@ -487,7 +487,13 @@ const SETTINGS_SCHEMA = {
     brochure_drop_enabled:        { type: 'bool' },
     brochure_dedup_window_hours:  { max: 10 },
     brochure_triggers:            { max: 2000 },  // JSON array of trigger strings
-    brochure_asset_selection:     { max: 4000 }   // JSON object: project id -> media asset ids
+    brochure_asset_selection:     { max: 4000 },  // JSON object: project id -> media asset ids
+    lead_assignment_enabled:      { type: 'bool' },
+    lead_assignment_strategy:     { type: 'enum', values: ['round_robin', 'workload', 'manual'] },
+    lead_sla_minutes:             { max: 10 },
+    lead_sla_warning_minutes:     { max: 10 },
+    lead_escalation_enabled:      { type: 'bool' },
+    lead_escalation_manager_agent_id: { max: 20 }
 };
 
 /** Keys the server writes itself and a client must never be able to set. */

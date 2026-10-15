@@ -1,5 +1,7 @@
 # Dependencies
 node_modules/
+.pw-browsers/
+test-suite-output/
 
 # Environment Variables & Secrets
 .env
@@ -100,4 +102,4 @@ gmail-src/
 *-deploy-aws.sh
 deploy-*.sh
 AWS_DEPLOYMENT.md
-
+

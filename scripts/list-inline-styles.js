@@ -20,8 +20,18 @@ function walk(dir) {
 }
 walk(root);
 const groups = new Map();
-for (const row of rows) groups.set(row.style, [...(groups.get(row.style) || []), row]);
-for (const [style, occurrences] of [...groups].sort((a, b) => b[1].length - a[1].length)) {
-    console.log(`${occurrences.length}\t${JSON.stringify(style)}\t${occurrences.map(r => `${r.file}:${r.line}`).join(', ')}`);
+const byFile = new Map();
+for (const row of rows) {
+    groups.set(row.style, [...(groups.get(row.style) || []), row]);
+    byFile.set(row.file, [...(byFile.get(row.file) || []), row]);
 }
-console.error(`Inline style attributes: ${rows.length}`);
+for (const [file, items] of byFile) {
+    console.log(`\n=== ${file} (${items.length} styles) ===`);
+    for (const item of items) {
+        console.log(`  L${item.line}: style="${item.style}"`);
+    }
+}
+console.error(`\nTotal inline style attributes: ${rows.length}`);
+if (process.argv.includes('--check') && rows.length > 0) {
+    process.exit(1);
+}

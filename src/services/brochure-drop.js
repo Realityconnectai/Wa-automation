@@ -162,7 +162,7 @@ async function tryBrochureDrop(userId, phone, contactName, text, client, msg, in
 
     // 0b. Respect contact opt-out / DND status
     const contact = await getContactByPhone(userId, phone);
-    if (contact && (contact.opted_out === true || /^(opt[-_]?out|dnd|do\s*not\s*contact|unsub(scribe)?)$/i.test(contact.label || ''))) {
+    if (contact && (contact.is_opted_out === true || contact.opted_out === true || /^(opt[-_]?out|dnd|do\s*not\s*contact|unsub(scribe)?)$/i.test(contact.label || ''))) {
         return { handled: false, reason: 'opted_out' };
     }
 

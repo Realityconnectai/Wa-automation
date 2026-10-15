@@ -1,6 +1,8 @@
 const {
     getChatbotRules, incrementRuleHitCount, getSetting, getConversation,
-    logMessage, getUserById, getMonthlyOutgoingCount
+    logMessage, getUserById, getMonthlyOutgoingCount,
+    setContactOptOut, getContactOptOutStatus, isConversationAiPaused,
+    cancelScheduledMessagesForPhone
 } = require('./database');
 const { generateReply } = require('./ai');
 const { scheduleAutoAnalysis } = require('./lead-analyzer');
@@ -108,7 +110,7 @@ function ruleMatches(rule, text) {
 }
 
 // ─── Human Simulation (Delay & Typing) ──────────────────────
-async function safeReply(client, phone, responseText, msg) {
+async function safeReply(client, phone, responseText, msg = null, userId = null) {
     // Show typing indicator
     if (msg && client) {
         try {
@@ -120,22 +122,32 @@ async function safeReply(client, phone, responseText, msg) {
         }
     }
 
-    // Random human-like delay between 1.5–3 seconds
-    const delayMs = Math.floor(Math.random() * 1500) + 1500;
+    // Random human-like delay between 1.5–3 seconds (skip or minimum if in test)
+    const delayMs = process.env.NODE_ENV === 'test' ? 10 : Math.floor(Math.random() * 1500) + 1500;
     await new Promise(resolve => setTimeout(resolve, delayMs));
 
     // Send reply — prefer msg.reply() to avoid WhatsApp LID format issues
     try {
-        if (msg) {
+        if (msg && typeof msg.reply === 'function') {
             await msg.reply(responseText);
-        } else if (client) {
+        } else if (client && typeof client.sendMessage === 'function') {
             const chatId = phone.includes('@') ? phone : `${phone}@c.us`;
             await client.sendMessage(chatId, responseText);
+        } else if (userId) {
+            const whatsappClient = require('./whatsapp-client');
+            if (typeof whatsappClient.sendText === 'function') {
+                await whatsappClient.sendText(userId, phone, responseText);
+            }
         }
     } catch (sendErr) {
         console.error('   ❌ Primary reply failed, attempting fallback...', sendErr.message?.split('\n')[0]);
-        if (client && msg && msg.from) {
+        if (client && msg && msg.from && typeof client.sendMessage === 'function') {
             await client.sendMessage(msg.from, responseText);
+        } else if (userId) {
+            const whatsappClient = require('./whatsapp-client');
+            if (typeof whatsappClient.sendText === 'function') {
+                await whatsappClient.sendText(userId, phone, responseText);
+            }
         } else {
             throw sendErr;
         }
@@ -143,13 +155,31 @@ async function safeReply(client, phone, responseText, msg) {
 }
 
 // ─── Process an incoming message through chatbot rules (serialized) ──────
-function processMessage(userId, phone, messageText, contactName = '', client = null, msg = null) {
-    return conversationQueue.enqueue(userId, phone, () =>
-        _processMessageInternal(userId, phone, messageText, contactName, client, msg)
+function processMessage(userId, arg2, arg3, arg4 = '', arg5 = null, arg6 = null) {
+    let phone, messageText, contactName, client, msg;
+    if (typeof arg2 === 'object' && arg2 !== null) {
+        msg = arg2;
+        phone = (msg.from || '').replace(/@.*$/, '');
+        messageText = msg.body || '';
+        contactName = msg.senderName || msg.contactName || '';
+        client = arg3 || null;
+    } else {
+        phone = arg2;
+        messageText = arg3 || '';
+        contactName = arg4 || '';
+        client = arg5 || null;
+        msg = arg6 || null;
+    }
+    const cleanPhone = String(phone || '').replace(/@.*$/, '');
+    const cleanMsg = String(messageText || '');
+    return conversationQueue.enqueue(userId, cleanPhone, () =>
+        _processMessageInternal(userId, cleanPhone, cleanMsg, contactName, client, msg)
     );
 }
 
 async function _processMessageInternal(userId, phone, messageText, contactName = '', client = null, msg = null) {
+    messageText = messageText || '';
+    phone = String(phone || '').replace(/@.*$/, '');
     // Log without the message body: this runs for every inbound message, and
     // customer message content in stdout ends up in any log aggregator,
     // container log, or terminal scrollback. Phone is partially masked for
@@ -173,6 +203,50 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
         scheduleAutoAnalysis(userId, phone);
     } catch (analysisErr) {
         console.error('   ⚠️ Could not schedule lead analysis:', analysisErr.message);
+    }
+
+    const cleanText = (messageText || '').trim();
+
+    // ── 0a. Compliance: Inbound STOP / UNSUBSCRIBE Keyword Handling ──
+    if (/^(stop|unsubscribe|cancel|opt[-_\s]?out|quit|end)$/i.test(cleanText)) {
+        console.log(`🛑 [user ${userId}] Inbound opt-out request received from ${maskPhone(phone)}`);
+        await setContactOptOut(userId, phone, true, 'Inbound STOP keyword');
+        await cancelScheduledMessagesForPhone(userId, phone);
+        const optOutReply = "You have been unsubscribed and will not receive further automated messages. Reply START to resubscribe.";
+        try {
+            await safeReply(client, phone, optOutReply, msg, userId);
+            await logMessage(userId, { phone, contactName, direction: 'outgoing', body: optOutReply });
+        } catch (e) {
+            console.warn(`   ⚠️ [user ${userId}] Could not send opt-out reply:`, e.message?.split('\n')[0]);
+        }
+        return { replied: true, reason: 'opt_out' };
+    }
+
+    // ── 0b. Compliance: Inbound START / UNSTOP Keyword Handling (Opt back in) ──
+    if (/^(start|unstop)$/i.test(cleanText)) {
+        console.log(`🟢 [user ${userId}] Inbound opt-in request received from ${maskPhone(phone)}`);
+        await setContactOptOut(userId, phone, false, 'Inbound START keyword');
+        const optInReply = "You have been resubscribed to messages. How can we help you today?";
+        try {
+            await safeReply(client, phone, optInReply, msg, userId);
+            await logMessage(userId, { phone, contactName, direction: 'outgoing', body: optInReply });
+        } catch (e) {
+            console.warn(`   ⚠️ [user ${userId}] Could not send opt-in reply:`, e.message?.split('\n')[0]);
+        }
+        return { replied: true, reason: 'opt_in' };
+    }
+
+    // ── 0c. Compliance: If contact has opted out, suppress all automated replies ──
+    const optOutStatus = await getContactOptOutStatus(userId, phone);
+    if (optOutStatus && optOutStatus.is_opted_out) {
+        console.log(`🔇 [user ${userId}] Message from opted-out contact ${maskPhone(phone)} saved; auto-reply suppressed.`);
+        return { replied: false, reason: 'contact_opted_out' };
+    }
+
+    // ── 0d. Human Takeover / AI Pause Check ──
+    if (await isConversationAiPaused(userId, phone)) {
+        console.log(`🧑 [user ${userId}] Human takeover active for ${maskPhone(phone)}: auto-reply paused.`);
+        return { replied: false, reason: 'human_takeover' };
     }
 
     if (isRateLimited(userId, phone)) {
@@ -375,7 +449,14 @@ function __resetRateLimits() {
     throttleReplySentAt.clear();
 }
 
-module.exports = { processMessage, testMessage, ruleMatches, maskPhone, __resetRateLimits };
+module.exports = {
+    processMessage,
+    handleIncomingMessage: processMessage,
+    testMessage,
+    ruleMatches,
+    maskPhone,
+    __resetRateLimits
+};
 
 
 

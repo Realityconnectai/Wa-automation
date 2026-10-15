@@ -61,6 +61,7 @@ async function checkAuth() {
 }
 
 async function logout() {
+    stopSSE();
     try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (e) {}
     window.location.href = '/login';
 }
@@ -355,11 +356,11 @@ async function loadMessages() {
                 <td><span class="badge badge-${msg.direction}">${msg.direction === 'incoming' ? Icon('arrow-down-left') + ' In' : Icon('arrow-up-right') + ' Out'}</span></td>
                 <td>
                     <button class="btn btn-secondary btn-sm" type="button" data-open-conversation="${escapeHtml(msg.phone)}">${escapeHtml(msg.contact_name || maskConversationPhone(msg.phone))}</button>
-                    ${msg.contact_name ? `<br><small style="color:var(--color-text-secondary)">${maskConversationPhone(msg.phone)}</small>` : ''}
+                    ${msg.contact_name ? `<br><small class="text-secondary">${maskConversationPhone(msg.phone)}</small>` : ''}
                 </td>
                 <td><span class="msg-truncate">${escapeHtml(msg.body)}</span>${msg.message_type && msg.message_type !== 'text' ? ` <span class="badge badge-incoming">${escapeHtml(msg.message_type)}</span>` : ''}</td>
                 <td><span class="badge badge-${msg.status}">${escapeHtml(msg.status)}</span></td>
-                <td style="white-space:nowrap;color:var(--color-text-secondary)">${formatDate(msg.created_at)}</td>
+                <td class="text-secondary-nowrap">${formatDate(msg.created_at)}</td>
             </tr>
         `).join('');
     } catch (err) {
@@ -370,7 +371,11 @@ async function loadMessages() {
 }
 
 function closeConversationModal() {
-    document.getElementById('conversationModalBackdrop').style.display = 'none';
+    const backdrop = document.getElementById('conversationModalBackdrop');
+    if (backdrop) {
+        backdrop.hidden = true;
+        backdrop.style.display = 'none';
+    }
 }
 
 async function openConversation(phone) {
@@ -379,7 +384,10 @@ async function openConversation(phone) {
     const title = document.getElementById('conversationModalTitle');
     title.textContent = `Conversation · ${maskConversationPhone(phone)}`;
     body.innerHTML = '<div class="empty-state">Loading conversation…</div>';
-    backdrop.style.display = 'flex';
+    if (backdrop) {
+        backdrop.hidden = false;
+        backdrop.style.display = 'flex';
+    }
     try {
         const messages = await api(`/api/messages/conversation/${encodeURIComponent(phone)}?limit=500`);
         if (!messages.length) {
@@ -388,7 +396,7 @@ async function openConversation(phone) {
         }
         const contactName = messages.find(message => message.contact_name)?.contact_name || '';
         title.textContent = contactName ? `Conversation · ${contactName}` : `Conversation · ${maskConversationPhone(phone)}`;
-        body.innerHTML = `<div class="conversation-thread" aria-live="polite">${messages.map(message => `<article class="conversation-message ${message.direction === 'outgoing' ? 'outgoing' : 'incoming'}"><div class="conversation-media">${message.message_type !== 'text' ? `${escapeHtml(message.message_type)} attachment${message.media_asset_id ? ` <button class="btn btn-secondary btn-sm" type="button" data-message-media="${message.media_asset_id}">Preview</button>` : message.direction === 'incoming' ? ' · metadata only (file is not stored)' : ' (metadata only)'}` : ''}</div><p>${escapeHtml(message.body || '(no text)')}</p><small class="conversation-meta">${escapeHtml(formatDate(message.created_at))} · ${escapeHtml(message.status || 'unknown')}</small></article>`).join('')}</div><form id="conversationReplyForm" class="form-group" style="margin-top:14px"><label for="conversationReply">Manual reply</label><textarea id="conversationReply" rows="3" maxlength="4000" required placeholder="Write a reply…"></textarea><div class="modal-actions"><button class="btn btn-primary" type="submit">Send reply</button><button class="btn btn-secondary" type="button" id="conversationCloseBtn">Close</button></div></form>`;
+        body.innerHTML = `<div class="conversation-thread" aria-live="polite">${messages.map(message => `<article class="conversation-message ${message.direction === 'outgoing' ? 'outgoing' : 'incoming'}"><div class="conversation-media">${message.message_type !== 'text' ? `${escapeHtml(message.message_type)} attachment${message.media_asset_id ? ` <button class="btn btn-secondary btn-sm" type="button" data-message-media="${message.media_asset_id}">Preview</button>` : message.direction === 'incoming' ? ' · metadata only (file is not stored)' : ' (metadata only)'}` : ''}</div><p>${escapeHtml(message.body || '(no text)')}</p><small class="conversation-meta">${escapeHtml(formatDate(message.created_at))} · ${escapeHtml(message.status || 'unknown')}</small></article>`).join('')}</div><form id="conversationReplyForm" class="form-group mt-14"><label for="conversationReply">Manual reply</label><textarea id="conversationReply" rows="3" maxlength="4000" required placeholder="Write a reply…"></textarea><div class="modal-actions"><button class="btn btn-primary" type="submit">Send reply</button><button class="btn btn-secondary" type="button" id="conversationCloseBtn">Close</button></div></form>`;
         body.querySelector('#conversationCloseBtn').addEventListener('click', closeConversationModal);
         body.querySelectorAll('[data-message-media]').forEach(button => button.addEventListener('click', async () => {
             button.disabled = true;
@@ -466,14 +474,14 @@ async function loadLeads() {
         // Chats not yet analyzed (or with new messages)
         if (pending.length > 0 && !interest && !priority) {
             html += `
-                <div class="card" style="margin-bottom:16px">
+                <div class="card mb-16">
                     <h2 class="card-title">${Icon('hourglass', 'icon-inline')}Awaiting Analysis (${pending.length})</h2>
                     <div class="pending-leads">
                         ${pending.map(p => `
                             <div class="pending-lead-row">
                                 <div>
                                     <strong>${escapeHtml(p.contact_name || p.phone)}</strong>
-                                    <small style="color:var(--color-text-secondary);margin-left:8px">${escapeHtml(p.phone)} · ${p.message_count} msgs</small>
+                                    <small class="text-secondary-ml-8">${escapeHtml(p.phone)} · ${p.message_count} msgs</small>
                                 </div>
                                 <button class="btn btn-sm btn-secondary" data-action="analyze-lead" data-phone="${escapeHtml(p.phone)}" type="button">${Icon('brain', 'icon-inline')}Analyze</button>
                             </div>
@@ -512,7 +520,7 @@ function renderLeadCard(lead) {
             <div class="lead-card-header">
                 <div class="lead-identity">
                     <strong>${escapeHtml(lead.contact_name || lead.phone)}</strong>
-                    <small style="color:var(--color-text-secondary)">${escapeHtml(lead.phone)}</small>
+                    <small class="text-secondary">${escapeHtml(lead.phone)}</small>
                 </div>
                 <div class="lead-badges">
                     <span class="lead-badge ${interest.cls}">${interest.label()}</span>
@@ -536,7 +544,7 @@ function renderLeadCard(lead) {
                 </div>` : ''}
 
             <div class="lead-card-footer">
-                <span style="color:var(--color-text-secondary);font-size:0.78rem">
+                <span class="text-secondary-xs">
                     ${escapeHtml(lead.priority_reason || '')}
                     · Sentiment: ${escapeHtml(lead.sentiment)}
                     · ${lead.message_count} msgs
@@ -636,12 +644,15 @@ function renderHtmlLegend(containerId, items) {
     const el = document.getElementById(containerId);
     if (!el) return;
     const total = items.reduce((s, i) => s + i.value, 0) || 1;
-    el.innerHTML = items.map(i => `
+    el.innerHTML = items.map((i, idx) => `
         <div class="chart-legend-row">
-            <span class="chart-legend-swatch" style="background:${i.color}"></span>
+            <span class="chart-legend-swatch" data-legend-idx="${idx}"></span>
             <span class="chart-legend-label">${escapeHtml(i.label)}</span>
             <span class="chart-legend-value">${i.formatted !== undefined ? i.formatted : i.value} · ${Math.round(i.value / total * 100)}%</span>
         </div>`).join('');
+    el.querySelectorAll('.chart-legend-swatch').forEach((swatch, idx) => {
+        if (items[idx]?.color) swatch.style.backgroundColor = items[idx].color;
+    });
 }
 
 function renderCrmCharts(a) {
@@ -819,17 +830,65 @@ function renderCrmCharts(a) {
     }
 }
 
+let isCrmOverdueActive = false;
+
+function getSlaBadge(deal) {
+    if (!deal.sla_status) return '';
+    if (deal.first_response_at) {
+        return `<span class="lead-badge sla-badge sla-on-time">${Icon('check-circle', 'icon-inline')}Responded</span>`;
+    }
+    switch (deal.sla_status) {
+        case 'sla_on_time':
+            return `<span class="lead-badge sla-badge sla-on-time">${Icon('clock', 'icon-inline')}SLA OK</span>`;
+        case 'sla_approaching':
+            return `<span class="lead-badge sla-badge sla-approaching">${Icon('alert-circle', 'icon-inline')}SLA Due Soon</span>`;
+        case 'sla_breached':
+            return `<span class="lead-badge sla-badge sla-breached">${Icon('alert-triangle', 'icon-inline')}SLA Breached</span>`;
+        case 'escalated':
+            return `<span class="lead-badge sla-badge sla-escalated">${Icon('shield-alert', 'icon-inline')}Escalated</span>`;
+        default:
+            return '';
+    }
+}
+
 async function loadCrm() {
     clearErrorBanner('crmError');
     try {
         const temperature = document.getElementById('crmTemperatureFilter')?.value || '';
-        const endpoint = temperature ? `/api/crm/deals?temperature=${encodeURIComponent(temperature)}` : '/api/crm/deals';
+        const agentId = document.getElementById('crmAgentFilter')?.value || '';
+        const slaStatus = document.getElementById('crmSlaFilter')?.value || '';
+
+        let endpoint = '/api/crm/deals';
+        if (isCrmOverdueActive) {
+            endpoint = '/api/crm/deals/overdue';
+        } else {
+            const params = new URLSearchParams();
+            if (temperature) params.set('temperature', temperature);
+            if (agentId) params.set('agent_id', agentId);
+            if (slaStatus) params.set('sla_status', slaStatus);
+            const qs = params.toString();
+            if (qs) endpoint += '?' + qs;
+        }
+
         const [{ deals, stats, stages, currency }, analytics] = await Promise.all([
             api(endpoint),
             api('/api/crm/analytics').catch(() => null)
         ]);
         crmCurrency = currency || '₹';
         crmDealsCache = deals;
+
+        // Populate agent filter if empty
+        const agentFilterEl = document.getElementById('crmAgentFilter');
+        if (agentFilterEl && agentFilterEl.options.length <= 1) {
+            api('/api/crm/agents').then(agents => {
+                (agents || []).forEach(a => {
+                    const opt = document.createElement('option');
+                    opt.value = a.id;
+                    opt.textContent = `${a.name} (${a.role})`;
+                    agentFilterEl.appendChild(opt);
+                });
+            }).catch(() => {});
+        }
 
         document.getElementById('valCrmPipeline').textContent = fmtMoney(stats.pipelineValue);
         animateValue('valCrmOpen', stats.openDeals);
@@ -843,10 +902,10 @@ async function loadCrm() {
 
         if (deals.length === 0) {
             board.innerHTML = `
-                <div class="empty-state" style="grid-column: 1 / -1">
+                <div class="empty-state grid-col-all">
                     <span class="empty-state-icon" aria-hidden="true">${Icon('trending-up')}</span>
-                    <div class="empty-state-title">No deals yet</div>
-                    <p>Run a lead analysis (Lead Analysis tab) or add a deal manually — sales chats become deals automatically.</p>
+                    <div class="empty-state-title">No deals found</div>
+                    <p>${isCrmOverdueActive ? 'No overdue deals requiring escalation right now.' : 'Run a lead analysis (Lead Analysis tab) or add a deal manually — sales chats become deals automatically.'}</p>
                 </div>`;
             return;
         }
@@ -857,7 +916,7 @@ async function loadCrm() {
             const stageValue = stageDeals.reduce((sum, d) => sum + (parseFloat(d.deal_value) || 0), 0);
             return `
                 <div class="kanban-column" data-stage="${stage}">
-                    <div class="kanban-column-header" style="border-top: 3px solid ${meta.color}">
+                    <div class="kanban-column-header kanban-header-${stage}">
                         <span class="kanban-column-title">${meta.label()}</span>
                         <span class="kanban-column-meta">${stageDeals.length}${stageValue ? ` · ${fmtMoney(stageValue)}` : ''}</span>
                     </div>
@@ -878,6 +937,10 @@ function renderDealCard(deal) {
     const priorityBadge = deal.priority
         ? `<span class="lead-badge ${(PRIORITY_META[deal.priority] || PRIORITY_META.low).cls}">${(PRIORITY_META[deal.priority] || PRIORITY_META.low).label()}</span>`
         : '';
+    const agentBadge = deal.assigned_agent_name
+        ? `<span class="lead-badge agent-badge">${Icon('user', 'icon-inline')}${escapeHtml(deal.assigned_agent_name)}</span>`
+        : `<span class="lead-badge agent-badge-unassigned">Unassigned</span>`;
+    const slaBadge = getSlaBadge(deal);
 
     return `
         <button class="deal-card" type="button" data-open-deal="${escapeHtml(deal.phone)}">
@@ -887,6 +950,8 @@ function renderDealCard(deal) {
             </div>
             ${deal.product_interest ? `<div class="deal-product">${Icon('package', 'icon-inline')}${escapeHtml(deal.product_interest)}</div>` : ''}
             <div class="deal-card-badges">
+                ${agentBadge}
+                ${slaBadge}
                 ${priorityBadge}
                 ${deal.lead_temp ? `<span class="lead-badge lead-temp-${escapeHtml(deal.lead_temp.toLowerCase())}">${escapeHtml(deal.lead_temp)}</span>` : ''}
                 ${deal.interest_score ? `<span class="lead-badge lead-badge-score">${deal.interest_score}/100</span>` : ''}
@@ -904,14 +969,19 @@ async function openDealModal(phone) {
     const body = document.getElementById('dealModalBody');
     const title = document.getElementById('dealModalTitle');
 
-    backdrop.style.display = 'flex';
+    if (backdrop) {
+        backdrop.hidden = false;
+        backdrop.style.display = 'flex';
+    }
     body.innerHTML = '<div class="empty-state">Loading deal…</div>';
 
     try {
-        const [{ deal, analysis, activities }, projects] = await Promise.all([
+        const [{ deal, analysis, activities }, projects, agentsList] = await Promise.all([
             api(`/api/crm/deals/phone/${encodeURIComponent(phone)}`),
-            api('/api/inventory/projects')
+            api('/api/inventory/projects'),
+            api('/api/crm/agents').catch(() => [])
         ]);
+        const assignments = await api(`/api/crm/deals/${deal.id}/assignments`).catch(() => []);
         title.textContent = deal.contact_name || deal.phone;
 
         const followupVal = deal.next_followup_at ? deal.next_followup_at.replace(' ', 'T').slice(0, 16) : '';
@@ -964,10 +1034,58 @@ async function openDealModal(phone) {
                 </div>
             </div>
 
+            <div class="modal-section">
+                <h3>${Icon('users', 'icon-inline')}Lead Assignment &amp; Response SLA</h3>
+                <div class="deal-assignment-box">
+                    <div class="deal-assignment-row">
+                        <div>
+                            <strong>Assigned Agent:</strong>
+                            ${deal.assigned_agent_name
+                                ? `<span class="lead-badge agent-badge">${Icon('user', 'icon-inline')}${escapeHtml(deal.assigned_agent_name)} (${escapeHtml(deal.assigned_agent_role || 'agent')})</span>`
+                                : '<span class="lead-badge agent-badge-unassigned">Unassigned</span>'}
+                        </div>
+                        <div>
+                            <strong>SLA Status:</strong>
+                            ${getSlaBadge(deal)}
+                        </div>
+                    </div>
+                    <div class="deal-assignment-row mt-8">
+                        <div>
+                            <small class="text-secondary">Due: ${deal.sla_response_due_at ? formatDate(deal.sla_response_due_at) : 'None'}</small>
+                        </div>
+                        <div>
+                            <small class="text-secondary">First Replied: ${deal.first_response_at ? formatDate(deal.first_response_at) : 'Pending'}</small>
+                        </div>
+                    </div>
+                    <div class="reassign-form">
+                        <select id="modalReassignAgent">
+                            <option value="">-- Reassign to Agent --</option>
+                            ${(agentsList || []).map(a => `<option value="${a.id}" ${deal.assigned_agent_id === a.id ? 'selected' : ''}>${escapeHtml(a.name)} (${escapeHtml(a.role)} - ${escapeHtml(a.routing_status)})</option>`).join('')}
+                        </select>
+                        <input type="text" id="modalReassignReason" placeholder="Reassignment reason (optional)">
+                        <button class="btn btn-secondary btn-sm" id="modalReassignBtn" data-deal-action="reassign" type="button" data-deal-id="${deal.id}">${Icon('shuffle', 'icon-inline')}Reassign</button>
+                    </div>
+                </div>
+                ${assignments && assignments.length ? `
+                <div class="assignment-history">
+                    <small class="font-bold">Assignment History:</small>
+                    ${assignments.map(h => `
+                        <div class="assignment-history-item">
+                            <span>${h.from_agent_name ? escapeHtml(h.from_agent_name) : 'System/New'} → <strong>${escapeHtml(h.to_agent_name || 'Unassigned')}</strong></span>
+                            ${h.reason ? ` · <em>${escapeHtml(h.reason)}</em>` : ''}
+                            <span class="assignment-history-time"> · ${formatDate(h.created_at)}</span>
+                        </div>
+                    `).join('')}
+                </div>` : ''}
+            </div>
+
             <div class="modal-actions">
                 <button class="btn btn-primary btn-sm" data-deal-action="save" data-deal-id="${deal.id}" type="button">${Icon('save', 'icon-inline')}Save Changes</button>
+                <button class="btn ${deal.is_ai_paused ? 'btn-success' : 'btn-warning'} btn-sm" data-deal-action="toggle-ai" data-deal-id="${deal.id}" data-deal-paused="${deal.is_ai_paused ? 'true' : 'false'}" type="button">
+                    ${deal.is_ai_paused ? Icon('play', 'icon-inline') + ' Resume AI' : Icon('pause', 'icon-inline') + ' Human Takeover (Pause AI)'}
+                </button>
                 <button class="btn btn-danger btn-sm" data-deal-action="delete" data-deal-id="${deal.id}" type="button">${Icon('trash-2', 'icon-inline')}Delete Deal</button>
-                <small style="color:var(--color-text-secondary)">${escapeHtml(deal.phone)} · Source: ${escapeHtml(deal.source || 'whatsapp')}</small>
+                <small class="text-secondary">${escapeHtml(deal.phone)} · Source: ${escapeHtml(deal.source || 'whatsapp')}${deal.is_ai_paused ? ' · <span class="badge badge-warning">AI Paused</span>' : ''}</small>
             </div>
 
             ${analysis ? `
@@ -978,7 +1096,7 @@ async function openDealModal(phone) {
                 </div>` : `
                 <div class="modal-section">
                     <h3>${Icon('target', 'icon-inline')}AI Conversation Insight</h3>
-                    <p style="color:var(--color-text-secondary);font-size:0.85rem">Not analyzed yet — run it from the Lead Analysis tab.</p>
+                    <p class="text-secondary-sm">Not analyzed yet — run it from the Lead Analysis tab.</p>
                 </div>`}
 
             <div class="modal-section">
@@ -988,7 +1106,7 @@ async function openDealModal(phone) {
                     <button class="btn btn-secondary btn-sm" data-deal-action="note" type="button">Add</button>
                 </div>
                 <div class="activity-timeline" id="modalActivities">
-                    ${activities.length ? activities.map(renderActivity).join('') : '<p style="color:var(--color-text-secondary);font-size:0.85rem">No activity yet.</p>'}
+                    ${activities.length ? activities.map(renderActivity).join('') : '<p class="text-secondary-sm">No activity yet.</p>'}
                 </div>
             </div>`;
     } catch (err) {
@@ -1009,7 +1127,11 @@ function renderActivity(act) {
 }
 
 function closeDealModal() {
-    document.getElementById('dealModalBackdrop').style.display = 'none';
+    const backdrop = document.getElementById('dealModalBackdrop');
+    if (backdrop) {
+        backdrop.hidden = true;
+        backdrop.style.display = 'none';
+    }
     currentDealPhone = null;
 }
 
@@ -1072,6 +1194,221 @@ async function addNoteFromModal() {
     }
 }
 
+async function reassignDealFromModal(dealId) {
+    const targetAgentId = document.getElementById('modalReassignAgent')?.value;
+    const reason = document.getElementById('modalReassignReason')?.value?.trim();
+    if (!targetAgentId) {
+        showToast('Please select an agent to reassign to', 'error');
+        return;
+    }
+    try {
+        await api(`/api/crm/deals/${dealId}/assign`, {
+            method: 'POST',
+            body: JSON.stringify({ agent_id: targetAgentId, reason })
+        });
+        showToast('Deal reassigned successfully', 'success');
+        if (currentDealPhone) openDealModal(currentDealPhone);
+        loadCrm();
+    } catch (err) {
+        showToast(err.message || 'Reassignment failed', 'error');
+    }
+}
+
+async function toggleAiPauseFromModal(dealId, currentlyPaused) {
+    try {
+        await api(`/api/crm/deals/${dealId}/pause-ai`, {
+            method: 'POST',
+            body: JSON.stringify({ paused: !currentlyPaused })
+        });
+        showToast(!currentlyPaused ? 'AI replies paused (Human Takeover active)' : 'AI replies resumed', 'success');
+        if (currentDealPhone) openDealModal(currentDealPhone);
+        loadCrm();
+    } catch (err) {
+        showToast(err.message || 'Failed to toggle AI pause', 'error');
+    }
+}
+
+// ─── Agent Workload & Management ────────────────────────────
+let agentsCache = [];
+
+async function loadAgentWorkload() {
+    const listEl = document.getElementById('agentWorkloadList');
+    if (!listEl) return;
+    listEl.innerHTML = '<div class="empty-state">Loading agents…</div>';
+    try {
+        const agents = await api('/api/crm/agents/workload');
+        agentsCache = agents || [];
+        if (!agents || agents.length === 0) {
+            listEl.innerHTML = `
+                <div class="empty-state grid-col-all">
+                    <span class="empty-state-icon" aria-hidden="true">${Icon('users')}</span>
+                    <div class="empty-state-title">No agents configured</div>
+                    <p>Add agents to enable round-robin and workload-based lead distribution.</p>
+                </div>`;
+            return;
+        }
+
+        listEl.innerHTML = agents.map(a => {
+            const pct = Math.min(100, Math.round(a.capacity_used_pct || 0));
+            const barClass = pct >= 90 ? 'agent-load-full' : (pct >= 70 ? 'agent-load-high' : '');
+            const isAvail = a.routing_status === 'available';
+
+            return `
+                <div class="agent-card" data-agent-id="${a.id}">
+                    <div class="agent-card-header">
+                        <div>
+                            <div class="agent-name">${escapeHtml(a.name)}</div>
+                            <div class="agent-contact-line">${escapeHtml(a.email)}${a.phone ? ` · ${escapeHtml(a.phone)}` : ''}</div>
+                        </div>
+                        <span class="agent-role-pill agent-role-${escapeHtml(a.role)}">${escapeHtml(a.role)}</span>
+                    </div>
+                    <div class="agent-contact-line">
+                        Status: <strong class="${isAvail ? 'mode-live' : 'text-secondary'}">${escapeHtml(a.routing_status)}</strong>
+                        · Weight: ${a.weight || 1}
+                    </div>
+                    <div class="agent-load-meter">
+                        <div class="agent-load-labels">
+                            <span>Active Leads</span>
+                            <strong>${a.active_leads_count || 0} / ${a.max_concurrent_leads || 25} (${pct}%)</strong>
+                        </div>
+                        <div class="agent-load-bar-wrap">
+                            <div class="agent-load-bar-fill ${barClass}" data-pct="${pct}"></div>
+                        </div>
+                    </div>
+                    <div class="agent-actions">
+                        <button class="btn btn-secondary btn-sm" type="button" data-agent-action="toggle-status" data-agent-id="${a.id}" data-current-status="${a.routing_status}">
+                            ${isAvail ? 'Set Busy' : 'Set Available'}
+                        </button>
+                        <button class="btn btn-secondary btn-sm" type="button" data-agent-action="edit" data-agent-id="${a.id}">
+                            ${Icon('edit-2', 'icon-inline')}Edit
+                        </button>
+                    </div>
+                </div>`;
+        }).join('');
+
+        listEl.querySelectorAll('.agent-load-bar-fill').forEach(fill => {
+            fill.style.width = (fill.dataset.pct || 0) + '%';
+        });
+    } catch (err) {
+        listEl.innerHTML = `<div class="empty-state"><div class="empty-state-title">Error loading agents</div><p>${escapeHtml(err.message)}</p></div>`;
+    }
+}
+
+function openAgentModal(agent = null) {
+    const backdrop = document.getElementById('agentModalBackdrop');
+    if (!backdrop) return;
+    const form = document.getElementById('agentForm');
+    if (!form) return;
+    form.reset();
+
+    const title = document.getElementById('agentModalTitle');
+    const deleteBtn = document.getElementById('deleteAgentBtn');
+
+    if (agent) {
+        title.textContent = 'Edit Agent';
+        document.getElementById('agentFormId').value = agent.id;
+        document.getElementById('agentFormName').value = agent.name || '';
+        document.getElementById('agentFormEmail').value = agent.email || '';
+        document.getElementById('agentFormPhone').value = agent.phone || '';
+        document.getElementById('agentFormRole').value = agent.role || 'agent';
+        document.getElementById('agentFormRoutingStatus').value = agent.routing_status || 'available';
+        document.getElementById('agentFormStatus').value = agent.status || 'active';
+        document.getElementById('agentFormWeight').value = agent.weight || 1;
+        document.getElementById('agentFormMaxLeads').value = agent.max_concurrent_leads || 25;
+        if (deleteBtn) deleteBtn.hidden = false;
+    } else {
+        title.textContent = 'Add Agent';
+        document.getElementById('agentFormId').value = '';
+        document.getElementById('agentFormWeight').value = 1;
+        document.getElementById('agentFormMaxLeads').value = 25;
+        if (deleteBtn) deleteBtn.hidden = true;
+    }
+
+    backdrop.hidden = false;
+    backdrop.style.display = 'flex';
+}
+
+function closeAgentModal() {
+    const backdrop = document.getElementById('agentModalBackdrop');
+    if (backdrop) {
+        backdrop.hidden = true;
+        backdrop.style.display = 'none';
+    }
+}
+
+async function saveAgentFromForm(e) {
+    e.preventDefault();
+    const id = document.getElementById('agentFormId').value;
+    const data = {
+        name: document.getElementById('agentFormName').value.trim(),
+        email: document.getElementById('agentFormEmail').value.trim(),
+        phone: document.getElementById('agentFormPhone').value.trim() || null,
+        role: document.getElementById('agentFormRole').value,
+        routing_status: document.getElementById('agentFormRoutingStatus').value,
+        status: document.getElementById('agentFormStatus').value,
+        weight: parseInt(document.getElementById('agentFormWeight').value, 10) || 1,
+        max_concurrent_leads: parseInt(document.getElementById('agentFormMaxLeads').value, 10) || 25
+    };
+
+    if (!data.name || !data.email) {
+        showToast('Name and email are required', 'error');
+        return;
+    }
+
+    try {
+        if (id) {
+            await api(`/api/crm/agents/${id}`, {
+                method: 'PUT',
+                body: JSON.stringify(data)
+            });
+            showToast('Agent updated successfully', 'success');
+        } else {
+            await api('/api/crm/agents', {
+                method: 'POST',
+                body: JSON.stringify(data)
+            });
+            showToast('Agent created successfully', 'success');
+        }
+        closeAgentModal();
+        loadAgentWorkload();
+        const filterEl = document.getElementById('crmAgentFilter');
+        if (filterEl) filterEl.innerHTML = '<option value="">All agents</option>';
+        loadCrm();
+    } catch (err) {
+        showToast(err.message || 'Failed to save agent', 'error');
+    }
+}
+
+async function deleteAgentFromForm() {
+    const id = document.getElementById('agentFormId').value;
+    if (!id || !confirm('Are you sure you want to delete this agent?')) return;
+    try {
+        await api(`/api/crm/agents/${id}`, { method: 'DELETE' });
+        showToast('Agent deleted', 'success');
+        closeAgentModal();
+        loadAgentWorkload();
+        const filterEl = document.getElementById('crmAgentFilter');
+        if (filterEl) filterEl.innerHTML = '<option value="">All agents</option>';
+        loadCrm();
+    } catch (err) {
+        showToast(err.message || 'Failed to delete agent', 'error');
+    }
+}
+
+async function toggleAgentStatus(agentId, currentStatus) {
+    const nextStatus = currentStatus === 'available' ? 'busy' : 'available';
+    try {
+        await api(`/api/crm/agents/${agentId}`, {
+            method: 'PUT',
+            body: JSON.stringify({ routing_status: nextStatus })
+        });
+        showToast(`Agent status updated to ${nextStatus}`, 'success');
+        loadAgentWorkload();
+    } catch (err) {
+        showToast(err.message || 'Failed to update agent status', 'error');
+    }
+}
+
 // ═══════════════════════════════════════════════════════════
 //  BUSINESS SETUP
 // ═══════════════════════════════════════════════════════════
@@ -1102,7 +1439,7 @@ function renderProductList(products) {
     if (!container) return;
 
     if (products.length === 0) {
-        container.innerHTML = '<p style="color:var(--color-text-secondary);font-size:0.85rem">No products yet — add your catalog above so the AI can quote it to customers.</p>';
+        container.innerHTML = '<p class="text-secondary-sm">No products yet — add your catalog above so the AI can quote it to customers.</p>';
         return;
     }
 
@@ -1185,7 +1522,7 @@ function renderBusinessProfile(profile) {
                     <h4>${Icon('trending-up', 'icon-inline')}Tips to Convert More</h4>
                     <ul>${list(profile.improvement_tips)}</ul>
                 </div>` : ''}
-            ${profile.analyzed_at ? `<small style="color:var(--color-text-secondary)">Analyzed ${timeAgo(profile.analyzed_at)}</small>` : ''}
+            ${profile.analyzed_at ? `<small class="text-secondary">Analyzed ${timeAgo(profile.analyzed_at)}</small>` : ''}
         </div>`;
 }
 
@@ -1360,7 +1697,7 @@ async function loadContacts() {
         if (contacts.length === 0) {
             tbody.innerHTML = `
                 <tr>
-                    <td colspan="7">
+                    <td colspan="8">
                         <div class="empty-state">
                             <span class="empty-state-icon" aria-hidden="true">${Icon('users')}</span>
                             <div class="empty-state-title">No contacts found</div>
@@ -1373,15 +1710,24 @@ async function loadContacts() {
 
         tbody.innerHTML = contacts.map(c => `
             <tr>
-                <td><input type="checkbox" class="contact-row-check" data-id="${c.id}" data-phone="${escapeHtml(c.phone)}" data-name="${escapeHtml(c.name || '')}" data-reached="${c.last_outreach_at ? '1' : '0'}" aria-label="Select ${escapeHtml(c.name || c.phone)}"></td>
+                <td><input type="checkbox" class="contact-row-check" data-id="${c.id}" data-phone="${escapeHtml(c.phone)}" data-name="${escapeHtml(c.name || '')}" data-reached="${c.last_outreach_at ? '1' : '0'}" data-opted="${c.is_opted_out ? '1' : '0'}" aria-label="Select ${escapeHtml(c.name || c.phone)}"></td>
                 <td><strong>${escapeHtml(c.name) || '—'}</strong></td>
-                <td style="color:var(--color-text-secondary)">${escapeHtml(c.phone)}</td>
+                <td class="text-secondary">${escapeHtml(c.phone)}</td>
+                <td>${c.is_opted_out
+                    ? `<span class="badge badge-danger" title="Opted out${c.opt_out_reason ? ': ' + escapeHtml(c.opt_out_reason) : ''}">Opted Out</span>`
+                    : `<span class="badge badge-success">Active</span>`}</td>
                 <td>${c.label ? `<span class="badge badge-incoming">${escapeHtml(c.label)}</span>` : '—'}</td>
                 <td>${c.last_outreach_at
                     ? `<span class="reached-pill" title="${formatDate(c.last_outreach_at)}">${Icon('check-circle')} ${formatDate(c.last_outreach_at)}</span>`
                     : `<span class="not-reached-label">Not yet</span>`}</td>
-                <td style="white-space:nowrap;color:var(--color-text-secondary)">${formatDate(c.created_at)}</td>
+                <td class="text-secondary-nowrap">${formatDate(c.created_at)}</td>
                 <td>
+                    <button
+                        class="btn btn-sm ${c.is_opted_out ? 'btn-secondary' : 'btn-warning'}"
+                        data-action="toggle-optout" data-id="${c.id}" data-opted="${c.is_opted_out ? '1' : '0'}"
+                        title="${c.is_opted_out ? 'Opt contact back in' : 'Opt contact out'}"
+                        aria-label="Toggle opt out for ${escapeHtml(c.name || c.phone)}"
+                        type="button">${Icon(c.is_opted_out ? 'user-check' : 'user-x')}</button>
                     <button
                         class="btn btn-sm btn-danger"
                         data-action="delete-contact" data-id="${c.id}"
@@ -1446,6 +1792,19 @@ function quickSelectNext(n) {
     }
 }
 
+async function toggleContactOptOut(id, currentlyOptedOut) {
+    try {
+        await api(`/api/contacts/${id}/opt-out`, {
+            method: 'POST',
+            body: JSON.stringify({ opted_out: !currentlyOptedOut })
+        });
+        showToast(!currentlyOptedOut ? 'Contact opted out' : 'Contact opted back in', 'success');
+        loadContacts();
+    } catch (err) {
+        showToast(err.message || 'Failed to toggle opt-out', 'error');
+    }
+}
+
 async function deleteContact(id) {
     if (!confirm('Delete this contact?')) return;
     try {
@@ -1501,7 +1860,7 @@ function handleCsvFileSelected(e) {
     reader.onload = async () => {
         const resultBox = document.getElementById('csvImportResult');
         resultBox.style.display = 'block';
-        resultBox.innerHTML = `<p style="color:var(--color-text-secondary)">Importing…</p>`;
+        resultBox.innerHTML = `<p class="text-secondary">Importing…</p>`;
         try {
             const result = await api('/api/contacts/import', {
                 method: 'POST',
@@ -1512,13 +1871,13 @@ function handleCsvFileSelected(e) {
             if (result.updated)  parts.push(`${result.updated} updated`);
             if (result.skipped)  parts.push(`${result.skipped} skipped`);
             resultBox.innerHTML = `
-                <p style="color:var(--color-success);font-weight:600">
+                <p class="text-success-bold">
                     ${Icon('check-circle')} Import complete — ${parts.join(', ') || 'nothing to do'} (of ${result.total} rows).
                 </p>
                 ${result.errors.length ? `
-                    <details style="margin-top:8px">
-                        <summary style="cursor:pointer;color:var(--color-text-secondary);font-size:.85rem">${result.errors.length} row${result.errors.length === 1 ? '' : 's'} skipped — why</summary>
-                        <ul style="font-size:.8rem;color:var(--color-text-secondary);margin-top:6px">
+                    <details class="mt-8">
+                        <summary class="cursor-pointer-secondary">${result.errors.length} row${result.errors.length === 1 ? '' : 's'} skipped — why</summary>
+                        <ul class="text-secondary mt-6 text-sm">
                             ${result.errors.slice(0, 50).map(e => `<li>Row ${e.row}: ${escapeHtml(e.reason)}</li>`).join('')}
                             ${result.errors.length > 50 ? `<li>…and ${result.errors.length - 50} more</li>` : ''}
                         </ul>
@@ -1527,7 +1886,7 @@ function handleCsvFileSelected(e) {
             showToast('CSV import complete', 'success');
             loadContacts();
         } catch (err) {
-            resultBox.innerHTML = `<p style="color:var(--color-error)">${Icon('x-circle')} ${escapeHtml(err.message || 'Import failed')}</p>`;
+            resultBox.innerHTML = `<p class="text-error">${Icon('x-circle')} ${escapeHtml(err.message || 'Import failed')}</p>`;
         } finally {
             e.target.value = '';
         }
@@ -1546,7 +1905,7 @@ function openOutreachModal() {
 
     let recipText = `Sending to ${total} contact${total === 1 ? '' : 's'}`;
     if (alreadyReached > 0) {
-        recipText += ` — <span style="color:var(--color-warning)">${alreadyReached} of these ${alreadyReached === 1 ? 'has' : 'have'} already been sent an outreach message before</span>`;
+        recipText += ` — <span class="text-warning">${alreadyReached} of these ${alreadyReached === 1 ? 'has' : 'have'} already been sent an outreach message before</span>`;
     }
     document.getElementById('outreachRecipientCount').innerHTML = recipText;
 
@@ -1645,9 +2004,9 @@ async function loadScheduled() {
 
         tbody.innerHTML = messages.map(msg => `
             <tr>
-                <td style="color:var(--color-text-secondary)">${escapeHtml(msg.phone)}</td>
+                <td class="text-secondary">${escapeHtml(msg.phone)}</td>
                 <td><span class="msg-truncate">${escapeHtml(msg.body)}</span></td>
-                <td style="white-space:nowrap;color:var(--color-text-secondary)">${formatDate(msg.scheduled_at)}</td>
+                <td class="text-secondary-nowrap">${formatDate(msg.scheduled_at)}</td>
                 <td>
                     <span class="pill pill-${msg.status === 'pending' ? 'pending' : msg.status === 'sent' ? 'active' : 'error'}">
                         ${escapeHtml(msg.status)}
@@ -1701,9 +2060,9 @@ async function loadAppointments() {
                 <tr>
                     <td>
                         <strong>${escapeHtml(a.contact_name || a.phone)}</strong>
-                        ${a.contact_name ? `<br><small style="color:var(--color-text-secondary)">${escapeHtml(a.phone)}</small>` : ''}
+                        ${a.contact_name ? `<br><small class="text-secondary">${escapeHtml(a.phone)}</small>` : ''}
                     </td>
-                    <td style="white-space:nowrap;color:var(--color-text-secondary)">${formatDate(a.start_at)}</td>
+                    <td class="text-secondary-nowrap">${formatDate(a.start_at)}</td>
                     <td>${a.source === 'chatbot' ? Icon('bot', 'icon-inline') + ' Chatbot' : Icon('user', 'icon-inline') + ' Manual'}</td>
                     <td>
                         <span class="pill pill-${a.status === 'confirmed' ? 'active' : 'error'}">${escapeHtml(a.status)}</span>
@@ -1829,6 +2188,22 @@ async function loadSettings() {
             }
         }
 
+        // Lead Routing & SLA settings
+        set('settLeadAssignmentEnabled', settings.lead_assignment_enabled);
+        set('settLeadAssignmentStrategy', settings.lead_assignment_strategy || 'round_robin');
+        set('settLeadSlaMinutes', settings.lead_sla_minutes || '15');
+        set('settLeadSlaWarningMinutes', settings.lead_sla_warning_minutes || '10');
+        set('settLeadEscalationEnabled', settings.lead_escalation_enabled);
+
+        const mgrSelect = document.getElementById('settLeadEscalationManager');
+        if (mgrSelect) {
+            api('/api/crm/agents').then(agents => {
+                const mgrs = (agents || []).filter(a => ['manager', 'admin'].includes(a.role));
+                mgrSelect.innerHTML = '<option value="">Auto (First active manager/admin)</option>' +
+                    mgrs.map(m => `<option value="${m.id}" ${settings.lead_escalation_manager_agent_id === String(m.id) ? 'selected' : ''}>${escapeHtml(m.name)} (${escapeHtml(m.role)})</option>`).join('');
+            }).catch(() => {});
+        }
+
         // Business Setup tab data
         loadBusiness();
     } catch (err) {
@@ -1837,6 +2212,32 @@ async function loadSettings() {
 
     loadCalendarStatus();
     loadBookingSettings();
+    initRoutingSettings();
+}
+
+function initRoutingSettings() {
+    const form = document.getElementById('routingSettingsForm');
+    if (!form || form.dataset.initialized) return;
+    form.dataset.initialized = 'true';
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        try {
+            await api('/api/settings', {
+                method: 'POST',
+                body: JSON.stringify({
+                    lead_assignment_enabled: String(document.getElementById('settLeadAssignmentEnabled').checked),
+                    lead_assignment_strategy: document.getElementById('settLeadAssignmentStrategy').value,
+                    lead_sla_minutes: document.getElementById('settLeadSlaMinutes').value,
+                    lead_sla_warning_minutes: document.getElementById('settLeadSlaWarningMinutes').value,
+                    lead_escalation_enabled: String(document.getElementById('settLeadEscalationEnabled').checked),
+                    lead_escalation_manager_agent_id: document.getElementById('settLeadEscalationManager').value || ''
+                })
+            });
+            showToast('Routing & SLA settings saved', 'success');
+        } catch (err) {
+            showToast(err.message || 'Failed to save routing settings', 'error');
+        }
+    });
 }
 
 // ─── Appointment Booking ─────────────────────────────────────
@@ -1958,14 +2359,14 @@ async function loadCalendarStatus() {
             const cb = document.getElementById('settCalendarCheckAvailability');
             if (cb) cb.checked = !!data.checkAvailability;
         } else {
-            statusEl.innerHTML = `<p style="color:var(--color-text-secondary)">${Icon('x-circle', 'icon-inline')}Not connected</p>`;
+            statusEl.innerHTML = `<p class="text-secondary">${Icon('x-circle', 'icon-inline')}Not connected</p>`;
             connectBtn.style.display = '';
             syncBtn.style.display = 'none';
             disconnectBtn.style.display = 'none';
             availabilityRow.style.display = 'none';
         }
     } catch (err) {
-        statusEl.innerHTML = '<p style="color:var(--color-error)">Could not load calendar status</p>';
+        statusEl.innerHTML = '<p class="text-error">Could not load calendar status</p>';
     }
 }
 
@@ -2044,10 +2445,17 @@ function initCalendarSettings() {
 // the browser.
 let _sseReceivedActionable = false;
 let _statusPollTimer = null;
+let _qrEventSource = null;
 
 function initSSE() {
+    if (!CURRENT_USER) return;
+    if (_qrEventSource && _qrEventSource.readyState !== EventSource.CLOSED) return;
+    if (_qrEventSource) {
+        try { _qrEventSource.close(); } catch (_) {}
+        _qrEventSource = null;
+    }
     _sseReceivedActionable = false;
-    const eventSource = new EventSource('/api/qr-stream');
+    const eventSource = _qrEventSource = new EventSource('/api/qr-stream');
 
     eventSource.onmessage = function (event) {
         try {
@@ -2071,6 +2479,14 @@ function initSSE() {
             startStatusPolling();
         }
     }, 10000);
+}
+
+function stopSSE() {
+    if (_qrEventSource) {
+        try { _qrEventSource.close(); } catch (_) {}
+    }
+    _qrEventSource = null;
+    stopStatusPolling();
 }
 
 function startStatusPolling() {
@@ -2121,7 +2537,7 @@ function applyConnectionState(data) {
         if (qrLoading) qrLoading.style.display = 'none';
         if (statusDot)  statusDot.className  = 'status-dot error';
         if (statusText) statusText.textContent = 'Scan QR Code';
-        if (connInfo)   connInfo.innerHTML   = `<p style="color:var(--color-warning)">${Icon('triangle-alert', 'icon-inline')}Waiting for QR Code scan. Go to Settings → WhatsApp QR.</p>`;
+        if (connInfo)   connInfo.innerHTML   = `<p class="text-warning">${Icon('triangle-alert', 'icon-inline')}Waiting for QR Code scan. Go to Settings → WhatsApp QR.</p>`;
 
     } else if (data.type === 'ready') {
         hide(qrLoading); hide(qrImage); show(qrSuccess);
@@ -2135,7 +2551,7 @@ function applyConnectionState(data) {
         hide(qrLoading); hide(qrImage); hide(qrSuccess);
         if (statusDot)  statusDot.className  = 'status-dot error';
         if (statusText) statusText.textContent = 'Disconnected';
-        if (connInfo)   connInfo.innerHTML   = `<p style="color:var(--color-error)">${Icon('x-circle', 'icon-inline')}Not connected</p>`;
+        if (connInfo)   connInfo.innerHTML   = `<p class="text-error">${Icon('x-circle', 'icon-inline')}Not connected</p>`;
 
         if (qrContainer && !document.getElementById('qrReconnectBtnContainer')) {
             const reconnectDiv = document.createElement('div');
@@ -2148,8 +2564,8 @@ function applyConnectionState(data) {
 
             if (waAllowed) {
                 reconnectDiv.innerHTML = `
-                    <p style="color:var(--color-error);font-weight:600;margin-bottom:12px;">${Icon('x-circle', 'icon-inline')} WhatsApp is Disconnected</p>
-                    <button class="btn btn-primary btn-sm" id="reconnectWaBtn" type="button" style="display:inline-flex;align-items:center;gap:6px;">${Icon('refresh-cw', 'icon-inline')} Connect &amp; Show QR Code</button>
+                    <p class="error-heading">${Icon('x-circle', 'icon-inline')} WhatsApp is Disconnected</p>
+                    <button class="btn btn-primary btn-sm" id="reconnectWaBtn" type="button" class="btn btn-primary btn-sm inline-flex-center-gap-6">${Icon('refresh-cw', 'icon-inline')} Connect &amp; Show QR Code</button>
                 `;
                 qrContainer.appendChild(reconnectDiv);
                 document.getElementById('reconnectWaBtn')?.addEventListener('click', async () => {
@@ -2163,8 +2579,8 @@ function applyConnectionState(data) {
                 });
             } else {
                 reconnectDiv.innerHTML = `
-                    <p style="color:var(--color-error);font-weight:600;margin-bottom:12px;">${Icon('x-circle', 'icon-inline')} WhatsApp is Disconnected</p>
-                    <p style="color:var(--color-text-secondary);font-size:.9rem;max-width:340px;margin:0 auto;line-height:1.6;">
+                    <p class="error-heading">${Icon('x-circle', 'icon-inline')} WhatsApp is Disconnected</p>
+                    <p class="qr-error-subtext">
                         ${Icon('lock', 'icon-inline')} WhatsApp access has not been enabled for your account. Please contact your administrator.
                     </p>
                 `;
@@ -2237,6 +2653,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             case 'delete-product': deleteProductRow(id); break;
             case 'toggle-rule': toggleRule(id, Number(button.dataset.value)); break;
             case 'delete-rule': deleteRule(id); break;
+            case 'toggle-optout': toggleContactOptOut(id, button.dataset.opted === '1'); break;
             case 'delete-contact': deleteContact(id); break;
             case 'cancel-scheduled': cancelScheduled(id); break;
             case 'cancel-appointment': cancelAppointment(id); break;
@@ -2250,6 +2667,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!authed) return;
 
     document.getElementById('logoutBtn')?.addEventListener('click', logout);
+    window.addEventListener('beforeunload', () => stopSSE());
 
     // ── Settings tabs ──────────────────────────────────────
     initSettingsTabs();
@@ -2489,9 +2907,52 @@ document.addEventListener('DOMContentLoaded', async () => {
     // ── CRM controls ────────────────────────────────────────
     document.getElementById('addDealBtn')?.addEventListener('click', () => {
         const card = document.getElementById('addDealCard');
-        card.style.display = card.style.display === 'none' ? '' : 'none';
+        if (!card) return;
+        const willShow = card.hidden || card.style.display === 'none';
+        card.hidden = !willShow;
+        card.style.display = willShow ? '' : 'none';
     });
     document.getElementById('crmTemperatureFilter')?.addEventListener('change', loadCrm);
+    document.getElementById('crmAgentFilter')?.addEventListener('change', loadCrm);
+    document.getElementById('crmSlaFilter')?.addEventListener('change', loadCrm);
+
+    const overdueBtn = document.getElementById('crmOverdueBtn');
+    overdueBtn?.addEventListener('click', () => {
+        isCrmOverdueActive = !isCrmOverdueActive;
+        overdueBtn.classList.toggle('btn-primary', isCrmOverdueActive);
+        overdueBtn.classList.toggle('btn-secondary', !isCrmOverdueActive);
+        loadCrm();
+    });
+
+    const toggleWorkloadBtn = document.getElementById('toggleAgentWorkloadBtn');
+    toggleWorkloadBtn?.addEventListener('click', () => {
+        const card = document.getElementById('agentWorkloadCard');
+        if (!card) return;
+        const willShow = card.hidden || card.style.display === 'none';
+        card.hidden = !willShow;
+        card.style.display = willShow ? '' : 'none';
+        if (willShow) loadAgentWorkload();
+    });
+
+    document.getElementById('addAgentBtn')?.addEventListener('click', () => openAgentModal(null));
+    document.getElementById('agentModalClose')?.addEventListener('click', closeAgentModal);
+    document.getElementById('agentModalBackdrop')?.addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closeAgentModal();
+    });
+    document.getElementById('agentForm')?.addEventListener('submit', saveAgentFromForm);
+    document.getElementById('deleteAgentBtn')?.addEventListener('click', deleteAgentFromForm);
+
+    document.getElementById('agentWorkloadList')?.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-agent-action]');
+        if (!btn) return;
+        const agentId = Number(btn.dataset.agentId);
+        if (btn.dataset.agentAction === 'toggle-status') {
+            toggleAgentStatus(agentId, btn.dataset.currentStatus);
+        } else if (btn.dataset.agentAction === 'edit') {
+            const agent = agentsCache.find(a => a.id === agentId);
+            if (agent) openAgentModal(agent);
+        }
+    });
 
     document.getElementById('addDealForm')?.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -2510,7 +2971,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
             showToast('Deal added!', 'success');
             document.getElementById('addDealForm').reset();
-            document.getElementById('addDealCard').style.display = 'none';
+            const addCard = document.getElementById('addDealCard');
+            if (addCard) {
+                addCard.hidden = true;
+                addCard.style.display = 'none';
+            }
             loadCrm();
         } catch (err) {
             showToast(err.message || 'Failed to add deal', 'error');
@@ -2523,17 +2988,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (e.target === e.currentTarget) closeDealModal();
     });
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') closeDealModal();
+        if (e.key === 'Escape') {
+            closeDealModal();
+            closeAgentModal();
+        }
     });
     document.getElementById('dealModal')?.addEventListener('click', (e) => e.stopPropagation());
+    document.getElementById('agentModal')?.addEventListener('click', (e) => e.stopPropagation());
     document.addEventListener('click', (event) => {
         const dealCard = event.target.closest('[data-open-deal]');
         if (dealCard) return openDealModal(dealCard.dataset.openDeal);
         const action = event.target.closest('[data-deal-action]');
         if (!action) return;
         if (action.dataset.dealAction === 'save') return saveDealFromModal(action.dataset.dealId);
+        if (action.dataset.dealAction === 'toggle-ai') return toggleAiPauseFromModal(action.dataset.dealId, action.dataset.dealPaused === 'true');
         if (action.dataset.dealAction === 'delete') return deleteDealFromModal(action.dataset.dealId);
         if (action.dataset.dealAction === 'note') return addNoteFromModal();
+        if (action.dataset.dealAction === 'reassign') return reassignDealFromModal(action.dataset.dealId);
     });
 
     // ── Business Setup controls ─────────────────────────────

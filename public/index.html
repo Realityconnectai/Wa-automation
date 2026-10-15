@@ -70,7 +70,7 @@
             <span class="nav-icon" data-icon="settings" aria-hidden="true"></span>
             <span class="nav-label">Settings</span>
         </a>
-        <a href="/admin" class="nav-item" id="nav-admin" role="menuitem" style="display:none">
+        <a href="/admin" class="nav-item" id="nav-admin" role="menuitem" hidden>
             <span class="nav-icon" data-icon="crown" aria-hidden="true"></span>
             <span class="nav-label">Admin</span>
         </a>
@@ -122,7 +122,7 @@
             </div>
 
             <!-- Error banner placeholder -->
-            <div id="dashboardError" style="display:none"></div>
+            <div id="dashboardError" hidden></div>
 
             <!-- ── Messages ── -->
             <div class="stat-group-title"><span data-icon="message-circle" aria-hidden="true"></span> Messages</div>
@@ -266,7 +266,7 @@
                 <p class="section-subtitle">All incoming and outgoing messages</p>
             </div>
 
-            <div id="messagesError" style="display:none"></div>
+            <div id="messagesError" hidden></div>
 
 
 
@@ -312,7 +312,7 @@
                 <p class="section-subtitle">AI-powered summaries, interest detection, issues and priorities for every conversation</p>
             </div>
 
-            <div id="leadsError" style="display:none"></div>
+            <div id="leadsError" hidden></div>
 
             <!-- Lead stats -->
             <div class="stats-grid" role="list" aria-label="Lead metrics">
@@ -367,6 +367,9 @@
                     </select>
                 </div>
                 <div class="topbar-spacer"></div>
+                <a href="/api/leads/export" class="btn btn-secondary btn-sm" id="exportLeadsBtn" download="leads.csv">
+                    <span data-icon="download" aria-hidden="true"></span> Export CSV
+                </a>
                 <button class="btn btn-primary" id="analyzeAllBtn" type="button">
                     <span class="btn-icon" data-icon="brain" aria-hidden="true"></span> Analyze All Chats
                 </button>
@@ -389,7 +392,7 @@
                 <p class="section-subtitle">Track every conversation as a deal — auto-filled by AI, managed by you</p>
             </div>
 
-            <div id="crmError" style="display:none"></div>
+            <div id="crmError" hidden></div>
 
             <!-- CRM stats -->
             <div class="stats-grid" role="list" aria-label="CRM metrics">
@@ -452,17 +455,43 @@
             <div class="toolbar">
                 <div class="filter-group">
                     <button class="btn btn-secondary btn-sm" id="addDealBtn" type="button"><span class="btn-icon" data-icon="plus" aria-hidden="true"></span> Add Deal</button>
+                    <button class="btn btn-secondary btn-sm" id="toggleAgentWorkloadBtn" type="button"><span class="btn-icon" data-icon="users" aria-hidden="true"></span> Agents &amp; Workload</button>
+                    <a href="/api/crm/deals/export" class="btn btn-secondary btn-sm" id="exportDealsBtn" download="crm_deals.csv">
+                        <span class="btn-icon" data-icon="download" aria-hidden="true"></span> Export CSV
+                    </a>
                     <select id="crmTemperatureFilter" aria-label="Filter deals by lead temperature">
                         <option value="">All temperatures</option>
                         <option value="HOT">Hot</option><option value="WARM">Warm</option><option value="COLD">Cold</option>
                     </select>
+                    <select id="crmAgentFilter" aria-label="Filter deals by assigned agent">
+                        <option value="">All agents</option>
+                    </select>
+                    <select id="crmSlaFilter" aria-label="Filter deals by SLA status">
+                        <option value="">All SLA statuses</option>
+                        <option value="sla_on_time">On Time</option>
+                        <option value="sla_approaching">Approaching</option>
+                        <option value="sla_breached">Breached</option>
+                        <option value="escalated">Escalated</option>
+                    </select>
+                    <button class="btn btn-secondary btn-sm" id="crmOverdueBtn" type="button"><span class="btn-icon" data-icon="alert-circle" aria-hidden="true"></span> Overdue</button>
                 </div>
                 <div class="topbar-spacer"></div>
-                <small style="color:var(--color-text-secondary)">Deals are auto-created when the AI analyzes a sales chat. Personal chats are skipped.</small>
+                <small class="text-secondary">Deals are auto-created when the AI analyzes a sales chat. Personal chats are skipped.</small>
+            </div>
+
+            <!-- Agent Workload & Management Card (hidden by default) -->
+            <div class="card" id="agentWorkloadCard" hidden>
+                <div class="card-header-flex">
+                    <h2 class="card-title"><span data-icon="users" data-icon-class="icon-inline" aria-hidden="true"></span>Agent Team &amp; Workload</h2>
+                    <button class="btn btn-primary btn-sm" id="addAgentBtn" type="button"><span class="btn-icon" data-icon="plus" aria-hidden="true"></span> Add Agent</button>
+                </div>
+                <div id="agentWorkloadList" class="agent-workload-grid">
+                    <div class="empty-state">Loading agents…</div>
+                </div>
             </div>
 
             <!-- Add deal form (hidden by default) -->
-            <div class="card" id="addDealCard" style="display:none">
+            <div class="card" id="addDealCard" hidden>
                 <h2 class="card-title">Add Deal Manually</h2>
                 <form id="addDealForm" novalidate>
                     <div class="form-row-3">
@@ -519,7 +548,7 @@
                 <p class="section-subtitle">Configure auto-reply rules for incoming messages</p>
             </div>
 
-            <div id="chatbotError" style="display:none"></div>
+            <div id="chatbotError" hidden></div>
 
             <!-- Test widget -->
             <div class="card test-card">
@@ -528,7 +557,7 @@
                     <input type="text" id="testMessage" placeholder="e.g. hello, what are your prices?" aria-label="Test message input">
                     <button class="btn btn-secondary" id="testChatbotBtn" type="button">Test</button>
                 </div>
-                <div class="test-result" id="testResult" style="display:none;" role="alert" aria-live="polite"></div>
+                <div class="test-result" id="testResult" hidden role="alert" aria-live="polite"></div>
             </div>
 
             <!-- Add Rule -->
@@ -591,12 +620,19 @@
     <!-- ── CONTACTS ── -->
     <section class="section" id="section-contacts" aria-labelledby="contacts-heading">
         <div class="page-inner">
-            <div class="section-header">
-                <h1 id="contacts-heading">Contacts</h1>
-                <p class="section-subtitle">Manage your WhatsApp contacts</p>
+            <div class="section-header flex-between">
+                <div>
+                    <h1 id="contacts-heading">Contacts</h1>
+                    <p class="section-subtitle">Manage your WhatsApp contacts</p>
+                </div>
+                <div>
+                    <a href="/api/contacts/export" class="btn btn-secondary btn-sm" id="exportContactsBtn" download="contacts.csv">
+                        <span data-icon="download" aria-hidden="true"></span> Export CSV
+                    </a>
+                </div>
             </div>
 
-            <div id="contactsError" style="display:none"></div>
+            <div id="contactsError" hidden></div>
 
             <div class="card">
                 <h2 class="card-title">Add Contact</h2>
@@ -629,9 +665,9 @@
                     <label for="csvFileInput" class="btn btn-secondary" id="csvFileLabel" tabindex="0" role="button">
                         <span data-icon="upload" aria-hidden="true"></span> Choose CSV file
                     </label>
-                    <span id="csvFileName" style="color:var(--color-text-secondary);font-size:.85rem"></span>
+                    <span id="csvFileName" class="text-secondary-sm"></span>
                 </div>
-                <div id="csvImportResult" style="display:none;margin-top:var(--space-md)"></div>
+                <div id="csvImportResult" hidden class="mt-md"></div>
             </div>
 
             <div class="toolbar">
@@ -641,7 +677,7 @@
             </div>
 
             <div class="card quick-select-card">
-                <h2 class="card-title" style="font-size:.95rem">Quick-select for outreach</h2>
+                <h2 class="card-title text-md">Quick-select for outreach</h2>
                 <div class="quick-select-row">
                     <label for="quickSelectCount" class="sr-only">Number to select</label>
                     <input type="number" id="quickSelectCount" value="20" min="1" max="25" step="1">
@@ -656,12 +692,12 @@
                         Include already-reached contacts
                     </label>
                 </div>
-                <p class="card-note" style="margin:8px 0 0">Picks from contacts <strong>not yet sent an outreach message</strong> first
+                <p class="card-note mt-8-only">Picks from contacts <strong>not yet sent an outreach message</strong> first
                     (top of the currently filtered/searched list), so repeated batches of 20 naturally work through your list without
                     re-messaging the same people. Check the box above if you specifically want to re-reach people.</p>
             </div>
 
-            <div class="selection-bar" id="contactsSelectionBar" style="display:none">
+            <div class="selection-bar" id="contactsSelectionBar" hidden>
                 <span id="contactsSelectionCount">0 selected</span>
                 <div class="selection-bar-actions">
                     <button type="button" class="btn btn-sm btn-secondary" id="clearSelectionBtn">Clear</button>
@@ -676,9 +712,10 @@
                     <table class="data-table" aria-label="Contacts list">
                         <thead>
                             <tr>
-                                <th scope="col" style="width:2.5rem"><input type="checkbox" id="contactsSelectAll" aria-label="Select all contacts"></th>
+                                <th scope="col" class="w-10"><input type="checkbox" id="contactsSelectAll" aria-label="Select all contacts"></th>
                                 <th scope="col">Name</th>
                                 <th scope="col">Phone</th>
+                                <th scope="col">Status</th>
                                 <th scope="col">Label</th>
                                 <th scope="col">Reached</th>
                                 <th scope="col">Added</th>
@@ -686,7 +723,7 @@
                             </tr>
                         </thead>
                         <tbody id="contactsBody">
-                            <tr><td colspan="7" class="empty-state">Loading contacts…</td></tr>
+                            <tr><td colspan="8" class="empty-state">Loading contacts…</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -702,7 +739,7 @@
                 <p class="section-subtitle">Schedule messages for future delivery</p>
             </div>
 
-            <div id="scheduledError" style="display:none"></div>
+            <div id="scheduledError" hidden></div>
 
             <div class="card">
                 <h2 class="card-title">Schedule a Message</h2>
@@ -755,9 +792,9 @@
                 <p class="section-subtitle">Bookings made by your chatbot, plus anything you add manually</p>
             </div>
 
-            <div id="appointmentsError" style="display:none"></div>
+            <div id="appointmentsError" hidden></div>
 
-            <div class="card" id="apptBookingDisabledNotice" style="display:none">
+            <div class="card" id="apptBookingDisabledNotice" hidden>
                 <p class="card-note"><span data-icon="info" data-icon-class="icon-inline" aria-hidden="true"></span>Appointment booking isn't set up yet. Go to <strong>Settings &rarr; Booking</strong> to set your weekly hours and turn it on.</p>
             </div>
 
@@ -777,8 +814,8 @@
                     </div>
                     <div class="form-group">
                         <label for="apptSlotSelect">Available Slot</label>
-                        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-                            <select id="apptSlotSelect" style="flex:1;min-width:220px">
+                        <div class="flex-wrap-center">
+                            <select id="apptSlotSelect" class="flex-min-220">
                                 <option value="">Loading available slots…</option>
                             </select>
                             <button class="btn btn-secondary btn-sm" id="apptRefreshSlotsBtn" type="button">Refresh</button>
@@ -840,8 +877,8 @@
             <div id="inv-panel-projects" role="tabpanel" aria-labelledby="inv-tab-projects">
                 <!-- Search / filter bar -->
                 <div class="toolbar">
-                    <div class="form-group" style="margin:0;max-width:180px"><label class="sr-only" for="invCityFilter">Filter by city</label><input type="text" id="invCityFilter" placeholder="Filter by city…"></div>
-                    <div class="form-group" style="margin:0;max-width:180px"><label class="sr-only" for="invTypeFilter">Filter by type</label><select id="invTypeFilter">
+                    <div class="form-group filter-max-180"><label class="sr-only" for="invCityFilter">Filter by city</label><input type="text" id="invCityFilter" placeholder="Filter by city…"></div>
+                    <div class="form-group filter-max-180"><label class="sr-only" for="invTypeFilter">Filter by type</label><select id="invTypeFilter">
                         <option value="">All types</option>
                         <option value="residential">Residential</option>
                         <option value="commercial">Commercial</option>
@@ -855,47 +892,47 @@
                 </div>
 
                 <!-- Loading / empty / error states -->
-                <div id="invProjectsLoading" class="empty-state" style="display:none">Loading properties…</div>
-                <div id="invProjectsEmpty" class="empty-state" style="display:none">
-                    <span data-icon="building-2" aria-hidden="true" style="font-size:2rem"></span>
+                <div id="invProjectsLoading" class="empty-state" hidden>Loading properties…</div>
+                <div id="invProjectsEmpty" class="empty-state" hidden>
+                    <span data-icon="building-2" aria-hidden="true" class="text-2xl"></span>
                     <p>No projects yet. Click <strong>New Project</strong> to add one.</p>
                 </div>
-                <div id="invProjectsError" style="display:none"></div>
+                <div id="invProjectsError" hidden></div>
 
                 <!-- Project cards grid -->
                 <div id="invProjectsGrid" class="cards-grid" role="list"></div>
             </div>
 
             <!-- Availability Grid panel -->
-            <div id="inv-panel-grid" role="tabpanel" aria-labelledby="inv-tab-grid" style="display:none">
+            <div id="inv-panel-grid" role="tabpanel" aria-labelledby="inv-tab-grid" hidden>
                 <div class="toolbar">
-                    <div class="form-group" style="margin:0;min-width:200px"><label class="sr-only" for="invGridProject">Project</label><select id="invGridProject">
+                    <div class="form-group filter-min-200"><label class="sr-only" for="invGridProject">Project</label><select id="invGridProject">
                         <option value="">— Select project —</option>
                     </select></div>
-                    <div class="form-group" style="margin:0;min-width:160px"><label class="sr-only" for="invGridStatusFilter">Status</label><select id="invGridStatusFilter">
+                    <div class="form-group filter-min-160"><label class="sr-only" for="invGridStatusFilter">Status</label><select id="invGridStatusFilter">
                         <option value="">All statuses</option>
                         <option value="VACANT">Vacant</option>
                         <option value="ON_HOLD">On Hold</option>
                         <option value="BOOKED">Booked</option>
                         <option value="SOLD">Sold</option>
                     </select></div>
-                    <div class="form-group" style="margin:0;max-width:140px"><label class="sr-only" for="invGridBhkFilter">BHK filter</label><input type="text" id="invGridBhkFilter" placeholder="BHK filter…"></div>
+                    <div class="form-group filter-max-140"><label class="sr-only" for="invGridBhkFilter">BHK filter</label><input type="text" id="invGridBhkFilter" placeholder="BHK filter…"></div>
                     <button class="btn btn-sm btn-primary" id="invNewUnitBtn" type="button" disabled>New Unit</button>
                 </div>
 
-                <div id="invGridLoading" class="empty-state" style="display:none">Loading units…</div>
-                <div id="invGridError" style="display:none"></div>
-                <div id="invGridEmpty" class="empty-state" style="display:none">
+                <div id="invGridLoading" class="empty-state" hidden>Loading units…</div>
+                <div id="invGridError" hidden></div>
+                <div id="invGridEmpty" class="empty-state" hidden>
                     <p>Select a project to view its availability grid.</p>
                 </div>
 
                 <!-- Tower × floor grid -->
-                <div id="invGridContainer" style="overflow-x:auto"></div>
+                <div id="invGridContainer" class="overflow-x-auto"></div>
             </div>
 
-            <div id="inv-panel-brochure" role="tabpanel" aria-labelledby="inv-tab-brochure" style="display:none">
-                <div id="invBrochureLoading" class="empty-state" style="display:none">Loading brochure-drop configuration…</div>
-                <div id="invBrochureError" style="display:none"></div>
+            <div id="inv-panel-brochure" role="tabpanel" aria-labelledby="inv-tab-brochure" hidden>
+                <div id="invBrochureLoading" class="empty-state" hidden>Loading brochure-drop configuration…</div>
+                <div id="invBrochureError" hidden></div>
                 <div id="invBrochureContent"></div>
             </div>
         </div>
@@ -925,6 +962,7 @@
                 <button class="settings-tab"        role="tab" aria-selected="false" aria-controls="stab-qr"          id="tab-qr"          data-tab="qr"          type="button">WhatsApp QR</button>
                 <button class="settings-tab"        role="tab" aria-selected="false" aria-controls="stab-booking"     id="tab-booking"     data-tab="booking"     type="button">Booking</button>
                 <button class="settings-tab"        role="tab" aria-selected="false" aria-controls="stab-calendar"    id="tab-calendar"    data-tab="calendar"    type="button">Calendar</button>
+                <button class="settings-tab"        role="tab" aria-selected="false" aria-controls="stab-routing"     id="tab-routing"     data-tab="routing"     type="button">Routing &amp; SLAs</button>
                 <button class="settings-tab"        role="tab" aria-selected="false" aria-controls="stab-danger"      id="tab-danger"      data-tab="danger"      type="button">Danger Zone</button>
             </div>
 
@@ -954,7 +992,7 @@
                             </label>
                         </div>
 
-                        <div class="form-group" style="margin-top:16px">
+                        <div class="form-group mt-16">
                             <label for="settDefaultReply">Default Reply (when no rule matches)</label>
                             <textarea id="settDefaultReply" rows="2" placeholder="Fallback auto-reply message…"></textarea>
                         </div>
@@ -1036,7 +1074,7 @@
                         </div>
                         <button type="submit" class="btn btn-secondary"><span class="btn-icon" data-icon="plus" aria-hidden="true"></span> Add to Catalog</button>
                     </form>
-                    <div class="product-list" id="productList" aria-live="polite" style="margin-top:14px"></div>
+                    <div class="product-list mt-14" id="productList" aria-live="polite"></div>
                 </div>
 
                 <div class="card">
@@ -1045,7 +1083,7 @@
                     <button class="btn btn-primary" id="analyzeBusinessBtn" type="button">
                         <span class="btn-icon" data-icon="brain" aria-hidden="true"></span> Analyze My Business
                     </button>
-                    <div id="businessProfileResult" style="margin-top:14px"></div>
+                    <div id="businessProfileResult" class="mt-14"></div>
                 </div>
             </div>
 
@@ -1063,7 +1101,7 @@
                             </label>
                         </div>
 
-                        <div class="form-row" style="margin-top:16px">
+                        <div class="form-row mt-16">
                             <div class="form-group">
                                 <label for="settOwnerName">Your Name / Identity</label>
                                 <input type="text" id="settOwnerName" placeholder="e.g. Alex / My Name" autocomplete="name">
@@ -1080,7 +1118,7 @@
 
                         <div class="form-group">
                             <label>Quick Persona Presets</label>
-                            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                            <div class="flex-wrap-gap-8-mb">
                                 <button type="button" class="btn btn-sm btn-secondary preset-btn" data-preset="casual"><span class="btn-icon" data-icon="message-circle" aria-hidden="true"></span> Casual &amp; Friendly</button>
                                 <button type="button" class="btn btn-sm btn-secondary preset-btn" data-preset="assistant"><span class="btn-icon" data-icon="bot" aria-hidden="true"></span> Personal Assistant</button>
                                 <button type="button" class="btn btn-sm btn-secondary preset-btn" data-preset="professional"><span class="btn-icon" data-icon="briefcase" aria-hidden="true"></span> Professional</button>
@@ -1095,24 +1133,24 @@
                         </div>
 
                         <div class="form-group">
-                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-                                <label for="settGeminiApiKey" style="margin-bottom:0">Google Gemini API Key</label>
-                                <span id="settGeminiApiKeyStatus" class="badge" style="display:none;font-size:0.75rem;padding:2px 8px;border-radius:12px;"></span>
+                            <div class="flex-between-mb-6">
+                                <label for="settGeminiApiKey" class="mb-0">Google Gemini API Key</label>
+                                <span id="settGeminiApiKeyStatus" class="badge" hidden class="badge-cal-syncing"></span>
                             </div>
-                            <div style="display:flex;gap:8px;align-items:center;">
-                                <input type="password" id="settGeminiApiKey" placeholder="Enter your Gemini API Key" autocomplete="new-password" style="flex:1;">
-                                <button type="button" class="btn btn-sm btn-secondary" id="testGeminiApiKeyBtn" style="white-space:nowrap;">Test Key</button>
-                                <button type="button" class="btn btn-sm btn-danger" id="removeGeminiApiKeyBtn" style="white-space:nowrap;display:none;">Remove</button>
+                            <div class="flex-center-gap-8">
+                                <input type="password" id="settGeminiApiKey" placeholder="Enter your Gemini API Key" autocomplete="new-password" class="flex-1">
+                                <button type="button" class="btn btn-sm btn-secondary text-nowrap" id="testGeminiApiKeyBtn">Test Key</button>
+                                <button type="button" class="btn btn-sm btn-danger" id="removeGeminiApiKeyBtn" hidden class="text-nowrap">Remove</button>
                             </div>
                             <p class="form-text" id="settGeminiApiKeyHelp">Get a free key from <a href="https://aistudio.google.com/" target="_blank" rel="noopener noreferrer">Google AI Studio</a>.</p>
                         </div>
 
-                        <div class="form-group" style="margin-top:12px;">
-                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-                                <label for="settGeminiModel" style="margin-bottom:0">Gemini AI Model</label>
-                                <span class="badge" style="background:rgba(16,185,129,0.15);color:#10b981;font-size:0.75rem;padding:2px 8px;border-radius:12px;">Auto-Fallback Protected</span>
+                        <div class="form-group mt-12">
+                            <div class="flex-between-mb-6">
+                                <label for="settGeminiModel" class="mb-0">Gemini AI Model</label>
+                                <span class="badge badge-cal-connected">Auto-Fallback Protected</span>
                             </div>
-                            <select id="settGeminiModel" style="width:100%;">
+                            <select id="settGeminiModel" class="w-full">
                                 <option value="auto">Auto (Recommended — Best Speed &amp; Automatic Fallback)</option>
                                 <optgroup label="Fast &amp; High-Throughput (WhatsApp Recommended)">
                                     <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite (Ultra-low Latency ~700ms &amp; High Quota)</option>
@@ -1126,8 +1164,8 @@
                                     <option value="custom">Custom Model Name...</option>
                                 </optgroup>
                             </select>
-                            <div id="customModelWrapper" style="display:none;margin-top:8px;">
-                                <input type="text" id="settGeminiCustomModel" placeholder="e.g. gemini-3.0-flash or gemini-3.5-pro" style="width:100%;">
+                            <div id="customModelWrapper" hidden class="mt-8">
+                                <input type="text" id="settGeminiCustomModel" placeholder="e.g. gemini-3.0-flash or gemini-3.5-pro" class="w-full">
                                 <p class="form-text">Type any future model name from Google AI Studio. It will be prioritized first.</p>
                             </div>
                             <p class="form-text">If a model is busy, rate-limited, or unavailable, the system automatically falls back down the list to maintain service availability for WhatsApp replies.</p>
@@ -1146,7 +1184,7 @@
                     <div class="qr-container" id="qrContainer" aria-live="polite">
                         <div class="qr-loading" id="qrLoading">Waiting for QR Code… (This may take up to 30 seconds)</div>
                         <img id="qrImage" src="" alt="WhatsApp QR Code — scan with your phone" class="qr-image">
-                        <div class="qr-success" id="qrSuccess" style="display:none;">
+                        <div class="qr-success" id="qrSuccess" hidden>
                             <span data-icon="check-circle" data-icon-class="icon-inline" aria-hidden="true"></span>WhatsApp is Connected!
                         </div>
                     </div>
@@ -1167,17 +1205,17 @@
                         </label>
                     </div>
 
-                    <form id="bookingSettingsForm" novalidate style="margin-top:16px">
+                    <form id="bookingSettingsForm" novalidate class="mt-16">
                         <div class="form-group">
                             <label>Working Days</label>
-<div id="bookingWorkingDays" style="display:flex;gap:8px;flex-wrap:wrap">
-                                <label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--color-border);border-radius:20px;font-size:0.85rem;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" value="1" class="bookingDay" style="margin:0"> Mon</label>
-                                <label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--color-border);border-radius:20px;font-size:0.85rem;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" value="2" class="bookingDay" style="margin:0"> Tue</label>
-                                <label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--color-border);border-radius:20px;font-size:0.85rem;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" value="3" class="bookingDay" style="margin:0"> Wed</label>
-                                <label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--color-border);border-radius:20px;font-size:0.85rem;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" value="4" class="bookingDay" style="margin:0"> Thu</label>
-                                <label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--color-border);border-radius:20px;font-size:0.85rem;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" value="5" class="bookingDay" style="margin:0"> Fri</label>
-                                <label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--color-border);border-radius:20px;font-size:0.85rem;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" value="6" class="bookingDay" style="margin:0"> Sat</label>
-                                <label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--color-border);border-radius:20px;font-size:0.85rem;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" value="0" class="bookingDay" style="margin:0"> Sun</label>
+<div id="bookingWorkingDays" class="flex-wrap-gap-8">
+                                <label class="crm-temp-chip"><input type="checkbox" value="1" class="bookingDay m-0"> Mon</label>
+                                <label class="crm-temp-chip"><input type="checkbox" value="2" class="bookingDay m-0"> Tue</label>
+                                <label class="crm-temp-chip"><input type="checkbox" value="3" class="bookingDay m-0"> Wed</label>
+                                <label class="crm-temp-chip"><input type="checkbox" value="4" class="bookingDay m-0"> Thu</label>
+                                <label class="crm-temp-chip"><input type="checkbox" value="5" class="bookingDay m-0"> Fri</label>
+                                <label class="crm-temp-chip"><input type="checkbox" value="6" class="bookingDay m-0"> Sat</label>
+                                <label class="crm-temp-chip"><input type="checkbox" value="0" class="bookingDay m-0"> Sun</label>
                             </div>
                         </div>
                         <div class="form-row">
@@ -1235,20 +1273,20 @@
                 <div class="card">
                     <h2 class="card-title"><span data-icon="calendar-clock" data-icon-class="icon-inline" aria-hidden="true"></span>Google Calendar</h2>
                     <p class="card-note">Connect your Google Calendar to log every outreach send as an event, schedule WhatsApp messages by creating an event titled <code>WhatsApp: &lt;phone number&gt;</code> with the message in the description, and optionally skip sends while your calendar shows you're busy.</p>
-                    <div id="calendarNotConfigured" style="display:none">
-                        <p style="color:var(--color-text-secondary)">Google Calendar isn't set up on this server yet. An administrator needs to add <code>GOOGLE_CALENDAR_CLIENT_ID</code>, <code>GOOGLE_CALENDAR_CLIENT_SECRET</code> and <code>GOOGLE_CALENDAR_REDIRECT_URI</code> to the server's environment.</p>
+                    <div id="calendarNotConfigured" hidden>
+                        <p class="text-secondary">Google Calendar isn't set up on this server yet. An administrator needs to add <code>GOOGLE_CALENDAR_CLIENT_ID</code>, <code>GOOGLE_CALENDAR_CLIENT_SECRET</code> and <code>GOOGLE_CALENDAR_REDIRECT_URI</code> to the server's environment.</p>
                     </div>
                     <div id="calendarStatus" aria-live="polite">
                         <p>Checking connection…</p>
                     </div>
-                    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
-                        <button class="btn btn-primary" id="calendarConnectBtn" type="button" style="display:none">
+                    <div class="flex-wrap-mt-12">
+                        <button class="btn btn-primary" id="calendarConnectBtn" type="button" hidden>
                             <span class="btn-icon" data-icon="calendar-clock" aria-hidden="true"></span> Connect Google Calendar
                         </button>
-                        <button class="btn btn-secondary" id="calendarSyncBtn" type="button" style="display:none">Sync Now</button>
-                        <button class="btn btn-secondary" id="calendarDisconnectBtn" type="button" style="display:none">Disconnect</button>
+                        <button class="btn btn-secondary" id="calendarSyncBtn" type="button" hidden>Sync Now</button>
+                        <button class="btn btn-secondary" id="calendarDisconnectBtn" type="button" hidden>Disconnect</button>
                     </div>
-                    <div class="toggle-group" id="calendarAvailabilityRow" style="display:none;margin-top:16px">
+                    <div class="toggle-group" id="calendarAvailabilityRow" hidden class="mt-16">
                         <span>Skip outreach sends while I'm busy on my calendar</span>
                         <label class="toggle" aria-label="Check calendar availability before sending">
                             <input type="checkbox" id="settCalendarCheckAvailability">
@@ -1258,33 +1296,88 @@
                 </div>
             </div>
 
+            <!-- ── Tab: Routing & SLAs ── -->
+            <div class="settings-panel" id="stab-routing" role="tabpanel" aria-labelledby="tab-routing">
+                <div class="card">
+                    <h2 class="card-title"><span data-icon="git-pull-request" data-icon-class="icon-inline" aria-hidden="true"></span>Lead Assignment &amp; SLA Rules</h2>
+                    <form id="routingSettingsForm" novalidate>
+                        <div class="toggle-group">
+                            <span>Enable Automatic Lead Assignment</span>
+                            <label class="toggle" aria-label="Enable automatic lead assignment">
+                                <input type="checkbox" id="settLeadAssignmentEnabled" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+
+                        <div class="form-group mt-16">
+                            <label for="settLeadAssignmentStrategy">Assignment Strategy</label>
+                            <select id="settLeadAssignmentStrategy">
+                                <option value="round_robin">Round Robin (equal turns among available agents)</option>
+                                <option value="weighted_round_robin">Weighted Round Robin (proportional to agent weights)</option>
+                                <option value="workload">Workload / Least Busy (agent with lowest active deal load)</option>
+                            </select>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="settLeadSlaMinutes">Response SLA Deadline (Minutes)</label>
+                                <input type="number" id="settLeadSlaMinutes" min="1" max="1440" value="15">
+                                <small class="text-secondary">Target time for agent to send first response on WhatsApp.</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="settLeadSlaWarningMinutes">Warning Threshold (Minutes)</label>
+                                <input type="number" id="settLeadSlaWarningMinutes" min="1" max="1440" value="10">
+                                <small class="text-secondary">Warn when remaining time reaches this threshold.</small>
+                            </div>
+                        </div>
+
+                        <div class="toggle-group">
+                            <span>Escalate Breached Leads to Manager</span>
+                            <label class="toggle" aria-label="Escalate breached leads">
+                                <input type="checkbox" id="settLeadEscalationEnabled" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+
+                        <div class="form-group mt-16">
+                            <label for="settLeadEscalationManager">Escalation Manager Agent</label>
+                            <select id="settLeadEscalationManager">
+                                <option value="">Auto (First active manager/admin)</option>
+                            </select>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary" id="saveRoutingSettingsBtn">Save Routing Settings</button>
+                    </form>
+                </div>
+            </div>
+
             <!-- ── Tab: Danger Zone ── -->
             <div class="settings-panel" id="stab-danger" role="tabpanel" aria-labelledby="tab-danger">
                 <div class="danger-zone-card">
                     <h2 class="card-title"><span data-icon="triangle-alert" data-icon-class="icon-inline" aria-hidden="true"></span>Danger Zone</h2>
                     <p class="card-note">These actions are irreversible. Please be certain before proceeding.</p>
 
-                    <div style="display:flex;flex-direction:column;gap:12px;">
-                        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--color-border);">
+                    <div class="flex-col-gap-12">
+                        <div class="pref-row-border">
                             <div>
-                                <div style="font-weight:600;font-size:0.9rem;color:var(--color-text-primary);">Pause Chatbot</div>
-                                <div style="font-size:0.8rem;color:var(--color-text-secondary);margin-top:2px;">Temporarily stop all auto-replies without losing configuration.</div>
+                                <div class="pref-title">Pause Chatbot</div>
+                                <div class="pref-desc">Temporarily stop all auto-replies without losing configuration.</div>
                             </div>
                             <button class="btn btn-danger btn-sm" id="pauseChatbotBtn" type="button">Pause</button>
                         </div>
 
-                        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--color-border);">
+                        <div class="pref-row-border">
                             <div>
-                                <div style="font-weight:600;font-size:0.9rem;color:var(--color-text-primary);">Clear Message History</div>
-                                <div style="font-size:0.8rem;color:var(--color-text-secondary);margin-top:2px;">Delete all stored messages from the database permanently.</div>
+                                <div class="pref-title">Clear Message History</div>
+                                <div class="pref-desc">Delete all stored messages from the database permanently.</div>
                             </div>
                             <button class="btn btn-danger btn-sm" id="clearMessagesBtn" type="button">Clear All</button>
                         </div>
 
-                        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;">
+                        <div class="pref-row">
                             <div>
-                                <div style="font-weight:600;font-size:0.9rem;color:var(--color-text-primary);">Disconnect WhatsApp</div>
-                                <div style="font-size:0.8rem;color:var(--color-text-secondary);margin-top:2px;">Log out of the current WhatsApp session. You will need to re-scan the QR code.</div>
+                                <div class="pref-title">Disconnect WhatsApp</div>
+                                <div class="pref-desc">Log out of the current WhatsApp session. You will need to re-scan the QR code.</div>
                             </div>
                             <button class="btn btn-danger btn-sm" id="disconnectBtn" type="button">Disconnect</button>
                         </div>
@@ -1301,7 +1394,7 @@
 <style>.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}</style>
 
 <!-- ── Conversation Detail Modal ── -->
-<div class="modal-backdrop" id="conversationModalBackdrop" style="display:none" role="dialog" aria-modal="true" aria-labelledby="conversationModalTitle">
+<div class="modal-backdrop" id="conversationModalBackdrop" hidden role="dialog" aria-modal="true" aria-labelledby="conversationModalTitle">
     <div class="modal conversation-modal">
         <div class="modal-header">
             <h2 id="conversationModalTitle">Conversation</h2>
@@ -1312,7 +1405,7 @@
 </div>
 
 <!-- ── Deal Detail Modal ── -->
-<div class="modal-backdrop" id="dealModalBackdrop" style="display:none" role="dialog" aria-modal="true" aria-labelledby="dealModalTitle">
+<div class="modal-backdrop" id="dealModalBackdrop" hidden role="dialog" aria-modal="true" aria-labelledby="dealModalTitle">
     <div class="modal" id="dealModal">
         <div class="modal-header">
             <h2 id="dealModalTitle">Deal</h2>
@@ -1325,7 +1418,7 @@
 </div>
 
 <!-- ── Outreach Modal ── -->
-<div class="modal-backdrop" id="outreachModalBackdrop" style="display:none" role="dialog" aria-modal="true" aria-labelledby="outreachModalTitle">
+<div class="modal-backdrop" id="outreachModalBackdrop" hidden role="dialog" aria-modal="true" aria-labelledby="outreachModalTitle">
     <div class="modal" id="outreachModal">
         <div class="modal-header">
             <h2 id="outreachModalTitle">Send Outreach</h2>
@@ -1341,13 +1434,13 @@
                     outreach fully risk-free.</span>
             </div>
 
-            <p id="outreachRecipientCount" style="font-weight:600;margin-bottom:var(--space-sm)"></p>
+            <p id="outreachRecipientCount" class="font-bold-mb-sm"></p>
 
             <div id="outreachComposeView">
                 <div class="form-group">
                     <label for="outreachMessage">Message</label>
                     <textarea id="outreachMessage" rows="5" placeholder="Hi {{name}}, ..."></textarea>
-                    <div style="font-size:.78rem;color:var(--color-text-secondary);margin-top:4px">
+                    <div class="help-text-sm">
                         Use <code>{{name}}</code> to personalize with each contact's saved name.
                     </div>
                 </div>
@@ -1359,13 +1452,83 @@
                 </div>
             </div>
 
-            <div id="outreachProgressView" style="display:none">
-                <p id="outreachProgressSummary" style="margin-bottom:var(--space-sm)"></p>
+            <div id="outreachProgressView" hidden>
+                <p id="outreachProgressSummary" class="mb-sm"></p>
                 <div class="outreach-progress-list" id="outreachProgressList"></div>
                 <div class="modal-actions">
-                    <button type="button" class="btn btn-primary" id="outreachDoneBtn" style="display:none">Done</button>
+                    <button type="button" class="btn btn-primary" id="outreachDoneBtn" hidden>Done</button>
                 </div>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Agent Detail / Add Modal ── -->
+<div class="modal-backdrop" id="agentModalBackdrop" hidden role="dialog" aria-modal="true" aria-labelledby="agentModalTitle">
+    <div class="modal" id="agentModal">
+        <div class="modal-header">
+            <h2 id="agentModalTitle">Add Agent</h2>
+            <button class="modal-close" id="agentModalClose" aria-label="Close" type="button">×</button>
+        </div>
+        <div class="modal-body">
+            <form id="agentForm" novalidate>
+                <input type="hidden" id="agentFormId">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="agentFormName">Full Name *</label>
+                        <input type="text" id="agentFormName" placeholder="Agent Name" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="agentFormEmail">Email *</label>
+                        <input type="email" id="agentFormEmail" placeholder="agent@agency.com" required>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="agentFormPhone">Phone</label>
+                        <input type="tel" id="agentFormPhone" placeholder="e.g. 919876543210">
+                    </div>
+                    <div class="form-group">
+                        <label for="agentFormRole">Role</label>
+                        <select id="agentFormRole">
+                            <option value="agent">Agent</option>
+                            <option value="manager">Manager</option>
+                            <option value="admin">Admin</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="agentFormRoutingStatus">Routing Status</label>
+                        <select id="agentFormRoutingStatus">
+                            <option value="available">Available (receives leads)</option>
+                            <option value="busy">Busy (paused)</option>
+                            <option value="offline">Offline</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="agentFormStatus">Account Status</label>
+                        <select id="agentFormStatus">
+                            <option value="active">Active</option>
+                            <option value="inactive">Inactive</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="agentFormWeight">Routing Weight (1-10)</label>
+                        <input type="number" id="agentFormWeight" min="1" max="10" value="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="agentFormMaxLeads">Max Concurrent Leads</label>
+                        <input type="number" id="agentFormMaxLeads" min="1" max="500" value="25">
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button type="submit" class="btn btn-primary" id="saveAgentBtn">Save Agent</button>
+                    <button type="button" class="btn btn-danger" id="deleteAgentBtn" hidden>Delete Agent</button>
+                </div>
+            </form>
         </div>
     </div>
 </div>

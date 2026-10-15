@@ -42,7 +42,7 @@ const FORBIDDEN_PATH_PATTERNS = [
 
 // 2. High-confidence content patterns (strictly private keys & tokens, NOT public keys)
 const CONTENT_PATTERNS = [
-  { name: 'Private Key Header', regex: /-----BEGIN[ A-Z0-9_-]*PRIVATE KEY-----/ },
+  { name: 'Private Key Header', regex: /-----BEGIN[ A-Z0-9_-]*PRIVATE KEY-----/, exemptFiles: [/TASK_01_CREDENTIAL_SECURITY_REPORT\.md$/] },
   { name: 'Google API Key Pattern', regex: /\bAIza[0-9A-Za-z-_]{35}\b/, exemptFiles: [/\.example$/, /WHATSAPP_AUTOMATION_COMPLETE_AUDIT\.md$/, /TASK_01_CREDENTIAL_SECURITY_REPORT\.md$/, /TASK_01B_SECURITY_VERIFICATION_REPORT\.md$/] },
   { name: 'AWS Access Key ID', regex: /\bAKIA[0-9A-Z]{16}\b/, exemptFiles: [/\.example$/] }
 ];

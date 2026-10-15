@@ -201,7 +201,13 @@ const DEFAULT_SETTINGS = {
     business_target_customers: '',
     business_offers: '',
     business_currency: '₹',
-    business_ai_profile: ''
+    business_ai_profile: '',
+    lead_assignment_enabled: 'true',
+    lead_assignment_strategy: 'round_robin',
+    lead_sla_minutes: '15',
+    lead_sla_warning_minutes: '10',
+    lead_escalation_enabled: 'true',
+    lead_escalation_manager_agent_id: ''
 };
 
 async function ensureDefaultSettings(userId, client = null) {
@@ -618,18 +624,249 @@ async function markContactOutreached(userId, phone) {
 }
 
 async function deleteContact(userId, id) {
-    return runSql('DELETE FROM contacts WHERE user_id = $1 AND id = $2', [userId, id]);
+    const result = await runSql(
+        'DELETE FROM contacts WHERE user_id = $1 AND id = $2',
+        [userId, id]
+    );
+    return { changes: result?.rowCount ?? 0 };
+}
+
+async function setContactOptOut(userId, idOrPhone, isOptedOut, reason = '') {
+    const num = Number(idOrPhone);
+    const isId = Number.isSafeInteger(num) && num > 0 && num <= 2147483647 && (typeof idOrPhone === 'number' || String(idOrPhone).trim().length < 10);
+    const optedOutBool = Boolean(isOptedOut);
+    let row;
+    if (isId) {
+        row = await queryGet(
+            `UPDATE contacts
+             SET is_opted_out = $1,
+                 opted_out_at = (CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END),
+                 opt_out_reason = $2,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE user_id = $3 AND id = $4
+             RETURNING *`,
+            [optedOutBool, reason || '', userId, Number(idOrPhone)]
+        );
+    } else {
+        const phone = String(idOrPhone).replace(/\D/g, '');
+        row = await queryGet(
+            `UPDATE contacts
+             SET is_opted_out = $1,
+                 opted_out_at = (CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END),
+                 opt_out_reason = $2,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE user_id = $3 AND phone = $4
+             RETURNING *`,
+            [optedOutBool, reason || '', userId, phone]
+        );
+        if (!row && optedOutBool) {
+            row = await queryGet(
+                `INSERT INTO contacts (user_id, phone, is_opted_out, opted_out_at, opt_out_reason)
+                 VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4)
+                 ON CONFLICT (user_id, phone) DO UPDATE SET
+                     is_opted_out = EXCLUDED.is_opted_out,
+                     opted_out_at = EXCLUDED.opted_out_at,
+                     opt_out_reason = EXCLUDED.opt_out_reason,
+                     updated_at = CURRENT_TIMESTAMP
+                 RETURNING *`,
+                [userId, phone, true, reason || '']
+            );
+        }
+    }
+    return row || null;
+}
+
+async function getContactOptOutStatus(userId, phone) {
+    const cleanPhone = String(phone).replace(/\D/g, '');
+    const row = await queryGet(
+        'SELECT is_opted_out, opt_out_reason, opted_out_at, label FROM contacts WHERE user_id = $1 AND phone = $2',
+        [userId, cleanPhone]
+    );
+    if (!row) {
+        return { is_opted_out: false, opt_out_reason: '', opted_out_at: null };
+    }
+    const isExplicit = row.is_opted_out === true;
+    const isLabel = /^(opt[-_]?out|dnd|do\s*not\s*contact|unsub(scribe)?)$/i.test(row.label || '');
+    const isOptedOut = isExplicit || isLabel;
+    return {
+        is_opted_out: isOptedOut,
+        opt_out_reason: row.opt_out_reason || (isLabel ? 'Label: ' + row.label : ''),
+        opted_out_at: row.opted_out_at || null
+    };
+}
+
+async function setConversationAiPause(userId, dealIdOrPhone, isPaused, durationMinutes = null, reason = '', pausedByUserId = null) {
+    const pausedBool = Boolean(isPaused);
+    const mins = Number(durationMinutes);
+    let pausedUntil = null;
+    if (pausedBool && Number.isFinite(mins) && mins > 0) {
+        pausedUntil = new Date(Date.now() + mins * 60 * 1000);
+    }
+
+    const num = Number(dealIdOrPhone);
+    const isId = Number.isSafeInteger(num) && num > 0 && num <= 2147483647 && (typeof dealIdOrPhone === 'number' || String(dealIdOrPhone).trim().length < 10);
+    let deal = null;
+
+    if (isId) {
+        deal = await queryGet(
+            `UPDATE crm_deals
+             SET is_ai_paused = $1,
+                 ai_paused_until = $2,
+                 ai_paused_at = (CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END),
+                 ai_pause_reason = $3
+             WHERE user_id = $4 AND id = $5
+             RETURNING *`,
+            [pausedBool, pausedUntil, reason || '', userId, Number(dealIdOrPhone)]
+        );
+    } else {
+        const phone = String(dealIdOrPhone).replace(/\D/g, '');
+        deal = await queryGet(
+            `UPDATE crm_deals
+             SET is_ai_paused = $1,
+                 ai_paused_until = $2,
+                 ai_paused_at = (CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END),
+                 ai_pause_reason = $3
+             WHERE user_id = $4 AND phone = $5
+             RETURNING *`,
+            [pausedBool, pausedUntil, reason || '', userId, phone]
+        );
+    }
+
+    const phoneToSync = deal?.phone || (!isId ? String(dealIdOrPhone).replace(/\D/g, '') : null);
+    if (phoneToSync) {
+        await query(
+            `UPDATE contacts
+             SET is_ai_paused = $1,
+                 ai_paused_until = $2
+             WHERE user_id = $3 AND phone = $4`,
+            [pausedBool, pausedUntil, userId, phoneToSync]
+        );
+    }
+
+    return deal;
+}
+
+async function isConversationAiPaused(userId, phone) {
+    const cleanPhone = String(phone).replace(/\D/g, '');
+    const now = new Date();
+
+    // 1. Check deal first
+    const deal = await queryGet(
+        'SELECT is_ai_paused, ai_paused_until FROM crm_deals WHERE user_id = $1 AND phone = $2',
+        [userId, cleanPhone]
+    );
+    if (deal && deal.is_ai_paused) {
+        if (deal.ai_paused_until && new Date(deal.ai_paused_until) <= now) {
+            // Expired! Reset pause
+            await query(
+                'UPDATE crm_deals SET is_ai_paused = false, ai_paused_until = null WHERE user_id = $1 AND phone = $2',
+                [userId, cleanPhone]
+            );
+        } else {
+            return true;
+        }
+    }
+
+    // 2. Check contact
+    const contact = await queryGet(
+        'SELECT is_ai_paused, ai_paused_until FROM contacts WHERE user_id = $1 AND phone = $2',
+        [userId, cleanPhone]
+    );
+    if (contact && contact.is_ai_paused) {
+        if (contact.ai_paused_until && new Date(contact.ai_paused_until) <= now) {
+            await query(
+                'UPDATE contacts SET is_ai_paused = false, ai_paused_until = null WHERE user_id = $1 AND phone = $2',
+                [userId, cleanPhone]
+            );
+        } else {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+async function cancelScheduledMessagesForPhone(userId, phone) {
+    const cleanPhone = String(phone).replace(/\D/g, '');
+    return runSql(
+        "UPDATE scheduled_messages SET status = 'cancelled', error_message = 'Contact opted out' WHERE user_id = $1 AND phone = $2 AND status = 'pending'",
+        [userId, cleanPhone]
+    );
+}
+
+async function getMessagesByPhone(userId, phone) {
+    const cleanPhone = String(phone).replace(/\D/g, '');
+    return queryAll(
+        'SELECT *, body AS message_text FROM messages WHERE user_id = $1 AND phone = $2 ORDER BY created_at ASC',
+        [userId, cleanPhone]
+    );
+}
+
+async function exportContactsData(userId) {
+    return queryAll(
+        `SELECT id, name, phone, label, is_opted_out, opted_out_at, opt_out_reason, notes, last_outreach_at, created_at
+         FROM contacts
+         WHERE user_id = $1
+         ORDER BY id ASC`,
+        [userId]
+    );
+}
+
+async function exportLeadsData(userId) {
+    return queryAll(
+        `SELECT la.id, la.phone, la.contact_name, la.interest_status, la.interest_score,
+                la.priority, la.sentiment, COALESCE(cd.deal_value, 0) as estimated_value, la.summary, la.next_action,
+                la.created_at, cd.lead_temp, cd.stage
+         FROM lead_analysis la
+         LEFT JOIN crm_deals cd ON cd.user_id = la.user_id AND cd.phone = la.phone
+         WHERE la.user_id = $1
+         ORDER BY la.id DESC`,
+        [userId]
+    );
+}
+
+async function exportDealsData(userId, { agentId = null } = {}) {
+    let sql = `
+        SELECT cd.id, cd.contact_name, cd.phone, cd.stage, cd.deal_value, cd.lead_temp,
+               cd.lead_type, cd.preferred_bhk, cd.preferred_locality, cd.budget_min, cd.budget_max,
+               cd.timeline, cd.financing_needed, cd.is_ai_paused, cd.ai_paused_until,
+               a.name as assigned_agent_name, cd.next_followup_at, cd.created_at
+        FROM crm_deals cd
+        LEFT JOIN agents a ON a.id = cd.assigned_agent_id
+        WHERE cd.user_id = $1
+    `;
+    const params = [userId];
+    if (agentId) {
+        sql += ` AND cd.assigned_agent_id = $2`;
+        params.push(agentId);
+    }
+    sql += ` ORDER BY cd.id DESC`;
+    return queryAll(sql, params);
 }
 
 // ─── Message Helpers ────────────────────────────────────────
 
-async function logMessage(userId, { waMessageId, phone, contactName, direction, messageType, body, status, templateName }) {
+async function logMessage(userId, arg2, maybeDirection, maybeBody) {
+    let waMessageId, phone, contactName, direction, messageType, body, status, templateName;
+    if (typeof arg2 === 'object' && arg2 !== null) {
+        ({ waMessageId, phone, contactName, direction, messageType, body, status, templateName } = arg2);
+    } else {
+        phone = arg2;
+        direction = maybeDirection || 'incoming';
+        body = maybeBody || '';
+    }
     const res = await query(
         `INSERT INTO messages (user_id, wa_message_id, phone, contact_name, direction, message_type, body, status, template_name)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING *`,
         [userId, waMessageId || null, phone, contactName || '', direction, messageType || 'text', body || '', status || 'sent', templateName || null]
     );
+    if (direction === 'outgoing' && phone) {
+        try {
+            const { recordFirstResponse } = require('./lead-assignment');
+            recordFirstResponse(userId, phone).catch(() => {});
+        } catch (_) {}
+    }
     return res.rows[0];
 }
 
@@ -651,6 +888,12 @@ async function logOutgoingMessageIdempotent(userId, idempotencyKey, fields) {
                 fields.body || '', fields.status || 'sent', fields.templateName || null
             ]
         );
+        if ((fields.direction || 'outgoing') === 'outgoing' && fields.phone) {
+            try {
+                const { recordFirstResponse } = require('./lead-assignment');
+                recordFirstResponse(userId, fields.phone).catch(() => {});
+            } catch (_) {}
+        }
         return { created: true, row: res.rows[0] };
     } catch (err) {
         if (err.code === '23505' || /UNIQUE constraint failed|idx_messages_user_idempotency_key/i.test(String(err.message))) {
@@ -963,8 +1206,17 @@ async function getOutreachJob(userId, id, client = null) {
     const results = await queryAll(`SELECT phone, contact_name AS name, status, reason FROM outreach_recipients
                                     WHERE job_id=$1 AND user_id=$2 ORDER BY id`, [id, userId], client);
     const counts = results.reduce((out, row) => { out[row.status] = (out[row.status] || 0) + 1; return out; }, {});
-    return { ...job, results, sent: counts.sent || 0, failed: counts.failed || 0,
-        skipped: (counts.skipped || 0) + (counts.unknown || 0), cancelRequested: job.status === 'cancel_requested' };
+    return {
+        ...job,
+        results,
+        sent: counts.sent || 0,
+        failed: counts.failed || 0,
+        skipped: (counts.skipped || 0) + (counts.unknown || 0),
+        total_recipients: job.total || results.length,
+        sent_count: counts.sent || 0,
+        failed_count: (counts.failed || 0) + (counts.skipped || 0) + (counts.unknown || 0),
+        cancelRequested: job.status === 'cancel_requested'
+    };
 }
 
 async function countRunningOutreachJobs(userId = null) {
@@ -1044,45 +1296,75 @@ async function deleteProduct(userId, id) {
 
 const CRM_STAGES = ['new', 'contacted', 'qualified', 'proposal', 'negotiation', 'won', 'lost'];
 
-async function getCrmDeals(userId, { stage = '', leadTemp = '' } = {}) {
+async function getCrmDeals(userId, { stage = '', leadTemp = '', agentId = null, slaStatus = '' } = {}) {
     let sql = `
         SELECT cd.*,
                la.interest_status, la.interest_score, la.priority, la.summary,
-               la.issue_category, la.next_action, la.sentiment
+               la.issue_category, la.next_action, la.sentiment,
+               ag.name AS assigned_agent_name, ag.role AS assigned_agent_role, ag.email AS assigned_agent_email
         FROM crm_deals cd
         LEFT JOIN lead_analysis la ON la.phone = cd.phone AND la.user_id = cd.user_id
+        LEFT JOIN agents ag ON ag.id = cd.assigned_agent_id AND ag.user_id = cd.user_id
         WHERE cd.user_id = $1`;
     const params = [userId];
     let idx = 2;
     if (stage) { sql += ` AND cd.stage = $${idx++}`; params.push(stage); }
     if (leadTemp) { sql += ` AND cd.lead_temp = $${idx++}`; params.push(leadTemp); }
+    if (agentId) { sql += ` AND cd.assigned_agent_id = $${idx++}`; params.push(agentId); }
+    if (slaStatus) { sql += ` AND cd.sla_status = $${idx++}`; params.push(slaStatus); }
     sql += ' ORDER BY cd.deal_value DESC, cd.updated_at DESC';
     return queryAll(sql, params);
 }
 
 async function getCrmDealByPhone(userId, phone) {
-    return queryGet('SELECT * FROM crm_deals WHERE user_id = $1 AND phone = $2', [userId, phone]);
+    return queryGet(
+        `SELECT cd.*,
+                ag.name AS assigned_agent_name, ag.role AS assigned_agent_role, ag.email AS assigned_agent_email
+         FROM crm_deals cd
+         LEFT JOIN agents ag ON ag.id = cd.assigned_agent_id AND ag.user_id = cd.user_id
+         WHERE cd.user_id = $1 AND cd.phone = $2`,
+        [userId, phone]
+    );
 }
 
 async function getCrmDealById(userId, id) {
-    return queryGet('SELECT * FROM crm_deals WHERE user_id = $1 AND id = $2', [userId, id]);
+    return queryGet(
+        `SELECT cd.*,
+                ag.name AS assigned_agent_name, ag.role AS assigned_agent_role, ag.email AS assigned_agent_email
+         FROM crm_deals cd
+         LEFT JOIN agents ag ON ag.id = cd.assigned_agent_id AND ag.user_id = cd.user_id
+         WHERE cd.user_id = $1 AND cd.id = $2`,
+        [userId, id]
+    );
 }
 
-async function createCrmDeal(userId, { phone, contactName = '', stage = 'new', dealValue = 0, productInterest = '', source = 'whatsapp', notes = '', nextFollowupAt = null, interested_project_id = null }) {
+async function createCrmDeal(userId, { phone, contactName = '', stage = 'new', dealValue = 0, productInterest = '', source = 'whatsapp', notes = '', nextFollowupAt = null, interested_project_id = null, assigned_agent_id = null }) {
     if (!CRM_STAGES.includes(stage)) stage = 'new';
     const res = await query(
-        `INSERT INTO crm_deals (user_id, phone, contact_name, stage, deal_value, product_interest, source, notes, next_followup_at, interested_project_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        `INSERT INTO crm_deals (user_id, phone, contact_name, stage, deal_value, product_interest, source, notes, next_followup_at, interested_project_id, assigned_agent_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING *`,
-        [userId, phone, contactName, stage, dealValue || 0, productInterest, source, notes, nextFollowupAt, interested_project_id || null]
+        [userId, phone, contactName, stage, dealValue || 0, productInterest, source, notes, nextFollowupAt, interested_project_id || null, assigned_agent_id || null]
     );
-    return res.rows[0];
+    const deal = res.rows[0];
+
+    // Auto-assign lead to agent if configured and not already assigned
+    try {
+        const { assignLead } = require('./lead-assignment');
+        const assignedDeal = await assignLead(userId, deal.id, {
+            agentId: assigned_agent_id || null,
+            reason: assigned_agent_id ? 'manual_at_creation' : 'auto_inbound'
+        });
+        if (assignedDeal) return assignedDeal;
+    } catch (_) {}
+
+    return deal;
 }
 
 async function updateCrmDeal(userId, id, fields) {
     const allowed = ['contact_name', 'stage', 'deal_value', 'product_interest', 'notes', 'next_followup_at',
         'lead_type', 'budget_min', 'budget_max', 'preferred_bhk', 'preferred_locality', 'timeline',
-        'financing_needed', 'site_visit_pref', 'interested_project_id'];
+        'financing_needed', 'site_visit_pref', 'interested_project_id', 'assigned_agent_id', 'sla_status'];
     const sets = [];
     const params = [];
     let idx = 1;
@@ -2071,5 +2353,16 @@ module.exports = {
     getMediaAssetSendHistory,
     logBrochureDropEvent,
     getRecentBrochureDropEvents,
-    hasBrochureBeenSentRecently
+    hasBrochureBeenSentRecently,
+    // Phase 1: Compliance, Safety & Human Handover
+    createContact: upsertContact,
+    getMessagesByPhone,
+    setContactOptOut,
+    getContactOptOutStatus,
+    setConversationAiPause,
+    isConversationAiPaused,
+    cancelScheduledMessagesForPhone,
+    exportContactsData,
+    exportLeadsData,
+    exportDealsData
 };

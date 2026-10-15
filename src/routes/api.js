@@ -14,14 +14,16 @@ const {
     getProducts, countProducts, createProduct, updateProduct, deleteProduct,
     CRM_STAGES, getCrmDeals, getCrmDealByPhone, getCrmDealById, createCrmDeal,
     updateCrmDeal, deleteCrmDeal, getCrmStats, getCrmAnalytics, addCrmActivity, getCrmActivities,
-    assertPersistable, transaction, runSql
+    assertPersistable, transaction, runSql,
+    setContactOptOut, setConversationAiPause, isConversationAiPaused,
+    exportContactsData, exportLeadsData, exportDealsData
 } = require('../services/database');
 
 const { sendTextMessage, getStatus, initWhatsAppClient, destroyClientForUser } = require('../services/whatsapp-client');
 const { testMessage } = require('../services/chatbot');
 const { analyzeConversation, analyzeAllConversations } = require('../services/lead-analyzer');
 const { analyzeBusinessProfile, getBusinessInfo } = require('../services/business');
-const { parseCSV, mapContactRow } = require('../services/csv');
+const { parseCSV, mapContactRow, serializeCSV } = require('../services/csv');
 const { startOutreachJob, getOutreachJob, cancelOutreachJob, MAX_RECIPIENTS_PER_JOB } = require('../services/outreach');
 const { getApiKey, testApiKey, ALL_GEMINI_MODELS, resetCircuits } = require('../services/gemini-client');
 const { asyncHandler } = require('../utils/errors');
@@ -32,7 +34,7 @@ const {
     requireId, requireEnum, optionalEnum, toSqliteUtc,
     assertSafeRegexSource, sanitizeSpreadsheetCell, validateSettingsPatch
 } = require('../utils/validate');
-const { maskEntityPhones, resolvePhoneForTenant } = require('../utils/phone-mask');
+const { maskEntityPhones, resolvePhoneForTenant, isAuthorizedForFullPhone, maskPhoneNumber } = require('../utils/phone-mask');
 const leadAssignment = require('../services/lead-assignment');
 
 // One request importing tens of thousands of rows would block the whole
@@ -246,6 +248,54 @@ router.delete('/contacts/:id', writeLimiter, asyncHandler(async (req, res) => {
     res.json({ success: true });
 }));
 
+router.post('/contacts/:id/opt-out', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
+    const id = requireId(req.params.id, 'contact id');
+    const optedOut = req.body?.opted_out !== undefined ? Boolean(req.body.opted_out) : true;
+    const reason = optionalString(req.body?.reason, 'reason', 200) || (optedOut ? 'Manual opt-out by user' : 'Manual opt-in by user');
+
+    const contact = await setContactOptOut(req.user.id, id, optedOut, reason);
+    if (!contact) return res.status(404).json({ success: false, error: 'Contact not found' });
+    res.json({ success: true, contact: maskEntityPhones(contact, req.user), data: maskEntityPhones(contact, req.user) });
+}));
+
+router.get('/contacts/export', asyncHandler(async (req, res) => {
+    const uid = req.user.tenant_id || req.user.id;
+    const isFullPhone = isAuthorizedForFullPhone(req.user);
+    const contacts = await exportContactsData(uid);
+
+    const columns = [
+        { key: 'id', label: 'ID' },
+        { key: 'name', label: 'Name' },
+        { key: 'phone', label: 'Phone' },
+        { key: 'label', label: 'Label' },
+        { key: 'opted_out', label: 'Opted Out' },
+        { key: 'opted_out_at', label: 'Opted Out At' },
+        { key: 'opt_out_reason', label: 'Opt Out Reason' },
+        { key: 'notes', label: 'Notes' },
+        { key: 'last_outreach_at', label: 'Last Outreach At' },
+        { key: 'created_at', label: 'Created At' }
+    ];
+
+    const rows = contacts.map(c => ({
+        id: c.id,
+        name: c.name || '',
+        phone: isFullPhone ? c.phone : maskPhoneNumber(c.phone),
+        label: c.label || '',
+        opted_out: c.is_opted_out ? 'YES' : 'NO',
+        opted_out_at: c.opted_out_at ? new Date(c.opted_out_at).toISOString() : '',
+        opt_out_reason: c.opt_out_reason || '',
+        notes: c.notes || '',
+        last_outreach_at: c.last_outreach_at ? new Date(c.last_outreach_at).toISOString() : '',
+        created_at: c.created_at ? new Date(c.created_at).toISOString() : ''
+    }));
+
+    const csvOutput = serializeCSV(columns, rows);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="contacts_${dateStr}.csv"`);
+    res.send(csvOutput);
+}));
+
 // ─── CSV import ─────────────────────────────────────────────
 // Body is { csv: "<raw file text>" }, not multipart — the browser reads the
 // file client-side (FileReader) and sends it as a JSON string, which avoids
@@ -358,6 +408,22 @@ router.get('/messages/conversation/:phone', asyncHandler(async (req, res) => {
     const limit = clampInt(req.query.limit, { min: 1, max: 2000, fallback: 500 });
     const messages = await getConversation(req.user.id, phone, { limit });
     res.json({ success: true, data: maskEntityPhones(messages, req.user) });
+}));
+
+router.post('/messages/conversation/:phone/pause-ai', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
+    const uid = req.user.id;
+    const phone = await resolvePhoneForTenant(uid, req.params.phone);
+    const paused = req.body?.paused !== undefined ? Boolean(req.body.paused) : true;
+    const durationMinutes = req.body?.duration_minutes ? clampInt(req.body.duration_minutes, { min: 1, max: 43200, fallback: null }) : null;
+    const reason = optionalString(req.body?.reason, 'reason', 200) || (paused ? 'Human agent takeover' : 'Resumed by agent');
+
+    const deal = await setConversationAiPause(uid, phone, paused, durationMinutes, reason, uid);
+    res.json({
+        success: true,
+        phone,
+        is_ai_paused: paused,
+        ai_paused_until: deal?.ai_paused_until || null
+    });
 }));
 
 // Danger Zone → Clear Message History: permanently deletes this account's own message log.
@@ -685,6 +751,50 @@ router.get('/leads', asyncHandler(async (req, res) => {
     });
 }));
 
+router.get('/leads/export', asyncHandler(async (req, res) => {
+    const uid = req.user.tenant_id || req.user.id;
+    const isFullPhone = isAuthorizedForFullPhone(req.user);
+    const leads = await exportLeadsData(uid);
+
+    const columns = [
+        { key: 'id', label: 'ID' },
+        { key: 'phone', label: 'Phone' },
+        { key: 'contact_name', label: 'Contact Name' },
+        { key: 'interest_status', label: 'Interest Status' },
+        { key: 'interest_score', label: 'Interest Score' },
+        { key: 'lead_temp', label: 'Temperature' },
+        { key: 'stage', label: 'CRM Stage' },
+        { key: 'priority', label: 'Priority' },
+        { key: 'sentiment', label: 'Sentiment' },
+        { key: 'estimated_value', label: 'Estimated Value' },
+        { key: 'summary', label: 'Summary' },
+        { key: 'next_action', label: 'Next Action' },
+        { key: 'created_at', label: 'Analyzed At' }
+    ];
+
+    const rows = leads.map(l => ({
+        id: l.id,
+        phone: isFullPhone ? l.phone : maskPhoneNumber(l.phone),
+        contact_name: l.contact_name || '',
+        interest_status: l.interest_status || '',
+        interest_score: l.interest_score ?? '',
+        lead_temp: l.lead_temp || '',
+        stage: l.stage || '',
+        priority: l.priority || '',
+        sentiment: l.sentiment || '',
+        estimated_value: l.estimated_value ?? '',
+        summary: l.summary || '',
+        next_action: l.next_action || '',
+        created_at: l.created_at ? new Date(l.created_at).toISOString() : ''
+    }));
+
+    const csvOutput = serializeCSV(columns, rows);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="leads_${dateStr}.csv"`);
+    res.send(csvOutput);
+}));
+
 // Get one lead's analysis
 router.get('/leads/:phone', asyncHandler(async (req, res) => {
     const phone = await resolvePhoneForTenant(req.user.id, req.params.phone);
@@ -846,6 +956,64 @@ router.get('/crm/deals', asyncHandler(async (req, res) => {
     });
 }));
 
+router.get('/crm/deals/export', asyncHandler(async (req, res) => {
+    const uid = req.user.tenant_id || req.user.id;
+    const isFullPhone = isAuthorizedForFullPhone(req.user);
+    let agentId = null;
+    if (req.user.role === 'agent') {
+        agentId = req.user.agent_id || null;
+    }
+    const deals = await exportDealsData(uid, { agentId });
+
+    const columns = [
+        { key: 'id', label: 'ID' },
+        { key: 'contact_name', label: 'Contact Name' },
+        { key: 'phone', label: 'Phone' },
+        { key: 'stage', label: 'Stage' },
+        { key: 'deal_value', label: 'Deal Value' },
+        { key: 'lead_temp', label: 'Temperature' },
+        { key: 'lead_type', label: 'Lead Type' },
+        { key: 'preferred_bhk', label: 'Preferred BHK' },
+        { key: 'preferred_locality', label: 'Preferred Locality' },
+        { key: 'budget_min', label: 'Budget Min' },
+        { key: 'budget_max', label: 'Budget Max' },
+        { key: 'timeline', label: 'Timeline' },
+        { key: 'financing_needed', label: 'Financing Needed' },
+        { key: 'is_ai_paused', label: 'AI Paused' },
+        { key: 'ai_paused_until', label: 'AI Paused Until' },
+        { key: 'assigned_agent_name', label: 'Assigned Agent' },
+        { key: 'next_followup_at', label: 'Next Follow-up At' },
+        { key: 'created_at', label: 'Created At' }
+    ];
+
+    const rows = deals.map(d => ({
+        id: d.id,
+        contact_name: d.contact_name || '',
+        phone: isFullPhone ? d.phone : maskPhoneNumber(d.phone),
+        stage: d.stage || '',
+        deal_value: d.deal_value ?? '',
+        lead_temp: d.lead_temp || '',
+        lead_type: d.lead_type || '',
+        preferred_bhk: d.preferred_bhk || '',
+        preferred_locality: d.preferred_locality || '',
+        budget_min: d.budget_min ?? '',
+        budget_max: d.budget_max ?? '',
+        timeline: d.timeline || '',
+        financing_needed: d.financing_needed || '',
+        is_ai_paused: d.is_ai_paused ? 'YES' : 'NO',
+        ai_paused_until: d.ai_paused_until ? new Date(d.ai_paused_until).toISOString() : '',
+        assigned_agent_name: d.assigned_agent_name || 'Unassigned',
+        next_followup_at: d.next_followup_at ? new Date(d.next_followup_at).toISOString() : '',
+        created_at: d.created_at ? new Date(d.created_at).toISOString() : ''
+    }));
+
+    const csvOutput = serializeCSV(columns, rows);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="deals_${dateStr}.csv"`);
+    res.send(csvOutput);
+}));
+
 router.get('/crm/analytics', asyncHandler(async (req, res) => {
     const analytics = await getCrmAnalytics(req.user.id);
     analytics.currency = (await getSetting(req.user.id, 'business_currency')) || '₹';
@@ -921,6 +1089,29 @@ router.put('/crm/deals/:id', writeLimiter, requireDurableWrite, asyncHandler(asy
     }
 
     res.json({ success: true, data: updated });
+}));
+
+router.post('/crm/deals/:id/pause-ai', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
+    const uid = req.user.id;
+    const id = requireId(req.params.id, 'deal id');
+    const existing = await getCrmDealById(uid, id);
+    if (!existing) return res.status(404).json({ success: false, error: 'Deal not found' });
+
+    if (req.user.role === 'agent' && req.user.agent_id && existing.assigned_agent_id && existing.assigned_agent_id !== req.user.agent_id) {
+        return res.status(403).json({ success: false, error: 'Forbidden: deal assigned to another agent' });
+    }
+
+    const paused = req.body?.paused !== undefined ? Boolean(req.body.paused) : true;
+    const durationMinutes = req.body?.duration_minutes ? clampInt(req.body.duration_minutes, { min: 1, max: 43200, fallback: null }) : null;
+    const reason = optionalString(req.body?.reason, 'reason', 200) || (paused ? 'Human agent takeover on deal' : 'Resumed by agent');
+
+    const updated = await setConversationAiPause(uid, id, paused, durationMinutes, reason, uid);
+    await addCrmActivity(uid, existing.phone, 'system', paused ? `AI automated replies paused: ${reason}` : 'AI automated replies resumed');
+
+    res.json({
+        success: true,
+        data: updated
+    });
 }));
 
 router.delete('/crm/deals/:id', writeLimiter, asyncHandler(async (req, res) => {

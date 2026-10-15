@@ -33,7 +33,7 @@
             <div id="diagnosticsContent" class="admin-empty">Loading diagnostics…</div>
         </div>
 
-        <div class="approval-alert-banner" id="approvalAlertBanner" style="display:none">
+        <div class="approval-alert-banner" id="approvalAlertBanner" hidden>
             <div class="banner-content">
                 <span data-icon="alert-circle" class="icon" aria-hidden="true"></span>
                 <span><strong id="pendingAlertCount">0</strong> new account registration(s) waiting for your approval.</span>
@@ -63,7 +63,7 @@
                             <th>Role</th>
                             <th>Status</th>
                             <th>WhatsApp</th>
-                            <th style="text-align:center">WA Access</th>
+                            <th class="text-center">WA Access</th>
                             <th>Usage</th>
                             <th>Plan / Limits</th>
                             <th>Joined</th>
@@ -73,7 +73,7 @@
                     <tbody id="usersBody"></tbody>
                 </table>
             </div>
-            <div class="admin-empty" id="usersEmpty" style="display:none">
+            <div class="admin-empty" id="usersEmpty" hidden>
                 <span data-icon="users" aria-hidden="true"></span>
                 <div>No accounts match your search.</div>
             </div>
@@ -115,11 +115,11 @@
             <input type="text" id="editPlan" placeholder="free">
         </div>
         <div class="form-field">
-            <label>Monthly Message Limit <small style="color:var(--text-secondary);font-weight:400">(0 = unlimited)</small></label>
+            <label>Monthly Message Limit <small class="text-secondary text-normal">(0 = unlimited)</small></label>
             <input type="number" id="editMessageLimit" min="0" step="1">
         </div>
         <div class="form-field">
-            <label>Chatbot Rule Limit <small style="color:var(--text-secondary);font-weight:400">(0 = unlimited)</small></label>
+            <label>Chatbot Rule Limit <small class="text-secondary text-normal">(0 = unlimited)</small></label>
             <input type="number" id="editRuleLimit" min="0" step="1">
         </div>
         <div class="modal-actions">

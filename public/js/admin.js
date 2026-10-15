@@ -121,11 +121,11 @@ function updateFilterBadges() {
     const pendingFilterBtn = document.querySelector('.filter-btn-pending');
 
     if (pending > 0) {
-        if (banner) banner.style.display = 'flex';
+        if (banner) { banner.hidden = false; banner.style.display = 'flex'; }
         if (alertCount) alertCount.textContent = pending;
         if (pendingFilterBtn) pendingFilterBtn.classList.add('has-pending');
     } else {
-        if (banner) banner.style.display = 'none';
+        if (banner) { banner.hidden = true; banner.style.display = 'none'; }
         if (pendingFilterBtn) pendingFilterBtn.classList.remove('has-pending');
     }
 }
@@ -239,9 +239,11 @@ function renderUsers() {
 
     if (filtered.length === 0) {
         tbody.innerHTML = '';
+        empty.hidden = false;
         empty.style.display = 'block';
         return;
     }
+    empty.hidden = true;
     empty.style.display = 'none';
 
     tbody.innerHTML = filtered.map(u => {
@@ -271,7 +273,7 @@ function renderUsers() {
         // Uses data-action / data-id / data-value for CSP-safe delegation.
         const waAccessCell = u.role === 'admin'
             ? `<span class="pill pill-admin" title="Admins always have access">${Icon('crown')} Always</span>`
-            : `<button class="btn btn-tiny" style="background:${u.wa_enabled ? 'var(--color-success)' : 'var(--color-error)'};color:#fff;font-size:.75rem;"
+            : `<button class="btn btn-tiny ${u.wa_enabled ? 'wa-access-enabled' : 'wa-access-disabled'}"
                  data-action="toggle-wa" data-id="${u.id}" data-value="${u.wa_enabled ? 0 : 1}"
                  type="button" title="${u.wa_enabled ? 'Revoke WhatsApp access' : 'Grant WhatsApp access'}">
                  ${u.wa_enabled ? Icon('check-circle') + ' Enabled' : Icon('x-circle') + ' Disabled'}
@@ -306,20 +308,20 @@ function renderUsers() {
                 <td data-label="WhatsApp">
                     <span class="wa-dot ${wa.connected ? 'connected' : ''}">${escapeHtml(waLabel)}</span>
                 </td>
-                <td data-label="WA Access" style="text-align:center">${waAccessCell}</td>
+                <td data-label="WA Access" class="text-center">${waAccessCell}</td>
                 <td data-label="Usage">
-                    <div style="font-size:.8rem;line-height:1.5">
+                    <div class="admin-subtext">
                         <div>${s.messagesThisMonth || 0} msgs this month</div>
-                        <div style="color:var(--text-secondary)">${s.contacts || 0} contacts · ${s.leads || 0} leads</div>
+                        <div class="text-secondary">${s.contacts || 0} contacts · ${s.leads || 0} leads</div>
                     </div>
                 </td>
                 <td data-label="Plan">
-                    <div style="font-size:.8rem;line-height:1.5">
+                    <div class="admin-subtext">
                         <div>${escapeHtml(u.plan || 'free')}</div>
-                        <div style="color:var(--text-secondary)">${u.message_limit ? u.message_limit + ' msgs/mo' : 'Unlimited msgs'} · ${u.rule_limit ? u.rule_limit + ' rules' : 'Unlimited rules'}</div>
+                        <div class="text-secondary">${u.message_limit ? u.message_limit + ' msgs/mo' : 'Unlimited msgs'} · ${u.rule_limit ? u.rule_limit + ' rules' : 'Unlimited rules'}</div>
                     </div>
                 </td>
-                <td data-label="Joined" style="color:var(--text-secondary);font-size:.8rem;white-space:nowrap">${formatDate(u.created_at)}</td>
+                <td data-label="Joined" class="text-secondary text-sm text-nowrap">${formatDate(u.created_at)}</td>
                 <td data-label="Actions">
                     <div class="row-actions">
                         ${approveRejectBtns}

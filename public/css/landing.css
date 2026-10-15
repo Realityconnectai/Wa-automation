@@ -1148,3 +1148,13 @@ img, svg { display: block; }
 .pending-approval-title { font-size: 1.6rem; margin-bottom: 8px; }
 .pending-approval-copy { color: var(--text-secondary); line-height: 1.6; margin-bottom: 20px; }
 .pending-approval-email { background: var(--cream-subtle); border: 1px solid var(--border-color); border-radius: 10px; padding: 12px; margin-bottom: 24px; font-size: .9rem; }
+
+/* CSP-safe admin utilities */
+.text-center { text-align: center; }
+.text-secondary { color: var(--text-secondary); }
+.text-normal { font-weight: 400; }
+.text-sm { font-size: .8rem; }
+.text-nowrap { white-space: nowrap; }
+.admin-subtext { font-size: .8rem; line-height: 1.5; }
+.wa-access-enabled { background: var(--color-success, #16A34A); color: #fff; font-size: .75rem; }
+.wa-access-disabled { background: var(--color-error, #DC2626); color: #fff; font-size: .75rem; }
