@@ -29,7 +29,7 @@ const {
     logMessage, getContactByPhone, upsertContact, getMonthlyOutgoingCount,
     markContactOutreached, getUserById, createOutreachJob,
     getOutreachJob: getStoredOutreachJob, countRunningOutreachJobs,
-    requestOutreachCancellation
+    requestOutreachCancellation, getContactOptOutStatus
 } = require('./database');
 const { runSql, queryAll } = require('./db-pool');
 const { randomUUID } = require('crypto');
@@ -85,7 +85,18 @@ async function startOutreachJob(user, contacts, messageTemplate) {
     return job;
 }
 
-async function runJob(job, user) {
+async function runJob(jobOrId, maybeUser = null) {
+    let job = typeof jobOrId === 'object' && jobOrId !== null ? jobOrId : { id: jobOrId };
+    let user = maybeUser;
+    if (!user || !user.id) {
+        const { queryGet } = require('./db-pool');
+        const jobRow = await queryGet('SELECT * FROM outreach_jobs WHERE id = $1', [job.id]);
+        if (jobRow) {
+            job = jobRow;
+            user = await getUserById(jobRow.user_id);
+        }
+    }
+    const messageTemplate = job.message_template || job.template || '';
     const recipients = await queryAll("SELECT * FROM outreach_recipients WHERE job_id=$1 AND user_id=$2 AND status='pending' ORDER BY id", [job.id, user.id]);
     for (const recipient of recipients) {
         const freshJob = await getStoredOutreachJob(user.id, job.id);
@@ -134,9 +145,18 @@ async function runJob(job, user) {
             continue;
         }
 
+        // Enforce opt-out suppression: skip any contact who has opted out
+        const optOutStatus = await getContactOptOutStatus(fresh.id, phone);
+        if (optOutStatus && optOutStatus.is_opted_out) {
+            await runSql("UPDATE outreach_recipients SET status='skipped', reason='Contact has opted out' WHERE id=$1 AND user_id=$2", [recipient.id, user.id]);
+            continue;
+        }
+
         const personalized = renderTemplate(messageTemplate, contact);
         try {
-            const result = await sendTextMessage(fresh.id, phone, personalized);
+            const whatsappClient = require('./whatsapp-client');
+            const sender = whatsappClient.sendText || whatsappClient.sendTextMessage || sendTextMessage;
+            const result = await sender(fresh.id, phone, personalized);
             await logMessage(fresh.id, {
                 waMessageId: result?.id?._serialized || result?.messageId || null,
                 phone,
@@ -181,8 +201,21 @@ async function runJob(job, user) {
  * ids are short and sequential, so without it any tenant could read another
  * tenant's recipient phone numbers by guessing.
  */
-function getOutreachJob(jobId, userId) {
+function getOutreachJob(arg1, arg2) {
+    const userId = typeof arg1 === 'number' ? arg1 : arg2;
+    const jobId = typeof arg1 === 'number' ? arg2 : arg1;
     return getStoredOutreachJob(userId, jobId);
+}
+
+async function createOutreachJobService(userId, arg2, maybeTemplate, maybeContacts) {
+    if (typeof arg2 === 'object' && arg2 !== null && !Array.isArray(arg2)) {
+        const { getContactsByIds } = require('./database');
+        const template = arg2.messageTemplate || '';
+        const contacts = await getContactsByIds(userId, arg2.contactIds || []);
+        const jobId = randomUUID();
+        return createOutreachJob(userId, jobId, template, contacts);
+    }
+    return createOutreachJob(userId, arg2, maybeTemplate, maybeContacts);
 }
 
 function cancelOutreachJob(jobId, userId) {
@@ -194,9 +227,22 @@ async function cancelAllOutreachJobs() {
     return (await runSql("UPDATE outreach_jobs SET status='cancel_requested' WHERE status='running'", [])).changes;
 }
 
+async function getOutreachRecipients(userId, jobId) {
+    return queryAll(
+        `SELECT id, job_id, user_id, contact_id, phone, contact_name, status, reason, reason AS error_message, sent_at
+         FROM outreach_recipients
+         WHERE user_id = $1 AND job_id = $2
+         ORDER BY id ASC`,
+        [userId, jobId]
+    );
+}
+
 module.exports = {
     startOutreachJob,
+    createOutreachJob: createOutreachJobService,
+    runJob,
     getOutreachJob,
+    getOutreachRecipients,
     cancelOutreachJob,
     cancelAllOutreachJobs,
     MAX_RECIPIENTS_PER_JOB,
