@@ -29,7 +29,8 @@ const cron = require('node-cron');
 const {
     getPendingScheduledMessages, updateScheduledMessageStatus, logMessage,
     claimScheduledMessage, reclaimStuckScheduledMessages, getUserById,
-    getMonthlyOutgoingCount, expireStaleHolds, getAppointmentById, listUsers
+    getMonthlyOutgoingCount, expireStaleHolds, getAppointmentById, listUsers,
+    getContactOptOutStatus, isConversationAiPaused
 } = require('./database');
 const whatsappClient = require('./whatsapp-client');
 const { tryNormalizePhone } = require('../utils/validate');
@@ -160,6 +161,36 @@ async function processPendingMessages() {
                 const phone = tryNormalizePhone(msg.phone);
                 if (!phone) {
                     await updateScheduledMessageStatus(msg.id, 'failed', 'Stored phone number is not valid');
+                    summary.failed++;
+                    continue;
+                }
+
+                // Check opt-out state immediately before dispatch
+                try {
+                    const optOut = await getContactOptOutStatus(msg.user_id, phone);
+                    if (optOut && optOut.is_opted_out) {
+                        await updateScheduledMessageStatus(msg.id, 'cancelled', `Contact opted out (${optOut.opt_out_reason || 'Opted out'})`);
+                        summary.cancelled = (summary.cancelled || 0) + 1;
+                        continue;
+                    }
+                } catch (optErr) {
+                    // Fail closed: do not send if eligibility cannot be established
+                    await updateScheduledMessageStatus(msg.id, 'failed', `Safety check error: unable to establish opt-out status (${optErr.message})`);
+                    summary.failed++;
+                    continue;
+                }
+
+                // Check AI-pause / Human Takeover state where message is subject to takeover suppression
+                try {
+                    const isPaused = await isConversationAiPaused(msg.user_id, phone);
+                    if (isPaused) {
+                        await updateScheduledMessageStatus(msg.id, 'cancelled', 'Conversation AI paused (Human agent takeover active)');
+                        summary.cancelled = (summary.cancelled || 0) + 1;
+                        continue;
+                    }
+                } catch (pauseErr) {
+                    // Fail closed: do not send if eligibility cannot be established
+                    await updateScheduledMessageStatus(msg.id, 'failed', `Safety check error: unable to check AI pause status (${pauseErr.message})`);
                     summary.failed++;
                     continue;
                 }

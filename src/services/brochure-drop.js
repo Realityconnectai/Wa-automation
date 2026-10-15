@@ -218,18 +218,12 @@ async function tryBrochureDrop(userId, phone, contactName, text, client, msg, in
         return { handled: true, action: 'no_assets_reply', projectName: project.name };
     }
 
-    // 5. Send intro text
-    const reraLine = project.rera_status === 'verified' && project.rera_number
-        ? `\n✅ RERA No: ${project.rera_number}` : '';
-    const intro = `Hi${contactName ? ' ' + contactName : ''}! Thanks for your interest in *${project.name}*. 🏡${reraLine}\n\nSending you the brochure now…`;
-    await _sendReply(userId, phone, contactName, intro, client, msg);
-
     const sendAcceptedAt = Date.now();
     const elapsedMs = sendAcceptedAt - (inboundReceivedAt || sendAcceptedAt);
 
     let sentCount = 0;
 
-    // 6. Send brochure(s) — label RERA verified only if flag is set
+    // 5. Send brochure(s) — label RERA verified only if flag is set
     for (const asset of brochures.slice(0, 2)) {  // max 2 brochures
         try {
             const reraLabel = asset.rera_verified ? ' (RERA Verified ✅)' : '';
@@ -244,7 +238,7 @@ async function tryBrochureDrop(userId, phone, contactName, text, client, msg, in
         }
     }
 
-    // 7. Send walkthrough(s)
+    // 6. Send walkthrough(s)
     for (const asset of walkthroughs.slice(0, 1)) {  // max 1 walkthrough
         try {
             await getMessaging().sendMedia(userId, phone, {
@@ -256,6 +250,17 @@ async function tryBrochureDrop(userId, phone, contactName, text, client, msg, in
         } catch (e) {
             console.warn(`   ⚠️ Brochure drop: failed to send walkthrough asset ${asset.id}:`, e.message?.split('\n')[0]);
         }
+    }
+
+    // 7. Send confirmation or truthful failure reply
+    if (sentCount > 0) {
+        const reraLine = project.rera_status === 'verified' && project.rera_number
+            ? `\n✅ RERA No: ${project.rera_number}` : '';
+        const confirmation = `Hi${contactName ? ' ' + contactName : ''}! Here is the brochure and details for *${project.name}*. 🏡${reraLine}\n\nFeel free to ask any questions or let us know if you'd like to schedule a site visit!`;
+        await _sendReply(userId, phone, contactName, confirmation, client, msg);
+    } else {
+        const failureReply = `Hi${contactName ? ' ' + contactName : ''}! Thanks for your interest in *${project.name}*. 🏡\nWe encountered an issue delivering the brochure file right now. Our team has been notified and will share the details with you shortly.`;
+        await _sendReply(userId, phone, contactName, failureReply, client, msg);
     }
 
     const action = sentCount > 0 ? 'assets_sent' : 'assets_failed';

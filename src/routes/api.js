@@ -501,7 +501,9 @@ router.post('/messages/send', sendLimiter, requireDurableWrite, asyncHandler(asy
             direction: 'outgoing',
             messageType: 'text',
             body: text,
-            status: 'pending'
+            status: 'pending',
+            isHuman: true,
+            source: 'human'
         });
         if (!claim.created) {
             return res.json({ success: true, data: { duplicate: true, loggedAt: claim.row.created_at } });
@@ -531,6 +533,10 @@ router.post('/messages/send', sendLimiter, requireDurableWrite, asyncHandler(asy
         const row = await findMessageByIdempotencyKey(uid, idempotencyKey);
         if (row) {
             await runSql("UPDATE messages SET status = 'sent' WHERE id = $1", [row.id]);
+            try {
+                const { recordFirstResponse } = require('../services/lead-assignment');
+                recordFirstResponse(uid, phone).catch(() => {});
+            } catch (_) {}
         }
     } else {
         await logMessage(uid, {
@@ -539,7 +545,9 @@ router.post('/messages/send', sendLimiter, requireDurableWrite, asyncHandler(asy
             direction: 'outgoing',
             messageType: 'text',
             body: text,
-            status: 'sent'
+            status: 'sent',
+            isHuman: true,
+            source: 'human'
         });
     }
 

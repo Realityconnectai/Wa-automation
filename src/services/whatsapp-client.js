@@ -984,6 +984,33 @@ function getSessionMetrics() {
  * and outreach also reach this function with data read back out of the
  * database.
  */
+/**
+ * Resolves the destination chat ID using the official WhatsApp Web client API
+ * (getNumberId) when available, which ensures multi-device accounts have their
+ * internal LID/WID registered before messages or media are dispatched.
+ */
+async function resolveDestinationChatId(client, phone) {
+    const digits = String(phone).replace(/\D/g, '');
+    if (digits.length < 7 || digits.length > 15) {
+        const err = new Error('Invalid destination phone number');
+        err.status = 400;
+        throw err;
+    }
+    const defaultChatId = `${digits}@c.us`;
+    if (!client || typeof client.getNumberId !== 'function') {
+        return defaultChatId;
+    }
+    try {
+        const numberId = await client.getNumberId(digits);
+        if (numberId && numberId._serialized) {
+            return numberId._serialized;
+        }
+    } catch (e) {
+        console.warn('   ⚠️ Could not resolve WhatsApp numberId via getNumberId (using fallback):', e.message?.split('\n')[0]);
+    }
+    return defaultChatId;
+}
+
 async function sendTextMessage(userId, phone, text) {
     const s = getSession(Number(userId), false);
     if (!s || !s.isConnected || !s.client) {
@@ -992,13 +1019,8 @@ async function sendTextMessage(userId, phone, text) {
         err.status = 409;
         throw err;
     }
-    const digits = String(phone).replace(/\D/g, '');
-    if (digits.length < 7 || digits.length > 15) {
-        const err = new Error('Invalid destination phone number');
-        err.status = 400;
-        throw err;
-    }
-    return await s.client.sendMessage(`${digits}@c.us`, String(text));
+    const chatId = await resolveDestinationChatId(s.client, phone);
+    return await s.client.sendMessage(chatId, String(text));
 }
 
 /**
@@ -1022,16 +1044,11 @@ async function sendMediaMessage(userId, phone, { base64Data, mimeType, fileName,
         err.status = 409;
         throw err;
     }
-    const digits = String(phone).replace(/\D/g, '');
-    if (digits.length < 7 || digits.length > 15) {
-        const err = new Error('Invalid destination phone number');
-        err.status = 400;
-        throw err;
-    }
+    const chatId = await resolveDestinationChatId(s.client, phone);
     const { MessageMedia } = require('whatsapp-web.js');
     const media = new MessageMedia(mimeType, base64Data, fileName);
     const opts  = caption ? { caption } : {};
-    return await s.client.sendMessage(`${digits}@c.us`, media, opts);
+    return await s.client.sendMessage(chatId, media, opts);
 }
 
 module.exports = {

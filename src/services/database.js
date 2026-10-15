@@ -861,7 +861,8 @@ async function logMessage(userId, arg2, maybeDirection, maybeBody) {
          RETURNING *`,
         [userId, waMessageId || null, phone, contactName || '', direction, messageType || 'text', body || '', status || 'sent', templateName || null]
     );
-    if (direction === 'outgoing' && phone) {
+    const isHuman = (typeof arg2 === 'object' && arg2 !== null && (arg2.isHuman === true || arg2.source === 'human'));
+    if (direction === 'outgoing' && phone && isHuman && status !== 'failed' && status !== 'pending') {
         try {
             const { recordFirstResponse } = require('./lead-assignment');
             recordFirstResponse(userId, phone).catch(() => {});
@@ -888,12 +889,8 @@ async function logOutgoingMessageIdempotent(userId, idempotencyKey, fields) {
                 fields.body || '', fields.status || 'sent', fields.templateName || null
             ]
         );
-        if ((fields.direction || 'outgoing') === 'outgoing' && fields.phone) {
-            try {
-                const { recordFirstResponse } = require('./lead-assignment');
-                recordFirstResponse(userId, fields.phone).catch(() => {});
-            } catch (_) {}
-        }
+        // Note: recordFirstResponse is not called here because idempotent messages
+        // are claimed with status='pending' before the transport send actually succeeds.
         return { created: true, row: res.rows[0] };
     } catch (err) {
         if (err.code === '23505' || /UNIQUE constraint failed|idx_messages_user_idempotency_key/i.test(String(err.message))) {

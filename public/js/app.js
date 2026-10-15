@@ -2223,7 +2223,7 @@ function initRoutingSettings() {
         e.preventDefault();
         try {
             await api('/api/settings', {
-                method: 'POST',
+                method: 'PUT',
                 body: JSON.stringify({
                     lead_assignment_enabled: String(document.getElementById('settLeadAssignmentEnabled').checked),
                     lead_assignment_strategy: document.getElementById('settLeadAssignmentStrategy').value,
@@ -2993,7 +2993,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             closeAgentModal();
         }
     });
-    document.getElementById('dealModal')?.addEventListener('click', (e) => e.stopPropagation());
     document.getElementById('agentModal')?.addEventListener('click', (e) => e.stopPropagation());
     document.addEventListener('click', (event) => {
         const dealCard = event.target.closest('[data-open-deal]');
