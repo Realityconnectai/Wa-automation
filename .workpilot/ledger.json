@@ -92,17 +92,17 @@
   {
     "id": "W6",
     "title": "Brochure/property intent: intent -> project match -> asset lookup -> shared media send -> confirm only after dispatch",
-    "status": "INVESTIGATING",
+    "status": "LIVE_PENDING_HUMAN",
     "attempts": 1,
     "hypotheses": [
       {
         "text": "Inbound brochure intent detection requires matching project from conversation context, looking up active PDF asset, and sending via shared media send with honest fallback when asset is missing.",
-        "result": "INVESTIGATING"
+        "result": "CONFIRMED: Typo variants (boruchure/broucher) and Hinglish phrases (share kro/bhejo) were missing from DEFAULT_TRIGGERS; custom triggers erased defaults; city/locality were absent from projectReferences; and matchProjects did not inspect recent conversation history for prior project context. All resolved and verified."
       }
     ],
     "last_error_signature": null,
-    "next_action": "Audit src/services/brochure-drop.js and chatbot.js brochure routing; build tests/live/live_brochure_chat.js",
-    "evidence": [".workpilot/evidence/W6/"]
+    "next_action": "Awaiting owner test device phone number in allowlist to complete live receipt check; proceed to W7",
+    "evidence": [".workpilot/evidence/W6/evidence.json"]
   },
   {
     "id": "W7",

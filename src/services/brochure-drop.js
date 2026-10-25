@@ -28,7 +28,8 @@ const {
     logMessage,
     logBrochureDropEvent,
     hasBrochureBeenSentRecently,
-    getContactByPhone
+    getContactByPhone,
+    getConversation
 } = require('./database');
 // messaging is required lazily at call time so tests can mock it via jest.mock
 // without needing to patch module-scope references.
@@ -43,7 +44,13 @@ const DEFAULT_TRIGGERS = [
     /#1bhk/i, /#2bhk/i, /#3bhk/i, /#4bhk/i, /#plot/i,
     // Generic property inquiry
     /\bplot\b/i, /\bflat\b/i, /\bapartment\b/i, /\bvilla\b/i,
-    /\bproperty\b/i, /\bbrochure\b/i, /\bprice\s*list\b/i,
+    /\bproperty\b/i, /\bprice\s*list\b/i,
+    // Brochure & Typo variants (brochure, boruchure, broucher, brocher, etc.)
+    /\bb[or]{1,2}u?ch[eu]r[es]*\b/i,
+    // Hinglish & phrasing for brochure/details requests
+    /\b(share|bhejo|bhej\s*do|send)\s+(kro|karo|do|please|plz)?\b/i,
+    /\b(details?|pdf|pricing|rate\s*list|floor\s*plan|catalog|catalogue)\b/i,
+    /\b(iska|uski|iski|project\s*ki|property\s*ki)\s+(details?|brochure|boruchure|info)\b/i,
 ];
 
 /**
@@ -52,19 +59,20 @@ const DEFAULT_TRIGGERS = [
  * Falls back to DEFAULT_TRIGGERS if not configured.
  */
 async function getTriggers(userId) {
+    let custom = [];
     try {
         const raw = await getSetting(userId, 'brochure_triggers');
         if (raw) {
             const arr = JSON.parse(raw);
             if (Array.isArray(arr) && arr.length) {
-                return arr.map(s => {
+                custom = arr.map(s => {
                     try { return new RegExp(s.replace(/[-/\\^$*+?.()|[\]{}]/g,'\\$&'), 'i'); }
                     catch (_) { return null; }
                 }).filter(Boolean);
             }
         }
     } catch (_) {}
-    return DEFAULT_TRIGGERS;
+    return [...DEFAULT_TRIGGERS, ...custom];
 }
 
 /**
@@ -88,33 +96,65 @@ async function getSelectedAssetIds(userId, projectId) {
     }
 }
 
+function matchesReference(text, ref) {
+    if (!text || !ref) return false;
+    if (ref.length <= 4) {
+        const escaped = ref.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+        return new RegExp(`\\b${escaped}\\b`, 'i').test(text);
+    }
+    return text.includes(ref);
+}
+
 /**
  * Tries to match the message to exactly one active project.
  *
  * Matching strategy (in order):
- *   1. Project name appears in the message (case-insensitive substring)
+ *   1. Project name/city/locality appears in the message (case-insensitive substring)
  *   2. Message contains listing_url or rera_number that matches a project
- *   3. BHK-only messages: if only one active project exists, match it
- *   4. Multiple candidates → return all (caller asks clarification)
- *   5. No candidates → return empty
+ *   3. If phone is provided, check recent conversation messages (newest first) for project/location context
+ *   4. BHK-only messages: if only one active project exists, match it
+ *   5. Multiple candidates → return all (caller asks clarification)
+ *   6. No candidates → return empty
  *
  * Returns:  { matched: Project[], reason: string }
  */
-async function matchProjects(userId, text) {
+async function matchProjects(userId, text, phone = null) {
     const projects = await getProjects(userId, { activeOnly: true });
     if (!projects.length) return { matched: [], reason: 'no_projects' };
 
-    const textLower = text.toLowerCase();
+    const textLower = (text || '').toLowerCase();
 
-    // Named matches
-    const named = projects.filter(p => projectReferences(p).some(ref => textLower.includes(ref)));
+    // 1. Direct Named/Location matches in current text
+    const named = projects.filter(p => projectReferences(p).some(ref => matchesReference(textLower, ref)));
     if (named.length === 1) return { matched: named, reason: 'name_match' };
     if (named.length > 1) return { matched: named, reason: 'ambiguous_name' };
 
-    // Fall back to "any active project" when only one exists
+    // 2. If phone is provided and no direct match in current text, check recent conversation history (newest first)
+    if (phone) {
+        try {
+            const history = await getConversation(userId, phone, { limit: 5 });
+            if (history && history.length) {
+                const reversed = [...history].reverse();
+                for (const msg of reversed) {
+                    const msgText = (msg.body || '').toLowerCase();
+                    const contextMatches = projects.filter(p => projectReferences(p).some(ref => matchesReference(msgText, ref)));
+                    if (contextMatches.length === 1) {
+                        return { matched: contextMatches, reason: 'context_match' };
+                    }
+                    if (contextMatches.length > 1) {
+                        return { matched: contextMatches, reason: 'ambiguous_context' };
+                    }
+                }
+            }
+        } catch (_) {
+            // Fall through gracefully
+        }
+    }
+
+    // 3. Fall back to "any active project" when only one exists
     if (projects.length === 1) return { matched: projects, reason: 'only_project' };
 
-    // Multiple projects, no name match
+    // 4. Multiple projects, no name or context match
     return { matched: projects, reason: 'ambiguous_generic' };
 }
 
@@ -125,9 +165,10 @@ async function matchProjects(userId, text) {
  * database-backed: it never guesses identifiers from another tenant.
  */
 function projectReferences(project) {
-    const refs = [project.name, project.rera_number, project.listing_url]
+    const rawRefs = [project.name, project.rera_number, project.listing_url, project.city, project.locality];
+    const refs = rawRefs
         .map(v => String(v || '').trim().toLowerCase())
-        .filter(Boolean);
+        .filter(v => v.length >= 2);
 
     if (project.listing_url) {
         try {
@@ -167,11 +208,11 @@ async function tryBrochureDrop(userId, phone, contactName, text, client, msg, in
     }
 
     // 1. Match tenant-scoped project references before rejecting a message.
-    // Project names and stored portal/RERA listing identifiers are themselves
+    // Project names, locations, and stored portal/RERA listing identifiers are themselves
     // valid triggers; generic real-estate keywords still use hasTrigger().
-    const { matched, reason } = await matchProjects(userId, text);
+    const { matched, reason } = await matchProjects(userId, text, phone);
     const triggered = await hasTrigger(userId, text);
-    const hasProjectReference = reason === 'name_match' || reason === 'ambiguous_name';
+    const hasProjectReference = reason === 'name_match' || reason === 'context_match' || reason === 'ambiguous_name' || reason === 'ambiguous_context';
     if (!triggered && !hasProjectReference) return { handled: false, reason: 'no_trigger' };
 
     // 2. Ambiguous — ask clarification, send nothing

@@ -1,0 +1,46 @@
+{
+  "title": "Brochure intent and context resolution",
+  "status": "LIVE_PENDING_HUMAN",
+  "timestamp": "2026-10-25T21:11:06.657Z",
+  "evidence": [
+    {
+      "step": "trigger_recognition",
+      "result": "passed",
+      "phrases": [
+        "mujhe boruchure share kro iska",
+        "brochure share karo",
+        "broucher bhejo",
+        "send property details please",
+        "bhejo iska brochure",
+        "What is the weather today?"
+      ]
+    },
+    {
+      "step": "context_match",
+      "result": "passed",
+      "matched": "NEW"
+    },
+    {
+      "step": "media_dispatch",
+      "result": "passed",
+      "dropResult": {
+        "handled": true,
+        "action": "assets_sent",
+        "projectName": "NEW",
+        "sentCount": 1,
+        "elapsedMs": 17
+      },
+      "deliveredFile": "WorkPilot_Solutions.pdf"
+    },
+    {
+      "step": "missing_asset_fallback",
+      "result": "passed",
+      "reply": "Hi Test Investor! Thanks for your interest in *QA Project 1792937079216*. 🏡\nOur team will send you detailed brochure shortly. Please stay tuned!"
+    },
+    {
+      "step": "ambiguous_clarification",
+      "result": "passed",
+      "reply": "Great to hear from you! We have a few projects — which one interests you?\n\n• QA Project 1792937079216 (Bhopal)\n• NEW (NOIDA)\n\nJust reply with the project name and I'll send the brochure right away! 🏡"
+    }
+  ]
+}

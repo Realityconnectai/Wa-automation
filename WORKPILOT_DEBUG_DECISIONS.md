@@ -116,3 +116,28 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
 - **Verification:**
   - `tests/live/live_gemini.js` executed: all 3 automated steps passed against live Gemini API.
 - **Status Change:** `W5` → **`VERIFIED`**. Next: `W6`.
+
+### Iteration 7 — 2026-10-26 (W6 Brochure Intent & Context Matching: LIVE_PENDING_HUMAN)
+- **Target:** W6 Brochure/property intent (`mujhe boruchure share kro iska`, context `noida`)
+- **Root Cause (CONFIRMED):**
+  1. `DEFAULT_TRIGGERS` only matched exact spelling `brochure`, failing on common Indian / Hinglish typo variants (`boruchure`, `broucher`, `share kro`, `bhejo`).
+  2. Stored `brochure_triggers` setting completely erased `DEFAULT_TRIGGERS` instead of augmenting them.
+  3. `projectReferences(project)` only mapped `name`, `rera_number`, and `listing_url`, ignoring `city` ('NOIDA') and `locality` ('NOIDA JUNCTION').
+  4. Pronoun/anaphoric context like `"iska"` was unresolved because `matchProjects` did not inspect recent conversation history for prior location/project context.
+- **Files Changed:**
+  - [`src/services/brochure-drop.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/brochure-drop.js):
+    - Added typo variants (`/\bb[or]{1,2}u?ch[eu]r[es]*\b/i`) and Hinglish phrasing (`share kro`, `bhejo`, `details`) to `DEFAULT_TRIGGERS`.
+    - Combined `DEFAULT_TRIGGERS` with custom tenant triggers in `getTriggers`.
+    - Added `project.city` and `project.locality` to `projectReferences`.
+    - Implemented reverse (newest-to-oldest) conversation history context inspection in `matchProjects(userId, text, phone)` with word-boundary matching.
+  - [`tests/live/live_brochure_chat.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_brochure_chat.js): Built comprehensive live test verifying:
+    1. Typo / Hinglish trigger recognition.
+    2. Conversational context resolution ("Noida" in prior turn → matches project "NEW").
+    3. Media asset dispatch (`WorkPilot_Solutions.pdf`) with post-dispatch confirmation and zero meeting-offer substitution.
+    4. Missing-asset honest fallback (Bhopal project with 0 assets replies truthfully without meeting offer).
+    5. Ambiguous query clarification listing candidate projects.
+- **Verification:**
+  - `tests/live/live_brochure_chat.js` executed: all 5 steps passed.
+  - `npx jest tests/brochure-drop.test.js` executed: 21/21 passed.
+- **Status Change:** `W6` → **`LIVE_PENDING_HUMAN`** (Automated checks complete; live media brochure dispatch awaiting §0 allowlist input from operator). Next: `W7`.
+
