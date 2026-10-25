@@ -32,26 +32,31 @@
   {
     "id": "W2",
     "title": "Text-only campaign: template rendering, missing-name fallback, per-recipient isolation, counters, opt-out, pacing",
-    "status": "INVESTIGATING",
+    "status": "LIVE_PENDING_HUMAN",
     "attempts": 1,
     "hypotheses": [
       {
         "text": "Template rendering missing-name {{name}} fallback causes malformed message or campaign recipient failure, and counters become inaccurate if errors are unhandled.",
-        "result": "INVESTIGATING"
+        "result": "CONFIRMED: renderTemplate lacked trim checks and variable expansion fallbacks for missing contact names; resolved by updating renderTemplate with robust whitespace-tolerant fallback and first_name derivation."
       }
     ],
     "last_error_signature": null,
-    "next_action": "Audit src/services/outreach.js template rendering, opt-out check, and counter integrity; build tests/live/live_campaign_text.js",
-    "evidence": [".workpilot/evidence/W2/"]
+    "next_action": "Awaiting owner test device phone number in allowlist to complete live campaign send; proceed to W3",
+    "evidence": [".workpilot/evidence/W2/evidence.json"]
   },
   {
     "id": "W3",
     "title": "Shared media service: id property ... got undefined",
-    "status": "OPEN",
-    "attempts": 0,
-    "hypotheses": [],
+    "status": "INVESTIGATING",
+    "attempts": 1,
+    "hypotheses": [
+      {
+        "text": "whatsapp-web.js injected Utils.js spreads mediaOptions.toJSON() which has an internal id: undefined property, overwriting message.id and causing WhatsApp Web's memoized collection getter to throw 'Data passed to get must include an id property ... but got undefined'.",
+        "result": "CONFIRMED: Verified and fixed via fallback guard if (!message.id) message.id = newMsgKey; in Utils.js. Need to ensure reproducible patch-package or runtime verification."
+      }
+    ],
     "last_error_signature": "Data passed to get must include an id property ... but got undefined",
-    "next_action": "Awaiting W1 verification",
+    "next_action": "Audit shared media service paths (manual attach, brochure drop, campaign media) and verify MessageMedia construction and reproducible patch.",
     "evidence": [".workpilot/evidence/W3/"]
   },
   {

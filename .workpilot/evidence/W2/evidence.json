@@ -1,0 +1,17 @@
+{
+  "item": "W2",
+  "timestamp": "2026-10-26T02:15:45+05:30",
+  "investigation": {
+    "findings": "Examined outreach template rendering and counter integrity. Previously, renderTemplate only replaced {{name}} with contact.name || 'there', without trimming whitespace or handling empty strings, and lacked first_name or phone variable support. Campaign counter aggregation in getOutreachJob accurately counts sent, failed, and skipped.",
+    "root_cause": "CONFIRMED: renderTemplate lacked trim checks and variable expansion fallbacks for missing contact names; resolved by updating renderTemplate with robust whitespace-tolerant fallback and first_name derivation."
+  },
+  "changes": [
+    "src/services/outreach.js: Enhanced renderTemplate to trim contact names, safely fallback to 'there' on empty/whitespace names, derive first_name, and support phone variable substitution; exported renderTemplate.",
+    "tests/live/live_campaign_text.js: Live script testing template rendering with name, empty name, missing name, counter aggregation against database, and negative recipient isolation."
+  ],
+  "verification": {
+    "live_script": "tests/live/live_campaign_text.js passed (template rendering, counter aggregation, negative isolation)",
+    "jest_suite": "tests/campaigns-unit.test.js (11/11 passed)",
+    "status": "LIVE_PENDING_HUMAN (Automated tests PASS; real WhatsApp dispatch pending user-provided TEST_RECIPIENT_PRIMARY allowlist)"
+  }
+}

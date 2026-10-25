@@ -47,7 +47,14 @@ function randomDelay() {
 }
 
 function renderTemplate(template, contact) {
-    return template.replace(/\{\{\s*name\s*\}\}/gi, contact.name || 'there');
+    if (!template) return '';
+    const rawName = contact?.name !== undefined && contact?.name !== null ? String(contact.name).trim() : '';
+    const name = rawName || 'there';
+    const firstName = name.split(/\s+/)[0] || 'there';
+    return String(template)
+        .replace(/\{\{\s*name\s*\}\}/gi, name)
+        .replace(/\{\{\s*first_name\s*\}\}/gi, firstName)
+        .replace(/\{\{\s*phone\s*\}\}/gi, contact?.phone || '');
 }
 
 /**
@@ -285,6 +292,7 @@ module.exports = {
     getOutreachRecipients,
     cancelOutreachJob,
     cancelAllOutreachJobs,
+    renderTemplate,
     MAX_RECIPIENTS_PER_JOB,
     MIN_DELAY_MS,
     MAX_DELAY_MS

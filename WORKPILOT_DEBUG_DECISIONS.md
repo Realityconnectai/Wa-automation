@@ -30,8 +30,8 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
 |---|---|---|---|---|
 | **W0** | Bootstrap & Test Harness & Un-truncate Errors | **VERIFIED** | — | Fixed: allowlist safety harness, un-truncated error propagation in backend & frontend |
 | **W1** | Shared text dispatch service (LID/@c.us/502) | **LIVE_PENDING_HUMAN** | W0 | Phone normalization, `@c.us` vs `@lid` fallback, real message ID capture (Automated checks PASS, awaiting live device send) |
-| **W2** | Text-only campaign | **INVESTIGATING** | W1 | Pacing, isolation, name template fallback, counters |
-| **W3** | Shared media service ("id property... undefined") | **OPEN** | W1 | `MessageMedia` construction, `newMsgKey` preserve in injected utils |
+| **W2** | Text-only campaign | **LIVE_PENDING_HUMAN** | W1 | Pacing, isolation, name template fallback, counters (Automated checks PASS, awaiting live device send) |
+| **W3** | Shared media service ("id property... undefined") | **INVESTIGATING** | W1 | `MessageMedia` construction, `newMsgKey` preserve in injected utils |
 | **W4** | Campaign media end-to-end | **OPEN** | W2, W3 | Media campaign dispatch + counters |
 | **W5** | Gemini/AI tools & `thought_signature` | **OPEN** | W0 | Gemini 2.5/3.x thought signature preservation on multi-turn function calls |
 | **W6** | Brochure/property intent | **OPEN** | W3, W5 | Intent matching, PDF asset lookup, honest failure response |
@@ -71,3 +71,14 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
   - `tests/live/live_manual_text.js` executed: all 4 automated steps passed.
   - `tests/bugfixes-verification.test.js` executed: 6/6 passed.
 - **Status Change:** `W1` → **`LIVE_PENDING_HUMAN`** (Automated checks complete; live send awaiting §0 allowlist input from operator). Next: `W2`.
+
+### Iteration 3 — 2026-10-26 (W2 Text Campaign: LIVE_PENDING_HUMAN)
+- **Target:** W2 Text-only campaign (Template rendering, name fallback, per-recipient isolation, counters)
+- **Root Cause (CONFIRMED):** Template variable substitution in `renderTemplate` lacked whitespace trimming, broke on null/empty names, and did not support `{{first_name}}` or `{{phone}}`.
+- **Files Changed:**
+  - [`src/services/outreach.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/outreach.js): Enhanced `renderTemplate` with null safety, whitespace trimming, first-name extraction, and phone placeholder substitution; exported `renderTemplate`.
+  - [`tests/live/live_campaign_text.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_campaign_text.js): Live script testing template rendering with name, empty name, missing name, counter aggregation against database, and negative recipient isolation.
+- **Verification:**
+  - `tests/live/live_campaign_text.js` executed: all 4 automated steps passed.
+  - `tests/campaigns-unit.test.js` executed: 11/11 passed.
+- **Status Change:** `W2` → **`LIVE_PENDING_HUMAN`** (Automated checks complete; live campaign dispatch awaiting §0 allowlist input from operator). Next: `W3`.
