@@ -30,19 +30,27 @@ const DEFAULT_THROTTLE_REPLY =
 // key: `${userId}:${phone}` → timestamp of last throttle-reply sent
 const throttleReplySentAt = new Map();
 
-// Without this, every distinct (userId, phone) pair that ever messages in
-// stays in memory forever — a slow leak on a long-running server with many
-// contacts. Sweep out anything whose window is long over.
-const _rateLimitCleanup = setInterval(() => {
-    const now = Date.now();
+// Bounded, time-aware sweep of expired rate limits and throttle replies.
+function cleanupExpiredRateLimits(now = Date.now()) {
     for (const [key, data] of userRateLimits) {
-        if (now - data.firstMsgTime > 5 * 60 * 1000) userRateLimits.delete(key);
+        if (now - data.firstMsgTime > RATE_LIMIT_WINDOW_MS) userRateLimits.delete(key);
     }
     for (const [key, sentAt] of throttleReplySentAt) {
         if (now - sentAt > RATE_LIMIT_WINDOW_MS) throttleReplySentAt.delete(key);
     }
-}, 10 * 60 * 1000);
+}
+
+let _rateLimitCleanup = setInterval(() => {
+    cleanupExpiredRateLimits();
+}, 60 * 1000);
 _rateLimitCleanup.unref?.();
+
+function stopChatbotCleanup() {
+    if (_rateLimitCleanup) {
+        clearInterval(_rateLimitCleanup);
+        _rateLimitCleanup = null;
+    }
+}
 
 // Hard bound on the map itself. An attacker who can send from many numbers
 // (or a spam wave) would otherwise create one entry per sender between
@@ -69,9 +77,13 @@ function isRateLimited(userId, phone) {
     }
 
     if (userRateLimits.size >= MAX_RATE_LIMIT_KEYS && !userRateLimits.has(key)) {
-        // Fail closed: refusing to auto-reply is the safe direction when
-        // we're already tracking an implausible number of senders.
-        return true;
+        // Proactively evict expired entries before failing closed
+        cleanupExpiredRateLimits(now);
+        if (userRateLimits.size >= MAX_RATE_LIMIT_KEYS) {
+            // Fail closed: refusing to auto-reply is the safe direction when
+            // we're still tracking an implausible number of unexpired senders.
+            return true;
+        }
     }
     userRateLimits.set(key, limitData);
 
@@ -376,6 +388,27 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
         }
     }
 
+    // ── 4b. Conversational appointment intent fallback if AI is disabled or unavailable ──
+    const isAppointmentIntent = /\b(appointment|schedule|meeting|slot|visit|booking|book)\b/i.test(cleanText);
+    if (isAppointmentIntent) {
+        try {
+            const { getSettings: getAvailSettings, getAvailableSlots } = require('./availability');
+            const availSettings = await getAvailSettings(userId);
+            if (availSettings && availSettings.bookingEnabled) {
+                const { slots } = await getAvailableSlots(userId, { daysAhead: 7, maxResults: 4 });
+                if (slots && slots.length) {
+                    const slotOptions = slots.map((s, idx) => `${idx + 1}. ${s.label}`).join('\n');
+                    const reply = `We'd love to schedule an appointment with you! 📅 Here are our upcoming available slots:\n\n${slotOptions}\n\nPlease reply with your preferred slot number or time to confirm!`;
+                    await safeReply(client, phone, reply, msg, userId);
+                    await logMessage(userId, { phone, contactName, direction: 'outgoing', body: reply });
+                    return { replied: true, rule: 'appointment_slots_fallback', response: reply };
+                }
+            }
+        } catch (apptErr) {
+            console.warn('⚠️ Appointment intent fallback failed (non-fatal):', apptErr.message?.split('\n')[0]);
+        }
+    }
+
     // ── 5. Static Default Reply ──
     const defaultReply = await getSetting(userId, 'default_reply');
     if (defaultReply) {
@@ -455,7 +488,10 @@ module.exports = {
     testMessage,
     ruleMatches,
     maskPhone,
-    __resetRateLimits
+    __resetRateLimits,
+    cleanupExpiredRateLimits,
+    stopChatbotCleanup,
+    isRateLimited
 };
 
 

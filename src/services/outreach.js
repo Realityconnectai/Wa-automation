@@ -56,7 +56,7 @@ function renderTemplate(template, contact) {
  * sending happens afterward, off the caller's stack. Poll
  * getOutreachJob(jobId) for progress.
  */
-async function startOutreachJob(user, contacts, messageTemplate) {
+async function startOutreachJob(user, contacts, messageTemplate, mediaAssetId = null) {
     if (contacts.length > MAX_RECIPIENTS_PER_JOB) {
         const err = new Error(`Outreach is capped at ${MAX_RECIPIENTS_PER_JOB} recipients per send — you selected ${contacts.length}. Split into smaller batches.`);
         err.status = 400;
@@ -73,7 +73,7 @@ async function startOutreachJob(user, contacts, messageTemplate) {
         throw err;
     }
 
-    const job = await createOutreachJob(user.id, randomUUID(), messageTemplate, contacts);
+    const job = await createOutreachJob(user.id, randomUUID(), messageTemplate, contacts, mediaAssetId);
 
     // Deliberately not awaited. The rejection handler matters: an unhandled
     // rejection here would, given server.js's process.exit(1) policy, take
@@ -154,31 +154,53 @@ async function runJob(jobOrId, maybeUser = null) {
 
         const personalized = renderTemplate(messageTemplate, contact);
         try {
-            const whatsappClient = require('./whatsapp-client');
-            const sender = whatsappClient.sendText || whatsappClient.sendTextMessage || sendTextMessage;
-            const result = await sender(fresh.id, phone, personalized);
-            await logMessage(fresh.id, {
-                waMessageId: result?.id?._serialized || result?.messageId || null,
-                phone,
-                contactName: contact.name || '',
-                direction: 'outgoing',
-                messageType: 'text',
-                body: personalized,
-                status: 'sent'
-            });
+            let mediaAsset = null;
+            if (job.media_asset_id) {
+                const { getMediaAssetById } = require('./database');
+                mediaAsset = await getMediaAssetById(fresh.id, job.media_asset_id);
+            }
+
+            if (mediaAsset) {
+                const fs = require('fs');
+                if (!mediaAsset.is_active || !fs.existsSync(mediaAsset.storage_path)) {
+                    await runSql("UPDATE outreach_recipients SET status='failed', reason='Media file missing on server' WHERE id=$1 AND user_id=$2", [recipient.id, user.id]);
+                    continue;
+                }
+                const { sendMedia } = require('./messaging');
+                const idempotencyKey = `outreach-${job.id}-${recipient.id}`;
+                await sendMedia(fresh.id, phone, {
+                    filePath: mediaAsset.storage_path,
+                    mimeType: mediaAsset.mime_type,
+                    fileName: mediaAsset.display_name || mediaAsset.file_name,
+                    caption: personalized,
+                    idempotencyKey,
+                    mediaAssetId: mediaAsset.id
+                });
+            } else {
+                const whatsappClient = require('./whatsapp-client');
+                const sender = whatsappClient.sendText || whatsappClient.sendTextMessage || sendTextMessage;
+                const result = await sender(fresh.id, phone, personalized);
+                await logMessage(fresh.id, {
+                    waMessageId: result?.id?._serialized || result?.messageId || null,
+                    phone,
+                    contactName: contact.name || '',
+                    direction: 'outgoing',
+                    messageType: 'text',
+                    body: personalized,
+                    status: 'sent'
+                });
+            }
+
             if (!(await getContactByPhone(fresh.id, phone))) await upsertContact(fresh.id, phone, contact.name);
             await markContactOutreached(fresh.id, phone);
             await runSql("UPDATE outreach_recipients SET status='sent', sent_at=CURRENT_TIMESTAMP WHERE id=$1 AND user_id=$2", [recipient.id,user.id]);
-            // Best-effort, deliberately not awaited before continuing: this
-            // is a courtesy record, not something the send itself should
-            // wait on, and logOutreachEvent already swallows its own errors.
             logOutreachEvent(fresh.id, { phone, name: contact.name, message: personalized }).catch?.(() => {});
         } catch (err) {
-            await runSql("UPDATE outreach_recipients SET status='failed', reason=$1 WHERE id=$2 AND user_id=$3", [/not connected/i.test(err.message) ? 'WhatsApp disconnected' : 'Send failed', recipient.id,user.id]);
-            // A disconnected client will fail for every remaining recipient,
-            // several seconds apart, for the rest of the job. Stop instead.
-            if (/not connected/i.test(err.message)) {
-                await runSql("UPDATE outreach_recipients SET status='skipped', reason='Stopped: WhatsApp is disconnected' WHERE job_id=$1 AND user_id=$2 AND status IN ('pending','sending')", [job.id,user.id]);
+            const isDisconnect = /not connected/i.test(err.message) || err.code === 'WA_NOT_CONNECTED';
+            const failReason = isDisconnect ? 'WhatsApp disconnected' : (err.message ? `Send failed: ${err.message}`.slice(0, 200) : 'Send failed');
+            await runSql("UPDATE outreach_recipients SET status='failed', reason=$1 WHERE id=$2 AND user_id=$3", [failReason, recipient.id, user.id]);
+            if (isDisconnect) {
+                await runSql("UPDATE outreach_recipients SET status='skipped', reason='Stopped: WhatsApp is disconnected' WHERE job_id=$1 AND user_id=$2 AND status IN ('pending','sending')", [job.id, user.id]);
                 break;
             }
         }
@@ -207,15 +229,16 @@ function getOutreachJob(arg1, arg2) {
     return getStoredOutreachJob(userId, jobId);
 }
 
-async function createOutreachJobService(userId, arg2, maybeTemplate, maybeContacts) {
+async function createOutreachJobService(userId, arg2, maybeTemplate, maybeContacts, maybeMediaAssetId) {
     if (typeof arg2 === 'object' && arg2 !== null && !Array.isArray(arg2)) {
         const { getContactsByIds } = require('./database');
         const template = arg2.messageTemplate || '';
         const contacts = await getContactsByIds(userId, arg2.contactIds || []);
+        const mediaAssetId = arg2.mediaAssetId || null;
         const jobId = randomUUID();
-        return createOutreachJob(userId, jobId, template, contacts);
+        return createOutreachJob(userId, jobId, template, contacts, mediaAssetId);
     }
-    return createOutreachJob(userId, arg2, maybeTemplate, maybeContacts);
+    return createOutreachJob(userId, arg2, maybeTemplate, maybeContacts, maybeMediaAssetId);
 }
 
 function cancelOutreachJob(jobId, userId) {
@@ -237,11 +260,17 @@ async function getOutreachRecipients(userId, jobId) {
     );
 }
 
+async function getOutreachJobs(userId, opts = {}) {
+    const { getOutreachJobs: dbGetOutreachJobs } = require('./database');
+    return dbGetOutreachJobs(userId, opts);
+}
+
 module.exports = {
     startOutreachJob,
     createOutreachJob: createOutreachJobService,
     runJob,
     getOutreachJob,
+    getOutreachJobs,
     getOutreachRecipients,
     cancelOutreachJob,
     cancelAllOutreachJobs,

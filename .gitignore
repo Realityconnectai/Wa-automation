@@ -5,6 +5,7 @@ test-suite-output/
 
 # Environment Variables & Secrets
 .env
+.env.test
 .env.local
 .env.*.local
 

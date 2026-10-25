@@ -254,37 +254,13 @@ describe('Security Audit & Vulnerability Remediation Suite', () => {
     });
 
     describe('4. CORS Whitelist & Origin Spoofing Prevention', () => {
-        const allowedOriginsList = [
-            'https://workpilots.dpdns.org',
-            'https://workpilot.co.in',
-            'https://leadfinder.workpilot.co.in',
-            'https://linkdinpilot.workpilot.co.in',
-            'http://localhost:3000',
-            'http://localhost:5000',
-            'http://127.0.0.1:3000',
-            'http://127.0.0.1:5000'
-        ];
-
-        function isOriginAllowed(origin) {
-            if (!origin) return true;
-            const trimmed = origin.trim().toLowerCase();
-            if (allowedOriginsList.some(o => o.toLowerCase() === trimmed)) return true;
-            try {
-                const parsed = new URL(trimmed);
-                const host = parsed.hostname.toLowerCase();
-                if (host === 'workpilot.co.in' || host.endsWith('.workpilot.co.in')) return true;
-                if (host === 'workpilots.dpdns.org') return true;
-                if (host === 'localhost' || host === '127.0.0.1') return true;
-            } catch (e) {
-                return false;
-            }
-            return false;
-        }
+        const { isOriginAllowed } = require('../src/config/cors');
 
         test('allows official domain and subdomains', () => {
             expect(isOriginAllowed('https://workpilot.co.in')).toBe(true);
             expect(isOriginAllowed('https://app.workpilot.co.in')).toBe(true);
             expect(isOriginAllowed('https://leadhunter.workpilot.co.in')).toBe(true);
+            expect(isOriginAllowed('https://enunciate-graves-dry.ngrok-free.dev')).toBe(true);
             expect(isOriginAllowed('http://localhost:3000')).toBe(true);
         });
 

@@ -346,24 +346,44 @@ async function processInitQueue() {
  * answer 503 when the server is at its session cap instead of reporting a
  * capacity limit as a 500.
  */
-async function initWhatsAppClient(userId) {
+function setMockAllowedForTesting(allowed) {
+    if (process.env.NODE_ENV !== 'test') {
+        throw new Error('setMockAllowedForTesting can only be called in test environment');
+    }
+    global.__ALLOW_MOCKED_WHATSAPP_IN_TESTS = Boolean(allowed);
+}
+
+async function initWhatsAppClient(userId, options = {}) {
     userId = Number(userId);
     if (!Number.isSafeInteger(userId) || userId <= 0) {
         throw new Error('initWhatsAppClient requires a positive integer userId');
     }
 
-    // E2E/database tests must never create a browser-backed WhatsApp client,
-    // including for administrators (whose production role normally bypasses
-    // the per-account wa_enabled switch). This is deliberately in the
-    // initialization path so every caller is protected, not just the harness.
-    if (process.env.NODE_ENV === 'test' && process.env.ALLOW_DESTRUCTIVE_TESTING === 'true') {
-        try {
-            require('../utils/test-db-guard').validateTestDatabaseTarget({ requireDestructiveOptIn: true });
-            console.warn(`⚠️ [user ${userId}] WhatsApp client initialization disabled for guarded test database.`);
-            return { accepted: false, reason: 'WhatsApp client initialization is disabled for guarded tests.' };
-        } catch (_) {
-            // A test process without an approved disposable database retains
-            // ordinary mocked-client behavior; it is not an E2E DB run.
+    // Safety guard: tests must never launch a real, browser-backed WhatsApp client.
+    // In test environment, clients are only permitted if:
+    // 1) The client library is confirmed to be an in-memory FakeClient mock (never real Puppeteer/Chrome).
+    // 2) On guarded databases (ALLOW_DESTRUCTIVE_TESTING=true), tests must explicitly permit
+    //    mocked client initialization via setMockAllowedForTesting(true) or options.allowMock: true.
+    // This blocks unapproved or real clients by default on guarded databases, preventing accidental live sessions.
+    const isMockedClient = Client && (Client.name === 'FakeClient' || typeof require('whatsapp-web.js').__reset === 'function');
+
+    if (process.env.NODE_ENV === 'test') {
+        if (!isMockedClient) {
+            console.warn(`🚨 [user ${userId}] Blocked attempt to initialize real WhatsApp client in test environment.`);
+            return { accepted: false, reason: 'Real WhatsApp client cannot be initialized in test mode.' };
+        }
+
+        if (process.env.ALLOW_DESTRUCTIVE_TESTING === 'true') {
+            const isPermitted = Boolean(global.__ALLOW_MOCKED_WHATSAPP_IN_TESTS) || Boolean(options && options.allowMock);
+            if (!isPermitted) {
+                try {
+                    require('../utils/test-db-guard').validateTestDatabaseTarget({ requireDestructiveOptIn: true });
+                    console.warn(`⚠️ [user ${userId}] WhatsApp client initialization disabled for guarded test database.`);
+                    return { accepted: false, reason: 'WhatsApp client initialization is disabled for guarded tests.' };
+                } catch (_) {
+                    // Not a guarded database
+                }
+            }
         }
     }
 
@@ -636,9 +656,11 @@ function attachHandlers(userId, s, client) {
             if (msg.isGroupMsg || msg.isStatus || msg.from.endsWith('@g.us') || msg.from.endsWith('@broadcast')) return;
             if (msg.fromMe) return;
 
-            // msg.from is "<digits>@c.us"; take the digits. A malformed
-            // address is dropped rather than passed downstream.
-            const phone = String(msg.from).split('@')[0];
+            // Extract sender address. For modern multi-device WhatsApp, msg.from
+            // may be an LID (<digits>@lid). If so, resolve the actual phone number
+            // from contact metadata so subsequent sends/CRM lookup use the E.164 number.
+            const rawFrom = String(msg.from || '');
+            let phone = rawFrom.split('@')[0].replace(/\D/g, '');
             if (!/^\d{7,15}$/.test(phone)) return;
 
             // Mark the session as active so the hibernation timer is re-armed.
@@ -649,6 +671,9 @@ function attachHandlers(userId, s, client) {
             try {
                 const contact = await msg.getContact();
                 contactName = String(contact?.pushname || contact?.name || '').slice(0, 200);
+                if (contact?.number && /^\d{7,15}$/.test(contact.number)) {
+                    phone = contact.number;
+                }
             } catch (e) { /* non-fatal */ }
 
             // ── Incoming media (image, document, video, audio, sticker) ──────
@@ -836,10 +861,9 @@ function addSSEClient(userId, req, res) {
     // SameSite=Lax allows cross-site GET with cookies, so a malicious site
     // could open /api/qr-stream in a top-level navigation and steal the QR
     // code. Validate Origin and Sec-Fetch-Site headers to prevent this.
-    const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
-        .split(',').map(s => s.trim()).filter(Boolean);
+    const { isOriginAllowed } = require('../config/cors');
     const origin = req.headers.origin;
-    if (origin && allowedOrigins.length > 0 && !allowedOrigins.includes(origin)) {
+    if (origin && !isOriginAllowed(origin)) {
         return res.status(403).json({
             success: false,
             error: 'Invalid origin for SSE',
@@ -853,10 +877,6 @@ function addSSEClient(userId, req, res) {
             error: 'Cross-site SSE not allowed',
             code: 'CSRF_REJECTED'
         });
-    }
-    // If no allowed origins configured but we're in production, warn
-    if (process.env.NODE_ENV === 'production' && allowedOrigins.length === 0) {
-        console.warn('⚠️ ALLOWED_ORIGINS not set in production — SSE origin validation is permissive');
     }
 
     res.setHeader('Content-Type',  'text/event-stream');
@@ -990,25 +1010,106 @@ function getSessionMetrics() {
  * internal LID/WID registered before messages or media are dispatched.
  */
 async function resolveDestinationChatId(client, phone) {
-    const digits = String(phone).replace(/\D/g, '');
-    if (digits.length < 7 || digits.length > 15) {
-        const err = new Error('Invalid destination phone number');
+    if (!phone) {
+        const err = new Error('Recipient phone number is required');
+        err.code = 'INVALID_RECIPIENT';
         err.status = 400;
         throw err;
     }
-    const defaultChatId = `${digits}@c.us`;
-    if (!client || typeof client.getNumberId !== 'function') {
-        return defaultChatId;
+
+    const rawStr = String(phone).trim();
+    if (rawStr.includes('@')) {
+        const [u, server] = rawStr.split('@');
+        const cleanUser = u.replace(/\D/g, '');
+        if (cleanUser && (server === 'c.us' || server === 'lid')) {
+            return `${cleanUser}@${server}`;
+        }
     }
+
+    const digits = rawStr.replace(/\D/g, '');
+    if (digits.length < 7 || digits.length > 15) {
+        const err = new Error(`Invalid destination phone number: ${phone}`);
+        err.code = 'INVALID_RECIPIENT';
+        err.status = 400;
+        throw err;
+    }
+
+    if (!client || typeof client.getNumberId !== 'function') {
+        return `${digits}@c.us`;
+    }
+
+    // 1. Direct getNumberId
     try {
         const numberId = await client.getNumberId(digits);
         if (numberId && numberId._serialized) {
             return numberId._serialized;
         }
-    } catch (e) {
-        console.warn('   ⚠️ Could not resolve WhatsApp numberId via getNumberId (using fallback):', e.message?.split('\n')[0]);
+    } catch (_) {}
+
+    // 2. 10-digit national number (e.g. India prefix 91)
+    if (digits.length === 10) {
+        try {
+            const numberIdWith91 = await client.getNumberId('91' + digits);
+            if (numberIdWith91 && numberIdWith91._serialized) {
+                return numberIdWith91._serialized;
+            }
+        } catch (_) {}
     }
-    return defaultChatId;
+
+    // 3. Leading zero 11-digit number
+    if (digits.startsWith('0') && digits.length === 11) {
+        try {
+            const numberIdWith91 = await client.getNumberId('91' + digits.slice(1));
+            if (numberIdWith91 && numberIdWith91._serialized) {
+                return numberIdWith91._serialized;
+            }
+        } catch (_) {}
+    }
+
+    // 4. Multi-device LID resolution (14-15 digits, e.g. 227105572937810)
+    if (digits.length >= 14) {
+        try {
+            if (typeof client.getContactById === 'function') {
+                const contact = await client.getContactById(`${digits}@lid`).catch(() => null);
+                if (contact) {
+                    if (contact.number && /^\d{7,15}$/.test(contact.number)) {
+                        const numId = await client.getNumberId(contact.number).catch(() => null);
+                        if (numId && numId._serialized) return numId._serialized;
+                        return `${contact.number}@c.us`;
+                    }
+                    if (contact.id && contact.id._serialized) {
+                        return contact.id._serialized;
+                    }
+                }
+            }
+            if (typeof client.getChatById === 'function') {
+                const lidChat = await client.getChatById(`${digits}@lid`).catch(() => null);
+                if (lidChat && lidChat.id && lidChat.id._serialized) {
+                    return lidChat.id._serialized;
+                }
+            }
+        } catch (_) {}
+    }
+
+    // 5. Existing chat check
+    try {
+        if (typeof client.getChatById === 'function') {
+            const chat = await client.getChatById(`${digits}@c.us`).catch(() => null);
+            if (chat && chat.id && chat.id._serialized) {
+                return chat.id._serialized;
+            }
+        }
+    } catch (_) {}
+
+    // Fallback: If 10 digits and not found on WA, reject with clean descriptive error
+    if (digits.length === 10) {
+        const err = new Error(`Recipient +91${digits} is not registered on WhatsApp`);
+        err.code = 'RECIPIENT_NOT_ON_WHATSAPP';
+        err.status = 400;
+        throw err;
+    }
+
+    return `${digits}@c.us`;
 }
 
 async function sendTextMessage(userId, phone, text) {
@@ -1020,7 +1121,18 @@ async function sendTextMessage(userId, phone, text) {
         throw err;
     }
     const chatId = await resolveDestinationChatId(s.client, phone);
-    return await s.client.sendMessage(chatId, String(text));
+    try {
+        return await s.client.sendMessage(chatId, String(text));
+    } catch (err) {
+        // If "No LID for user" occurs when sending to @c.us for an LID contact, retry with @lid
+        if (/No LID for user/i.test(err.message) && chatId.endsWith('@c.us')) {
+            const digits = chatId.replace(/\D/g, '');
+            if (digits.length >= 14) {
+                return await s.client.sendMessage(`${digits}@lid`, String(text));
+            }
+        }
+        throw err;
+    }
 }
 
 /**
@@ -1048,11 +1160,22 @@ async function sendMediaMessage(userId, phone, { base64Data, mimeType, fileName,
     const { MessageMedia } = require('whatsapp-web.js');
     const media = new MessageMedia(mimeType, base64Data, fileName);
     const opts  = caption ? { caption } : {};
-    return await s.client.sendMessage(chatId, media, opts);
+    try {
+        return await s.client.sendMessage(chatId, media, opts);
+    } catch (err) {
+        if (/No LID for user/i.test(err.message) && chatId.endsWith('@c.us')) {
+            const digits = chatId.replace(/\D/g, '');
+            if (digits.length >= 14) {
+                return await s.client.sendMessage(`${digits}@lid`, media, opts);
+            }
+        }
+        throw err;
+    }
 }
 
 module.exports = {
     initWhatsAppClient,
+    setMockAllowedForTesting,
     destroyClientForUser,
     destroyAllClients,
     addSSEClient,
@@ -1060,7 +1183,9 @@ module.exports = {
     getStatus,
     getSessionMetrics,
     sendTextMessage,
+    sendText: sendTextMessage,
     sendMediaMessage,
+    resolveDestinationChatId,
     authDataPath,
     MAX_CONCURRENT_SESSIONS,
     MAX_SSE_CLIENTS_PER_USER,

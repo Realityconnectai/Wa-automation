@@ -244,6 +244,13 @@ describe('Task 2B: Offline PostgreSQL Verification Suite', () => {
         const initSqlJs = require('sql.js');
         const fixturePath = path.join(__dirname, '..', 'test-fixtures', 'legacy-synthetic.db');
 
+        beforeAll(async () => {
+            if (!fs.existsSync(fixturePath)) {
+                const { createSyntheticDb } = require('../scripts/create-synthetic-legacy-db');
+                await createSyntheticDb(fixturePath);
+            }
+        });
+
         test('synthetic database fixture exists and is populated', async () => {
             expect(fs.existsSync(fixturePath)).toBe(true);
             const buffer = fs.readFileSync(fixturePath);

@@ -82,15 +82,15 @@ function getEncryptionKey(overrideKey = null) {
     }
 
     const envKey = process.env.TOKEN_ENCRYPTION_KEY || process.env.TEST_TOKEN_ENCRYPTION_KEY;
-    const isProduction = process.env.NODE_ENV === 'production';
+    const isTestOrDev = process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development';
 
     if (envKey) {
         return parseKey(envKey);
     }
 
-    if (isProduction) {
+    if (!isTestOrDev) {
         throw new Error(
-            'TOKEN_ENCRYPTION_KEY is required in production. ' +
+            'TOKEN_ENCRYPTION_KEY is required in production and staging environments. ' +
             'Provide a securely generated 32-byte key encoded as 64 hexadecimal characters.'
         );
     }

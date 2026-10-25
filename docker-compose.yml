@@ -6,7 +6,30 @@
 #
 # For a real deployment with a domain + automatic HTTPS, add Caddy in front —
 # see docker-compose.prod.yml + Caddyfile, and DEPLOY.md for the full steps.
+#
+# External Database Note:
+# If you are pointing to an external managed database (e.g. AWS RDS), set
+# DATABASE_URL in your .env and run `docker compose up -d app fix-perms` or
+# override the postgres service in your production compose overlay.
 services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-whatsapp_automation}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - wa-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-whatsapp_automation}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    ports:
+      # Local development access only; bound strictly to loopback to avoid external network exposure
+      - "127.0.0.1:5432:5432"
+
   fix-perms:
     build: .
     user: root
@@ -21,6 +44,8 @@ services:
     depends_on:
       fix-perms:
         condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     init: true
     env_file:
@@ -34,6 +59,8 @@ services:
       # Default: 2 hours (7200000 ms). Reduce if RAM is constrained.
       - SESSION_IDLE_TIMEOUT_MS=7200000
       - FORCE_HTTPS=true
+      # Fallback DATABASE_URL connects to the internal postgres service if unset in .env
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/whatsapp_automation}
       # MAX_CONCURRENT_WHATSAPP_SESSIONS is intentionally NOT set here.
       # Set it in your .env file using the sizing guide in .env.example:
       #   (total_RAM_GB - 1.5) × 3   e.g. 4GB server → 7, 8GB server → 19
@@ -53,3 +80,4 @@ volumes:
   wa-data:
   wa-auth:
   wa-cache:
+  wa-postgres-data:

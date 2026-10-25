@@ -230,6 +230,7 @@ async function tryBrochureDrop(userId, phone, contactName, text, client, msg, in
             await getMessaging().sendMedia(userId, phone, {
                 filePath: asset.storage_path,
                 mimeType: asset.mime_type,
+                fileName: asset.display_name || asset.file_name,
                 caption:  `${project.name} — Brochure${reraLabel}`
             });
             sentCount++;
@@ -244,6 +245,7 @@ async function tryBrochureDrop(userId, phone, contactName, text, client, msg, in
             await getMessaging().sendMedia(userId, phone, {
                 filePath: asset.storage_path,
                 mimeType: asset.mime_type,
+                fileName: asset.display_name || asset.file_name,
                 caption:  `${project.name} — Virtual Walkthrough`
             });
             sentCount++;

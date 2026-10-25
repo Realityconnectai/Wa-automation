@@ -356,8 +356,14 @@ async function generateReplyWithBooking(userId, phone, contactName, systemInstru
             result = { error: toolErr.message || 'Tool call failed.' };
         }
 
-        contents.push({ role: 'model', parts: [createPartFromFunctionCall(call.name, call.args || {})] });
-        contents.push({ role: 'user', parts: [createPartFromFunctionResponse(call.id, call.name, result)] });
+        const candidateContent = response.candidates?.[0]?.content;
+        if (candidateContent) {
+            contents.push(candidateContent);
+        } else {
+            contents.push({ role: 'model', parts: [createPartFromFunctionCall(call.name, call.args || {})] });
+        }
+        const callId = call.id || candidateContent?.parts?.find(p => p.functionCall?.name === call.name)?.functionCall?.id;
+        contents.push({ role: 'user', parts: [createPartFromFunctionResponse(callId, call.name, result)] });
 
         response = await callModel();
     }

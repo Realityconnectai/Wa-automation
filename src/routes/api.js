@@ -2,7 +2,8 @@ const express = require('express');
 const router = express.Router();
 
 const {
-    getContacts, countContacts, upsertContact, bulkUpsertContacts, deleteContact,
+    getContacts, countContacts, getContactById, getContactLabels, updateContact,
+    upsertContact, bulkUpsertContacts, deleteContact,
     getContactByPhone, getContactsByIds,
     getMessages, countMessages, getConversation,
     getChatbotRules, createChatbotRule, updateChatbotRule, deleteChatbotRule, countChatbotRules,
@@ -16,7 +17,8 @@ const {
     updateCrmDeal, deleteCrmDeal, getCrmStats, getCrmAnalytics, addCrmActivity, getCrmActivities,
     assertPersistable, transaction, runSql,
     setContactOptOut, setConversationAiPause, isConversationAiPaused,
-    exportContactsData, exportLeadsData, exportDealsData
+    exportContactsData, exportLeadsData, exportDealsData,
+    getOutreachJobs, countOutreachJobs
 } = require('../services/database');
 
 const { sendTextMessage, getStatus, initWhatsAppClient, destroyClientForUser } = require('../services/whatsapp-client');
@@ -199,7 +201,7 @@ router.post('/whatsapp/disconnect', waConnectLimiter, asyncHandler(async (req, r
 // ─────────────────────────────────────────────────────────────
 router.get('/contacts', asyncHandler(async (req, res) => {
     // Search text is bounded and label is treated as an exact match. Both go
-    // to SQLite as bound parameters (see database.getContacts), so the only
+    // to PostgreSQL as bound parameters (see database.getContacts), so the only
     // thing to enforce here is size.
     const search = optionalString(req.query.search, 'search', LIMITS.SEARCH_QUERY);
     const label = optionalString(req.query.label, 'label', LIMITS.CONTACT_LABEL);
@@ -210,8 +212,13 @@ router.get('/contacts', asyncHandler(async (req, res) => {
     res.json({
         success: true,
         data: maskEntityPhones(contacts, req.user),
-        meta: { limit, offset, total: await countContacts(req.user.id) }
+        meta: { limit, offset, total: await countContacts(req.user.id, search, label) }
     });
+}));
+
+router.get('/contacts/labels', asyncHandler(async (req, res) => {
+    const labels = await getContactLabels(req.user.id);
+    res.json({ success: true, data: labels });
 }));
 
 router.post('/contacts', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
@@ -237,25 +244,6 @@ router.post('/contacts', writeLimiter, requireDurableWrite, asyncHandler(async (
 
     const contact = await upsertContact(req.user.id, phone, name, label, notes);
     res.json({ success: true, data: contact });
-}));
-
-router.delete('/contacts/:id', writeLimiter, asyncHandler(async (req, res) => {
-    const id = requireId(req.params.id, 'contact id');
-    // Scoped by user_id in the DELETE itself — an id belonging to another
-    // tenant matches zero rows and returns 404, not their data.
-    const { changes } = await deleteContact(req.user.id, id);
-    if (!changes) return res.status(404).json({ success: false, error: 'Contact not found' });
-    res.json({ success: true });
-}));
-
-router.post('/contacts/:id/opt-out', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
-    const id = requireId(req.params.id, 'contact id');
-    const optedOut = req.body?.opted_out !== undefined ? Boolean(req.body.opted_out) : true;
-    const reason = optionalString(req.body?.reason, 'reason', 200) || (optedOut ? 'Manual opt-out by user' : 'Manual opt-in by user');
-
-    const contact = await setContactOptOut(req.user.id, id, optedOut, reason);
-    if (!contact) return res.status(404).json({ success: false, error: 'Contact not found' });
-    res.json({ success: true, contact: maskEntityPhones(contact, req.user), data: maskEntityPhones(contact, req.user) });
 }));
 
 router.get('/contacts/export', asyncHandler(async (req, res) => {
@@ -354,6 +342,25 @@ router.post('/contacts/outreach', sendLimiter, requireDurableWrite, asyncHandler
     }
     const message = requireString(body.message, 'message', { max: LIMITS.MESSAGE_BODY });
 
+    let mediaAssetId = null;
+    if (body.mediaAssetId !== undefined && body.mediaAssetId !== null && body.mediaAssetId !== '') {
+        mediaAssetId = requireId(body.mediaAssetId, 'mediaAssetId');
+        const { getMediaAssetById } = require('../services/database');
+        const asset = await getMediaAssetById(req.user.id, mediaAssetId);
+        if (!asset || !asset.is_active) {
+            return res.status(404).json({ success: false, error: 'Media asset not found or inactive', code: 'MEDIA_ASSET_NOT_FOUND' });
+        }
+        const fs = require('fs');
+        if (!fs.existsSync(asset.storage_path)) {
+            return res.status(404).json({ success: false, error: 'Media file not found on server', code: 'MEDIA_FILE_NOT_FOUND' });
+        }
+        const { validateMediaFile } = require('../services/messaging');
+        const validation = validateMediaFile(asset.storage_path, asset.mime_type);
+        if (!validation.ok) {
+            return res.status(400).json({ success: false, error: validation.message, code: validation.code });
+        }
+    }
+
     const status = getStatus(req.user.id);
     if (!status.connected) {
         return res.status(409).json({ success: false, error: 'Connect WhatsApp first (Settings → WhatsApp QR) before sending outreach.' });
@@ -364,8 +371,25 @@ router.post('/contacts/outreach', sendLimiter, requireDurableWrite, asyncHandler
         return res.status(400).json({ success: false, error: 'None of the selected contacts could be found' });
     }
 
-    const job = await startOutreachJob(req.user, contacts, message);
+    const job = await startOutreachJob(req.user, contacts, message, mediaAssetId);
     res.json({ success: true, data: { jobId: job.id, total: job.total } });
+}));
+
+router.get('/contacts/outreach', asyncHandler(async (req, res) => {
+    const status = optionalEnum(req.query.status, ['running', 'cancel_requested', 'completed', 'cancelled', 'interrupted'], 'status');
+    const limit = clampInt(req.query.limit, { min: 1, max: 100, fallback: 20 });
+    const offset = clampInt(req.query.offset, { min: 0, max: LIMITS.MAX_OFFSET, fallback: 0 });
+
+    const [jobs, total] = await Promise.all([
+        getOutreachJobs(req.user.id, { status, limit, offset }),
+        countOutreachJobs(req.user.id, status)
+    ]);
+
+    res.json({
+        success: true,
+        data: jobs,
+        meta: { limit, offset, total }
+    });
 }));
 
 router.get('/contacts/outreach/:jobId', asyncHandler(async (req, res) => {
@@ -373,6 +397,15 @@ router.get('/contacts/outreach/:jobId', asyncHandler(async (req, res) => {
     // indistinguishable from a missing one.
     const job = await getOutreachJob(String(req.params.jobId).slice(0, 40), req.user.id);
     if (!job) return res.status(404).json({ success: false, error: 'Job not found' });
+
+    // Role-based phone number masking for non-admin callers
+    if (!isAuthorizedForFullPhone(req.user) && Array.isArray(job.results)) {
+        job.results = job.results.map(r => ({
+            ...r,
+            phone: maskPhoneNumber(r.phone)
+        }));
+    }
+
     res.json({ success: true, data: job });
 }));
 
@@ -380,6 +413,44 @@ router.post('/contacts/outreach/:jobId/cancel', asyncHandler(async (req, res) =>
     const ok = await cancelOutreachJob(String(req.params.jobId).slice(0, 40), req.user.id);
     if (!ok) return res.status(404).json({ success: false, error: 'Job not found or already finished' });
     res.json({ success: true });
+}));
+
+router.get('/contacts/:id', asyncHandler(async (req, res) => {
+    const id = requireId(req.params.id, 'contact id');
+    const contact = await getContactById(req.user.id, id);
+    if (!contact) return res.status(404).json({ success: false, error: 'Contact not found' });
+    res.json({ success: true, data: maskEntityPhones(contact, req.user) });
+}));
+
+router.put('/contacts/:id', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
+    const id = requireId(req.params.id, 'contact id');
+    const body = req.body || {};
+    const name = sanitizeSpreadsheetCell(optionalString(body.name, 'name', LIMITS.CONTACT_NAME));
+    const label = sanitizeSpreadsheetCell(optionalString(body.label, 'label', LIMITS.CONTACT_LABEL));
+    const notes = sanitizeSpreadsheetCell(optionalString(body.notes, 'notes', LIMITS.CONTACT_NOTES));
+
+    const contact = await updateContact(req.user.id, id, { name, label, notes });
+    if (!contact) return res.status(404).json({ success: false, error: 'Contact not found' });
+    res.json({ success: true, data: maskEntityPhones(contact, req.user) });
+}));
+
+router.delete('/contacts/:id', writeLimiter, asyncHandler(async (req, res) => {
+    const id = requireId(req.params.id, 'contact id');
+    // Scoped by user_id in the DELETE itself — an id belonging to another
+    // tenant matches zero rows and returns 404, not their data.
+    const { changes } = await deleteContact(req.user.id, id);
+    if (!changes) return res.status(404).json({ success: false, error: 'Contact not found' });
+    res.json({ success: true });
+}));
+
+router.post('/contacts/:id/opt-out', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
+    const id = requireId(req.params.id, 'contact id');
+    const optedOut = req.body?.opted_out !== undefined ? Boolean(req.body.opted_out) : true;
+    const reason = optionalString(req.body?.reason, 'reason', 200) || (optedOut ? 'Manual opt-out by user' : 'Manual opt-in by user');
+
+    const contact = await setContactOptOut(req.user.id, id, optedOut, reason);
+    if (!contact) return res.status(404).json({ success: false, error: 'Contact not found' });
+    res.json({ success: true, contact: maskEntityPhones(contact, req.user), data: maskEntityPhones(contact, req.user) });
 }));
 
 // ─────────────────────────────────────────────────────────────
@@ -532,7 +603,7 @@ router.post('/messages/send', sendLimiter, requireDurableWrite, asyncHandler(asy
     if (idempotencyKey) {
         const row = await findMessageByIdempotencyKey(uid, idempotencyKey);
         if (row) {
-            await runSql("UPDATE messages SET status = 'sent' WHERE id = $1", [row.id]);
+            await runSql("UPDATE messages SET status = 'sent', wa_message_id = $1 WHERE id = $2", [result?.id?._serialized || result?.messageId || null, row.id]);
             try {
                 const { recordFirstResponse } = require('../services/lead-assignment');
                 recordFirstResponse(uid, phone).catch(() => {});

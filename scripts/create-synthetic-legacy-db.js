@@ -11,11 +11,10 @@ const fs = require('fs');
 const path = require('path');
 const initSqlJs = require('sql.js');
 
-async function createSyntheticDb() {
-    const targetDir = path.join(__dirname, '..', 'test-fixtures');
+async function createSyntheticDb(destPath = null) {
+    const targetPath = destPath || path.join(__dirname, '..', 'test-fixtures', 'legacy-synthetic.db');
+    const targetDir = path.dirname(targetPath);
     if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-
-    const targetPath = path.join(targetDir, 'legacy-synthetic.db');
 
     const SQL = await initSqlJs();
     const db = new SQL.Database();
@@ -291,9 +290,14 @@ async function createSyntheticDb() {
 
     console.log(`✅ Synthetic legacy SQLite database created at: ${targetPath}`);
     console.log(`   File size: ${buffer.length} bytes`);
+    return targetPath;
 }
 
-createSyntheticDb().catch(err => {
-    console.error('❌ Failed to create synthetic database:', err);
-    process.exit(1);
-});
+module.exports = { createSyntheticDb };
+
+if (require.main === module) {
+    createSyntheticDb().catch(err => {
+        console.error('❌ Failed to create synthetic database:', err);
+        process.exit(1);
+    });
+}

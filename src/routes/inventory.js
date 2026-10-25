@@ -28,6 +28,7 @@ const {
 } = require('../services/database');
 
 const { validateMediaFile, sendMedia } = require('../services/messaging');
+const { sanitizeOriginalFilename, formatSafeContentDisposition, resolveDisplayFilename } = require('../utils/media-filename');
 const { asyncHandler }      = require('../utils/errors');
 const { perUser }           = require('../middleware/rateLimit');
 const { requireId, requireString, optionalString, clampNumber, clampInt, requireEnum, normalizePhone, LIMITS }
@@ -265,6 +266,33 @@ for (const [action, { newStatus }] of Object.entries(TRANSITION_ENDPOINTS)) {
 }
 
 // ─── Media Assets ─────────────────────────────────────────────────────────
+router.get('/assets', asyncHandler(async (req, res) => {
+    const q = req.query || {};
+    const projectId = (q.projectId || q.project_id) ? requireId(q.projectId || q.project_id, 'projectId') : null;
+    const assets = await getMediaAssets(req.user.id, projectId, {
+        assetType: optionalString(q.assetType || q.asset_type, 'assetType', 30) || undefined,
+        unitId:    q.unitId ? requireId(q.unitId, 'unitId') : undefined,
+        activeOnly: q.activeOnly !== 'false'
+    });
+    const safeAssets = assets.map(a => {
+        const dName = resolveDisplayFilename(a.display_name || a.file_name, req.user.id);
+        return {
+            id: a.id,
+            project_id: a.project_id,
+            project_name: a.project_name || '',
+            unit_id: a.unit_id,
+            asset_type: a.asset_type,
+            file_name: dName,
+            display_name: dName,
+            mime_type: a.mime_type,
+            size_bytes: a.size_bytes,
+            rera_verified: a.rera_verified,
+            created_at: a.created_at
+        };
+    });
+    res.json({ success: true, data: safeAssets });
+}));
+
 router.get('/projects/:projectId/assets', asyncHandler(async (req, res) => {
     const projectId = requireId(req.params.projectId, 'project id');
     const project = await getProjectById(req.user.id, projectId);
@@ -274,7 +302,15 @@ router.get('/projects/:projectId/assets', asyncHandler(async (req, res) => {
         assetType: optionalString(q.assetType || q.asset_type, 'assetType', 30) || undefined,
         unitId:    q.unitId ? requireId(q.unitId, 'unitId') : undefined
     });
-    res.json({ success: true, data: assets });
+    const safeAssets = assets.map(a => {
+        const dName = resolveDisplayFilename(a.display_name || a.file_name, req.user.id);
+        return {
+            ...a,
+            file_name: dName,
+            display_name: dName
+        };
+    });
+    res.json({ success: true, data: safeAssets });
 }));
 
 router.post('/projects/:projectId/assets', writeLimiter, requireDurableWrite,
@@ -301,11 +337,14 @@ router.post('/projects/:projectId/assets', writeLimiter, requireDurableWrite,
         const assetType = VALID_ASSET_TYPES.includes(b.assetType||b.asset_type)
             ? (b.assetType||b.asset_type) : 'photo';
 
+        // Derive safe original display filename from user upload, not internal storage path
+        const displayFileName = sanitizeOriginalFilename(req.file.originalname, validation.fileName);
+
         const asset = await createMediaAsset(req.user.id, {
             projectId,
             unitId:       b.unitId ? requireId(b.unitId, 'unitId') : null,
             assetType,
-            fileName:     validation.fileName,
+            fileName:     displayFileName,
             storagePath:  req.file.path,
             mimeType:     req.file.mimetype,
             sizeBytes:    validation.sizeBytes,
@@ -341,14 +380,16 @@ router.post('/projects/:projectId/assets/:assetId/send', writeLimiter, requireDu
                 code: 'MESSAGE_LIMIT'
             });
         }
+        const displayFileName = asset.display_name || asset.file_name;
         const result = await sendMedia(req.user.id, phone, {
             filePath: asset.storage_path,
             mimeType: asset.mime_type,
+            fileName: displayFileName,
             caption,
             idempotencyKey,
             mediaAssetId: asset.id
         });
-        res.json({ success: true, data: { assetId: asset.id, fileName: asset.file_name, ...result } });
+        res.json({ success: true, data: { assetId: asset.id, fileName: displayFileName, ...result } });
     })
 );
 
@@ -376,7 +417,8 @@ router.get('/assets/:id/file', asyncHandler(async (req, res) => {
     }
     res.setHeader('Content-Type', asset.mime_type);
     const disposition = req.query.download === '1' ? 'attachment' : 'inline';
-    res.setHeader('Content-Disposition', `${disposition}; filename="${asset.file_name}"`);
+    const downloadName = asset.display_name || asset.file_name;
+    res.setHeader('Content-Disposition', formatSafeContentDisposition(disposition, downloadName));
     res.setHeader('Cache-Control', 'private, max-age=3600');
     res.sendFile(path.resolve(asset.storage_path));
 }));

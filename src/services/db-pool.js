@@ -78,9 +78,11 @@ function getPoolConfig() {
     const isProd = process.env.NODE_ENV === 'production';
     const connectionString = (process.env.DATABASE_URL || '').trim();
 
-    const maxConnections = parseInt(process.env.PGMAX_CONNECTIONS || process.env.DB_POOL_MAX || '20', 10);
+    const isTest = process.env.NODE_ENV === 'test';
+    const defaultMax = isProd ? 20 : (isTest ? 5 : 10);
+    const maxConnections = parseInt(process.env.PGMAX_CONNECTIONS || process.env.DB_POOL_MAX || String(defaultMax), 10);
     const connectionTimeoutMillis = parseInt(process.env.PGCONNECT_TIMEOUT_MS || '5000', 10);
-    const idleTimeoutMillis = parseInt(process.env.PGIDLE_TIMEOUT_MS || '30000', 10);
+    const idleTimeoutMillis = parseInt(process.env.PGIDLE_TIMEOUT_MS || (isTest ? '1000' : '30000'), 10);
     const statementTimeout = parseInt(process.env.PGSTATEMENT_TIMEOUT_MS || '10000', 10);
     const queryTimeout = parseInt(process.env.PGQUERY_TIMEOUT_MS || '10000', 10);
 
@@ -90,7 +92,7 @@ function getPoolConfig() {
     //    freezes (e.g., container pause, network drop), node-postgres aborts the query and destroys the socket.
     // 3. statement_timeout: Server-side timeout enforced by PostgreSQL engine for running queries.
     const config = {
-        max: Number.isFinite(maxConnections) && maxConnections > 0 ? maxConnections : 20,
+        max: Number.isFinite(maxConnections) && maxConnections > 0 ? maxConnections : defaultMax,
         connectionTimeoutMillis,
         idleTimeoutMillis,
         statement_timeout: statementTimeout,
@@ -482,6 +484,7 @@ async function closePool() {
             console.warn('   ⚠️ Error closing PostgreSQL pool:', sanitizeErrorMessage(err.message));
         }
     }
+    isShuttingDown = false;
 }
 
 module.exports = {

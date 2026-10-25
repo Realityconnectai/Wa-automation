@@ -101,6 +101,40 @@ async function api(endpoint, options = {}) {
     }
 }
 
+async function apiWithMeta(endpoint, options = {}) {
+    try {
+        let headers = { 'Content-Type': 'application/json', ...options.headers };
+        if (CURRENT_ACCESS_TOKEN) {
+            headers['Authorization'] = `Bearer ${CURRENT_ACCESS_TOKEN}`;
+        }
+        
+        let res = await fetch(`${API}${endpoint}`, {
+            ...options,
+            headers
+        });
+        
+        if (res.status === 401) {
+            const ok = await refreshSession();
+            if (ok) {
+                headers['Authorization'] = `Bearer ${CURRENT_ACCESS_TOKEN}`;
+                res = await fetch(`${API}${endpoint}`, {
+                    ...options,
+                    headers
+                });
+            } else {
+                window.location.href = '/login';
+                throw new Error('Not authenticated');
+            }
+        }
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'API request failed');
+        return data;
+    } catch (err) {
+        console.error(`API Error [${endpoint}]:`, err);
+        throw err;
+    }
+}
+
 // ─── Toast Notifications ────────────────────────────────────
 function showToast(message, type = 'info') {
     const container = document.getElementById('toastContainer');
@@ -204,7 +238,8 @@ function loadSectionData(section) {
         case 'leads':     loadLeads(); break;
         case 'crm':       loadCrm(); break;
         case 'chatbot':   loadChatbotRules(); break;
-        case 'contacts':  loadContacts(); break;
+        case 'contacts':  loadContactLabels(); loadContacts(0); break;
+        case 'campaigns': loadCampaigns(); break;
         case 'scheduled': loadScheduled(); break;
         case 'appointments': loadAppointments(); break;
         case 'settings':  loadSettings(); break;
@@ -1678,21 +1713,56 @@ async function testChatbot() {
 // silently stay "selected" for a send the user can no longer see).
 let SELECTED_CONTACTS = new Map(); // id -> { id, phone, name }
 let LAST_LOADED_CONTACTS = [];
+let contactsCurrentOffset = 0;
+let contactsCurrentPageSize = 50;
+let contactsCurrentTotal = 0;
 
-async function loadContacts() {
+async function loadContactLabels() {
+    const select = document.getElementById('contactLabelFilter');
+    if (!select) return;
+    try {
+        const labels = await api('/api/contacts/labels');
+        const list = Array.isArray(labels) ? labels : (labels?.data || []);
+        const currentVal = select.value;
+        select.innerHTML = '<option value="">All Labels</option>' + list.map(l =>
+            `<option value="${escapeHtml(l)}"${l === currentVal ? ' selected' : ''}>${escapeHtml(l)}</option>`
+        ).join('');
+    } catch (err) {
+        console.error('Failed to load contact labels:', err);
+    }
+}
+
+async function loadContacts(offset = contactsCurrentOffset) {
     clearErrorBanner('contactsError');
     try {
-        const search   = document.getElementById('contactSearch')?.value || '';
-        let endpoint   = '/api/contacts';
-        if (search) endpoint += `?search=${encodeURIComponent(search)}`;
+        contactsCurrentOffset = offset;
+        const search = document.getElementById('contactSearch')?.value?.trim() || '';
+        const label = document.getElementById('contactLabelFilter')?.value?.trim() || '';
+        const pageSizeEl = document.getElementById('contactsPageSize');
+        if (pageSizeEl) {
+            contactsCurrentPageSize = parseInt(pageSizeEl.value, 10) || 50;
+        }
 
-        const contacts = await api(endpoint);
+        const queryParams = new URLSearchParams({
+            limit: String(contactsCurrentPageSize),
+            offset: String(contactsCurrentOffset)
+        });
+        if (search) queryParams.set('search', search);
+        if (label) queryParams.set('label', label);
+
+        const res = await apiWithMeta(`/api/contacts?${queryParams.toString()}`);
+        const contacts = res.data || [];
+        const meta = res.meta || { total: contacts.length, limit: contactsCurrentPageSize, offset: contactsCurrentOffset };
+        contactsCurrentTotal = meta.total || 0;
+
         LAST_LOADED_CONTACTS = contacts;
         SELECTED_CONTACTS.clear();
         updateSelectionBar();
-        const tbody    = document.getElementById('contactsBody');
+        const tbody = document.getElementById('contactsBody');
         const selectAll = document.getElementById('contactsSelectAll');
         if (selectAll) selectAll.checked = false;
+
+        renderContactsPagination(contactsCurrentTotal, contactsCurrentOffset, contactsCurrentPageSize);
 
         if (contacts.length === 0) {
             tbody.innerHTML = `
@@ -1701,7 +1771,7 @@ async function loadContacts() {
                         <div class="empty-state">
                             <span class="empty-state-icon" aria-hidden="true">${Icon('users')}</span>
                             <div class="empty-state-title">No contacts found</div>
-                            <p>${search ? 'Try a different search term.' : 'Add your first contact above, or import a CSV!'}</p>
+                            <p>${search || label ? 'Try adjusting your search or label filter.' : 'Add your first contact above, or import a CSV!'}</p>
                         </div>
                     </td>
                 </tr>`;
@@ -1710,7 +1780,7 @@ async function loadContacts() {
 
         tbody.innerHTML = contacts.map(c => `
             <tr>
-                <td><input type="checkbox" class="contact-row-check" data-id="${c.id}" data-phone="${escapeHtml(c.phone)}" data-name="${escapeHtml(c.name || '')}" data-reached="${c.last_outreach_at ? '1' : '0'}" data-opted="${c.is_opted_out ? '1' : '0'}" aria-label="Select ${escapeHtml(c.name || c.phone)}"></td>
+                <td><input type="checkbox" class="contact-row-check" data-id="${c.id}" data-phone="${escapeHtml(c.phone)}" data-name="${escapeHtml(c.name || '')}" data-reached="${c.last_outreach_at ? '1' : '0'}" data-opted="${c.is_opted_out ? '1' : '0'}" ${c.is_opted_out ? 'disabled title="Opted-out contacts cannot be selected for outreach"' : ''} aria-label="Select ${escapeHtml(c.name || c.phone)}"></td>
                 <td><strong>${escapeHtml(c.name) || '—'}</strong></td>
                 <td class="text-secondary">${escapeHtml(c.phone)}</td>
                 <td>${c.is_opted_out
@@ -1722,6 +1792,12 @@ async function loadContacts() {
                     : `<span class="not-reached-label">Not yet</span>`}</td>
                 <td class="text-secondary-nowrap">${formatDate(c.created_at)}</td>
                 <td>
+                    <button
+                        class="btn btn-sm btn-secondary"
+                        data-action="edit-contact" data-id="${c.id}"
+                        title="Edit contact"
+                        aria-label="Edit contact ${escapeHtml(c.name || c.phone)}"
+                        type="button">${Icon('pencil')}</button>
                     <button
                         class="btn btn-sm ${c.is_opted_out ? 'btn-secondary' : 'btn-warning'}"
                         data-action="toggle-optout" data-id="${c.id}" data-opted="${c.is_opted_out ? '1' : '0'}"
@@ -1741,13 +1817,142 @@ async function loadContacts() {
         tbody.querySelectorAll('.contact-row-check').forEach(cb => {
             cb.addEventListener('change', () => {
                 const id = Number(cb.dataset.id);
-                if (cb.checked) SELECTED_CONTACTS.set(id, { id, phone: cb.dataset.phone, name: cb.dataset.name, reached: cb.dataset.reached === '1' });
-                else SELECTED_CONTACTS.delete(id);
+                if (cb.checked) {
+                    if (cb.dataset.opted === '1') {
+                        cb.checked = false;
+                        SELECTED_CONTACTS.delete(id);
+                        updateSelectionBar();
+                        return;
+                    }
+                    SELECTED_CONTACTS.set(id, { id, phone: cb.dataset.phone, name: cb.dataset.name, reached: cb.dataset.reached === '1' });
+                } else {
+                    SELECTED_CONTACTS.delete(id);
+                }
                 updateSelectionBar();
             });
         });
     } catch (err) {
-        showErrorBanner('contactsError', 'Failed to load contacts.', loadContacts);
+        showErrorBanner('contactsError', 'Failed to load contacts.', () => loadContacts(offset));
+    }
+}
+
+function renderContactsPagination(total, offset, limit) {
+    const paginationEl = document.getElementById('contactsPagination');
+    const infoEl = document.getElementById('contactsPaginationInfo');
+    const prevBtn = document.getElementById('contactsPrevBtn');
+    const nextBtn = document.getElementById('contactsNextBtn');
+
+    if (!paginationEl) return;
+
+    if (total === 0) {
+        paginationEl.hidden = true;
+        return;
+    }
+
+    paginationEl.hidden = false;
+    const start = offset + 1;
+    const end = Math.min(offset + limit, total);
+    const currentPage = Math.floor(offset / limit) + 1;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+
+    if (infoEl) {
+        infoEl.textContent = `Showing ${start}–${end} of ${total} (Page ${currentPage} of ${totalPages})`;
+    }
+
+    if (prevBtn) {
+        prevBtn.disabled = offset <= 0;
+    }
+    if (nextBtn) {
+        nextBtn.disabled = offset + limit >= total;
+    }
+}
+
+function contactsPrevPage() {
+    const newOffset = Math.max(0, contactsCurrentOffset - contactsCurrentPageSize);
+    loadContacts(newOffset);
+}
+
+function contactsNextPage() {
+    const newOffset = contactsCurrentOffset + contactsCurrentPageSize;
+    loadContacts(newOffset);
+}
+
+async function openEditContactModal(contactId) {
+    const modal = document.getElementById('editContactModalBackdrop');
+    if (!modal) return;
+    try {
+        const contact = await api(`/api/contacts/${contactId}`);
+        if (!contact) throw new Error('Contact details unavailable');
+
+        document.getElementById('editContactId').value = contact.id;
+        document.getElementById('editContactName').value = contact.name || '';
+        document.getElementById('editContactPhone').value = contact.phone || '';
+        document.getElementById('editContactLabel').value = contact.label || '';
+        document.getElementById('editContactNotes').value = contact.notes || '';
+
+        const subTitleEl = document.getElementById('editContactSubTitle');
+        if (subTitleEl) subTitleEl.textContent = `ID #${contact.id} • Registered ${formatDate(contact.created_at)}`;
+
+        const safetyBox = document.getElementById('editContactSafetyInfo');
+        if (safetyBox) {
+            const badges = [];
+            if (contact.is_opted_out) {
+                badges.push(`<span class="badge badge-danger">Opted Out${contact.opt_out_reason ? ': ' + escapeHtml(contact.opt_out_reason) : ''}</span>`);
+            } else {
+                badges.push(`<span class="badge badge-success">Active Outreach</span>`);
+            }
+            if (contact.is_ai_paused) {
+                badges.push(`<span class="badge badge-warning">AI Paused</span>`);
+            }
+            safetyBox.innerHTML = badges.length ? `<div class="flex-center-gap-8 mt-2"><strong>Safety Status:</strong> ${badges.join(' ')}</div>` : '';
+        }
+
+        modal.hidden = false;
+        document.getElementById('editContactName')?.focus();
+    } catch (err) {
+        showToast(err.message || 'Failed to fetch contact details', 'error');
+    }
+}
+
+function closeEditContactModal() {
+    const modal = document.getElementById('editContactModalBackdrop');
+    if (modal) modal.hidden = true;
+    const form = document.getElementById('editContactForm');
+    if (form) form.reset();
+}
+
+async function saveContactFromForm(e) {
+    e.preventDefault();
+    const id = document.getElementById('editContactId')?.value;
+    if (!id) return;
+
+    const saveBtn = document.getElementById('editContactSaveBtn');
+    if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving…';
+    }
+
+    try {
+        const name = document.getElementById('editContactName')?.value?.trim() || '';
+        const label = document.getElementById('editContactLabel')?.value?.trim() || '';
+        const notes = document.getElementById('editContactNotes')?.value?.trim() || '';
+
+        await api(`/api/contacts/${id}`, {
+            method: 'PUT',
+            body: JSON.stringify({ name, label, notes })
+        });
+
+        showToast('Contact updated successfully', 'success');
+        closeEditContactModal();
+        loadContactLabels();
+        loadContacts(contactsCurrentOffset);
+    } catch (err) {
+        showToast(err.message || 'Failed to update contact', 'error');
+    } finally {
+        if (saveBtn) {
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save Changes';
+        }
     }
 }
 
@@ -1756,6 +1961,7 @@ function updateSelectionBar() {
     const count = document.getElementById('contactsSelectionCount');
     if (!bar || !count) return;
     const n = SELECTED_CONTACTS.size;
+    bar.hidden = n === 0;
     bar.style.display = n > 0 ? 'flex' : 'none';
     count.textContent = `${n} contact${n === 1 ? '' : 's'} selected`;
     if (typeof hydrateIcons === 'function') hydrateIcons(bar);
@@ -1771,7 +1977,7 @@ function updateSelectionBar() {
  */
 function quickSelectNext(n) {
     const includeReached = document.getElementById('quickSelectIncludeReached').checked;
-    const pool = LAST_LOADED_CONTACTS.filter(c => includeReached || !c.last_outreach_at);
+    const pool = LAST_LOADED_CONTACTS.filter(c => !c.is_opted_out && (includeReached || !c.last_outreach_at));
     const picked = pool.slice(0, n);
 
     SELECTED_CONTACTS.clear();
@@ -1780,13 +1986,14 @@ function quickSelectNext(n) {
     document.querySelectorAll('.contact-row-check').forEach(cb => {
         cb.checked = SELECTED_CONTACTS.has(Number(cb.dataset.id));
     });
-    document.getElementById('contactsSelectAll').checked = picked.length > 0 && picked.length === LAST_LOADED_CONTACTS.length;
+    const eligibleCount = LAST_LOADED_CONTACTS.filter(c => !c.is_opted_out).length;
+    document.getElementById('contactsSelectAll').checked = eligibleCount > 0 && picked.length === eligibleCount;
     updateSelectionBar();
 
     if (picked.length === 0) {
-        showToast(includeReached ? 'No contacts to select' : 'Everyone in this list has already been reached — check "include already-reached" to pick anyway', 'info');
+        showToast(includeReached ? 'No eligible contacts to select' : 'All eligible contacts have already been reached — check "include already-reached" to pick anyway', 'info');
     } else if (picked.length < n) {
-        showToast(`Only ${picked.length} contact${picked.length === 1 ? '' : 's'} available — selected all of them`, 'info');
+        showToast(`Only ${picked.length} eligible contact${picked.length === 1 ? '' : 's'} available — selected all of them`, 'info');
     } else {
         showToast(`Selected ${picked.length} contacts`, 'success');
     }
@@ -1799,7 +2006,7 @@ async function toggleContactOptOut(id, currentlyOptedOut) {
             body: JSON.stringify({ opted_out: !currentlyOptedOut })
         });
         showToast(!currentlyOptedOut ? 'Contact opted out' : 'Contact opted back in', 'success');
-        loadContacts();
+        loadContacts(contactsCurrentOffset);
     } catch (err) {
         showToast(err.message || 'Failed to toggle opt-out', 'error');
     }
@@ -1810,7 +2017,8 @@ async function deleteContact(id) {
     try {
         await api(`/api/contacts/${id}`, { method: 'DELETE' });
         showToast('Contact deleted', 'success');
-        loadContacts();
+        loadContactLabels();
+        loadContacts(contactsCurrentOffset);
     } catch (err) {
         showToast('Failed to delete contact', 'error');
     }
@@ -1884,7 +2092,8 @@ function handleCsvFileSelected(e) {
                     </details>` : ''}
             `;
             showToast('CSV import complete', 'success');
-            loadContacts();
+            loadContactLabels();
+            loadContacts(0);
         } catch (err) {
             resultBox.innerHTML = `<p class="text-error">${Icon('x-circle')} ${escapeHtml(err.message || 'Import failed')}</p>`;
         } finally {
@@ -1897,34 +2106,636 @@ function handleCsvFileSelected(e) {
 
 // ─── Bulk outreach ──────────────────────────────────────────
 let OUTREACH_POLL_TIMER = null;
+let OUTREACH_POLL_ERRORS = 0;
+let outreachAvailableAssets = [];
 
-function openOutreachModal() {
-    if (SELECTED_CONTACTS.size === 0) return;
-    const total = SELECTED_CONTACTS.size;
-    const alreadyReached = Array.from(SELECTED_CONTACTS.values()).filter(c => c.reached).length;
+function formatAssetDisplayName(name) {
+    if (!name || typeof name !== 'string') return '';
+    const m = name.trim().match(/^(\d+)_(\d{10,15})_(.+)$/);
+    return m ? m[3] : name.trim();
+}
 
-    let recipText = `Sending to ${total} contact${total === 1 ? '' : 's'}`;
-    if (alreadyReached > 0) {
-        recipText += ` — <span class="text-warning">${alreadyReached} of these ${alreadyReached === 1 ? 'has' : 'have'} already been sent an outreach message before</span>`;
+async function populateOutreachMediaSelect() {
+    const select = document.getElementById('outreachMediaSelect');
+    const clearBtn = document.getElementById('outreachClearMediaBtn');
+    const previewCard = document.getElementById('outreachMediaPreviewCard');
+    if (!select) return;
+
+    select.innerHTML = '<option value="">Loading property media…</option>';
+    if (clearBtn) clearBtn.hidden = true;
+    if (previewCard) previewCard.hidden = true;
+
+    try {
+        const assets = await api('/api/inventory/assets');
+        outreachAvailableAssets = Array.isArray(assets) ? assets : [];
+
+        if (outreachAvailableAssets.length === 0) {
+            select.innerHTML = '<option value="">No media assets found (Text only)</option>';
+            return;
+        }
+
+        let optionsHtml = '<option value="">No attachment (Text only)</option>';
+        for (const a of outreachAvailableAssets) {
+            const projectLabel = a.project_name ? `[${a.project_name}] ` : '';
+            const typeLabel = (a.asset_type || 'file').toUpperCase();
+            const sizeMb = a.size_bytes ? ` (${(a.size_bytes / (1024 * 1024)).toFixed(1)} MB)` : '';
+            const displayName = formatAssetDisplayName(a.display_name || a.file_name);
+            optionsHtml += `<option value="${a.id}">${escapeHtml(projectLabel + typeLabel + ': ' + displayName + sizeMb)}</option>`;
+        }
+        select.innerHTML = optionsHtml;
+    } catch (err) {
+        select.innerHTML = '<option value="">No attachment (Failed to load media)</option>';
     }
-    document.getElementById('outreachRecipientCount').innerHTML = recipText;
+}
 
-    document.getElementById('outreachMessage').value = '';
-    document.getElementById('outreachComposeView').style.display = '';
-    document.getElementById('outreachProgressView').style.display = 'none';
-    document.getElementById('outreachSendBtn').disabled = false;
-    document.getElementById('outreachModalBackdrop').style.display = 'flex';
-    if (typeof hydrateIcons === 'function') hydrateIcons(document.getElementById('outreachModalBackdrop'));
+function onOutreachMediaChange() {
+    const select = document.getElementById('outreachMediaSelect');
+    const clearBtn = document.getElementById('outreachClearMediaBtn');
+    const previewCard = document.getElementById('outreachMediaPreviewCard');
+    const previewTitle = document.getElementById('outreachMediaPreviewTitle');
+    const previewMeta = document.getElementById('outreachMediaPreviewMeta');
+    const previewLink = document.getElementById('outreachMediaPreviewLink');
+    const emptyState = document.getElementById('outreachMediaEmptyState');
+
+    const selectedId = Number(select?.value);
+    if (!selectedId) {
+        if (clearBtn) clearBtn.hidden = true;
+        if (previewCard) previewCard.hidden = true;
+        if (emptyState) emptyState.hidden = false;
+        updateOutreachModalSelectionState();
+        return;
+    }
+
+    const asset = outreachAvailableAssets.find(a => Number(a.id) === selectedId);
+    if (!asset) {
+        if (clearBtn) clearBtn.hidden = true;
+        if (previewCard) previewCard.hidden = true;
+        if (emptyState) emptyState.hidden = false;
+        updateOutreachModalSelectionState();
+        return;
+    }
+
+    if (emptyState) emptyState.hidden = true;
+    if (clearBtn) clearBtn.hidden = false;
+    if (previewCard) {
+        previewCard.hidden = false;
+        if (previewTitle) previewTitle.textContent = formatAssetDisplayName(asset.display_name || asset.file_name);
+        if (previewMeta) {
+            const sizeStr = asset.size_bytes ? `${(asset.size_bytes / (1024 * 1024)).toFixed(1)} MB` : '';
+            const projectStr = asset.project_name ? `Project: ${asset.project_name}` : '';
+            const typeStr = asset.asset_type ? `Type: ${asset.asset_type}` : '';
+            previewMeta.textContent = [projectStr, typeStr, sizeStr].filter(Boolean).join(' • ');
+        }
+        if (previewLink) {
+            previewLink.href = `/api/inventory/assets/${asset.id}/file`;
+        }
+    }
+    updateOutreachModalSelectionState();
+}
+
+function clearOutreachMedia() {
+    const select = document.getElementById('outreachMediaSelect');
+    if (select) select.value = '';
+    onOutreachMediaChange();
+}
+
+let OUTREACH_PICKER_CONTACTS = [];
+let COMPOSER_CSV_TEXT = '';
+let COMPOSER_CSV_ROWS = [];
+let COMPOSER_CSV_VALID_PHONES = new Set();
+
+async function loadOutreachPickerContacts(search = '', label = '') {
+    const list = document.getElementById('outreachContactPickerList');
+    if (list) {
+        list.innerHTML = '<div class="p-xs text-secondary-sm text-center">Loading contacts…</div>';
+    }
+    try {
+        const queryParams = new URLSearchParams({ limit: '100', offset: '0' });
+        if (search) queryParams.set('search', search);
+        if (label) queryParams.set('label', label);
+        const res = await apiWithMeta(`/api/contacts?${queryParams.toString()}`);
+        
+        // Deduplicate contacts by phone number to prevent duplicates in picker
+        const seenPhones = new Set();
+        const deduped = [];
+        for (const c of (res.data || [])) {
+            const p = String(c.phone || '').trim();
+            if (!p || seenPhones.has(p)) continue;
+            seenPhones.add(p);
+            deduped.push(c);
+        }
+        OUTREACH_PICKER_CONTACTS = deduped;
+        renderOutreachPickerList();
+    } catch (err) {
+        if (list) {
+            list.innerHTML = '<div class="p-xs text-danger text-center">Failed to load contacts</div>';
+        }
+    }
+}
+
+async function loadOutreachPickerLabels() {
+    try {
+        const labels = await api('/api/contacts/labels');
+        const filter = document.getElementById('outreachContactLabelFilter');
+        if (filter && Array.isArray(labels)) {
+            const currentVal = filter.value;
+            filter.innerHTML = '<option value="">All Labels</option>' + 
+                labels.map(l => `<option value="${escapeHtml(l)}">${escapeHtml(l)}</option>`).join('');
+            filter.value = currentVal;
+        }
+    } catch (_) {}
+}
+
+function renderOutreachPickerList() {
+    const list = document.getElementById('outreachContactPickerList');
+    if (!list) return;
+
+    if (!OUTREACH_PICKER_CONTACTS || OUTREACH_PICKER_CONTACTS.length === 0) {
+        list.innerHTML = '<div class="p-xs text-secondary-sm text-center">No contacts found</div>';
+        return;
+    }
+
+    list.innerHTML = OUTREACH_PICKER_CONTACTS.map(c => {
+        const isSelected = SELECTED_CONTACTS.has(c.id);
+        const isOptedOut = !!c.is_opted_out;
+        const reachedBadge = c.last_outreach_at ? '<span class="badge badge-incoming text-xs">Reached</span>' : '';
+        const optedBadge = isOptedOut ? '<span class="badge badge-danger text-xs">Opted Out</span>' : '';
+        const labelBadge = c.label ? `<span class="badge badge-subtle text-xs">${escapeHtml(c.label)}</span>` : '';
+
+        return `
+            <label class="recipient-row ${isSelected ? 'recipient-row-selected' : ''} ${isOptedOut ? 'recipient-row-opted' : 'cursor-pointer'}">
+                <input type="checkbox" class="recipient-checkbox outreach-picker-check" data-id="${c.id}" data-phone="${escapeHtml(c.phone)}" data-name="${escapeHtml(c.name || '')}" data-reached="${c.last_outreach_at ? '1' : '0'}" ${isSelected ? 'checked' : ''} ${isOptedOut ? 'disabled' : ''}>
+                <div class="recipient-identity">
+                    <div class="recipient-name">${escapeHtml(c.name || c.phone)}</div>
+                    <div class="recipient-phone">${escapeHtml(c.phone)}</div>
+                </div>
+                <div class="recipient-badges">
+                    ${labelBadge}
+                    ${reachedBadge}
+                    ${optedBadge}
+                </div>
+            </label>
+        `;
+    }).join('');
+
+    list.querySelectorAll('.outreach-picker-check').forEach(cb => {
+        cb.addEventListener('change', () => {
+            const id = Number(cb.dataset.id);
+            if (cb.checked) {
+                if (SELECTED_CONTACTS.size >= 25) {
+                    cb.checked = false;
+                    showToast('Outreach is capped at 25 recipients per campaign', 'warning');
+                    return;
+                }
+                SELECTED_CONTACTS.set(id, { id, phone: cb.dataset.phone, name: cb.dataset.name, reached: cb.dataset.reached === '1' });
+            } else {
+                SELECTED_CONTACTS.delete(id);
+            }
+            renderOutreachPickerList();
+            updateOutreachModalSelectionState();
+            updateSelectionBar();
+        });
+    });
+}
+
+function quickSelectOutreachPicker(n) {
+    SELECTED_CONTACTS.clear();
+    const eligible = OUTREACH_PICKER_CONTACTS.filter(c => !c.is_opted_out);
+    eligible.sort((a, b) => (a.last_outreach_at ? 1 : 0) - (b.last_outreach_at ? 1 : 0));
+    const toPick = eligible.slice(0, Math.min(n, 25));
+    toPick.forEach(c => {
+        SELECTED_CONTACTS.set(c.id, { id: c.id, phone: c.phone, name: c.name, reached: !!c.last_outreach_at });
+    });
+    renderOutreachPickerList();
+    updateOutreachModalSelectionState();
+    updateSelectionBar();
+}
+
+function selectEligibleOutreachPicker() {
+    const eligible = OUTREACH_PICKER_CONTACTS.filter(c => !c.is_opted_out);
+    if (eligible.length === 0) {
+        showToast('No eligible contacts to select', 'info');
+        return;
+    }
+    const allSelected = eligible.every(c => SELECTED_CONTACTS.has(c.id));
+    if (allSelected) {
+        eligible.forEach(c => SELECTED_CONTACTS.delete(c.id));
+    } else {
+        for (const c of eligible) {
+            if (SELECTED_CONTACTS.size >= 25) {
+                showToast('Campaign is capped at 25 recipients maximum', 'info');
+                break;
+            }
+            SELECTED_CONTACTS.set(c.id, { id: c.id, phone: c.phone, name: c.name, reached: !!c.last_outreach_at });
+        }
+    }
+    renderOutreachPickerList();
+    updateOutreachModalSelectionState();
+    updateSelectionBar();
+}
+
+function clearOutreachPickerSelection() {
+    SELECTED_CONTACTS.clear();
+    renderOutreachPickerList();
+    updateOutreachModalSelectionState();
+    updateSelectionBar();
+}
+
+function updateOutreachModalSelectionState() {
+    const total = SELECTED_CONTACTS.size;
+    const countEl = document.getElementById('outreachRecipientCount');
+    if (countEl) {
+        countEl.textContent = `${total} contact${total === 1 ? '' : 's'} selected (max 25)`;
+    }
+
+    const pillEl = document.getElementById('outreachRecipientPill');
+    if (pillEl) {
+        pillEl.textContent = `${total} / 25 selected`;
+        if (total >= 25) {
+            pillEl.classList.add('limit-reached');
+        } else {
+            pillEl.classList.remove('limit-reached');
+        }
+    }
+
+    const mediaSelect = document.getElementById('outreachMediaSelect');
+    const selectedMediaOpt = mediaSelect && mediaSelect.selectedIndex > 0 ? mediaSelect.options[mediaSelect.selectedIndex].text : '';
+    const summaryTextEl = document.getElementById('outreachSummaryText');
+    if (summaryTextEl) {
+        const mediaPart = selectedMediaOpt ? `Media: ${selectedMediaOpt}` : 'Text only';
+        summaryTextEl.textContent = `${total} recipient${total === 1 ? '' : 's'} selected • ${mediaPart}`;
+    }
+
+    const alreadyReached = Array.from(SELECTED_CONTACTS.values()).filter(c => c.reached).length;
+    const warningEl = document.getElementById('outreachReachedWarning');
+    if (warningEl) {
+        if (alreadyReached > 0) {
+            warningEl.hidden = false;
+            warningEl.textContent = `${alreadyReached} of these contacts have already received outreach previously.`;
+        } else {
+            warningEl.hidden = true;
+        }
+    }
+    updateOutreachSendBtnState();
+}
+
+function updateOutreachMessageStats() {
+    const msg = (document.getElementById('outreachMessage')?.value || '');
+    const charCountEl = document.getElementById('outreachCharCount');
+    if (charCountEl) {
+        charCountEl.textContent = `${msg.length} char${msg.length === 1 ? '' : 's'}`;
+    }
+    updateOutreachSendBtnState();
+}
+
+function insertNameTokenToMessage() {
+    const textarea = document.getElementById('outreachMessage');
+    if (!textarea) return;
+    const start = textarea.selectionStart || 0;
+    const end = textarea.selectionEnd || 0;
+    const val = textarea.value;
+    textarea.value = val.substring(0, start) + '{{name}}' + val.substring(end);
+    textarea.selectionStart = textarea.selectionEnd = start + 8;
+    textarea.focus();
+    updateOutreachMessageStats();
+}
+
+function switchComposerTab(tabName) {
+    const tabExisting = document.getElementById('tabSelectExisting');
+    const tabCsv = document.getElementById('tabImportCsv');
+    const paneExisting = document.getElementById('paneSelectExisting');
+    const paneCsv = document.getElementById('paneImportCsv');
+
+    if (tabName === 'csv') {
+        if (tabExisting) { tabExisting.classList.remove('active'); tabExisting.setAttribute('aria-selected', 'false'); }
+        if (tabCsv) { tabCsv.classList.add('active'); tabCsv.setAttribute('aria-selected', 'true'); }
+        if (paneExisting) { paneExisting.hidden = true; }
+        if (paneCsv) { paneCsv.hidden = false; }
+    } else {
+        if (tabCsv) { tabCsv.classList.remove('active'); tabCsv.setAttribute('aria-selected', 'false'); }
+        if (tabExisting) { tabExisting.classList.add('active'); tabExisting.setAttribute('aria-selected', 'true'); }
+        if (paneCsv) { paneCsv.hidden = true; }
+        if (paneExisting) { paneExisting.hidden = false; }
+    }
+    const modal = document.getElementById('outreachModal');
+    if (modal && typeof hydrateIcons === 'function') hydrateIcons(modal);
+}
+
+function handleComposerCsvSelected(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    const fileNameEl = document.getElementById('outreachCsvFileName');
+    if (fileNameEl) fileNameEl.textContent = `${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+
+    const previewArea = document.getElementById('outreachCsvPreviewArea');
+    const resultBox = document.getElementById('outreachCsvResult');
+    if (resultBox) resultBox.hidden = true;
+
+    if (!file.name.toLowerCase().endsWith('.csv') && file.type && !file.type.includes('csv')) {
+        showToast('Please select a valid CSV file (.csv)', 'error');
+        e.target.value = '';
+        if (fileNameEl) fileNameEl.textContent = 'Invalid file type';
+        return;
+    }
+
+    if (file.size > 1024 * 1024) {
+        showToast('File too large (over 1MB). Please split into smaller files.', 'error');
+        e.target.value = '';
+        if (fileNameEl) fileNameEl.textContent = 'File too large (>1MB)';
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+        const text = reader.result;
+        if (!text || !text.trim()) {
+            showToast('The selected CSV file is empty', 'error');
+            if (previewArea) previewArea.hidden = true;
+            return;
+        }
+
+        parseAndPreviewComposerCsv(text);
+    };
+    reader.onerror = () => showToast('Could not read the selected CSV file', 'error');
+    reader.readAsText(file);
+}
+
+function parseAndPreviewComposerCsv(rawText) {
+    COMPOSER_CSV_TEXT = rawText;
+    COMPOSER_CSV_ROWS = [];
+    COMPOSER_CSV_VALID_PHONES.clear();
+
+    const previewArea = document.getElementById('outreachCsvPreviewArea');
+    const summaryEl = document.getElementById('outreachCsvValidationSummary');
+    const tbody = document.getElementById('outreachCsvPreviewTbody');
+    const confirmBtn = document.getElementById('outreachConfirmImportBtn');
+
+    const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) {
+        showToast('CSV must have a header row and at least one contact row', 'error');
+        if (previewArea) previewArea.hidden = true;
+        if (confirmBtn) confirmBtn.disabled = true;
+        return;
+    }
+
+    const headers = lines[0].split(',').map(h => h.replace(/^["']|["']$/g, '').trim().toLowerCase());
+    const phoneIdx = headers.findIndex(h => /^(phone|mobile|tel|whatsapp|contact_number|cell)/i.test(h));
+    const nameIdx = headers.findIndex(h => /^(name|full_name|contact_name|first_name)/i.test(h));
+    const labelIdx = headers.findIndex(h => /^(label|tag|category|stage)/i.test(h));
+
+    if (phoneIdx === -1) {
+        showToast("Required column 'phone' was not found in CSV header", 'error');
+        if (summaryEl) {
+            summaryEl.innerHTML = '<span class="text-danger">Missing required column "phone" in CSV header.</span>';
+        }
+        if (previewArea) previewArea.hidden = false;
+        if (confirmBtn) confirmBtn.disabled = true;
+        return;
+    }
+
+    let validCount = 0;
+    let invalidCount = 0;
+    let duplicateCount = 0;
+    const seenInFile = new Set();
+    const rowsParsed = [];
+
+    for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split(',').map(c => c.replace(/^["']|["']$/g, '').trim());
+        const rawPhone = cols[phoneIdx] || '';
+        const name = nameIdx !== -1 ? cols[nameIdx] || '' : '';
+        const label = labelIdx !== -1 ? cols[labelIdx] || '' : '';
+        const cleanPhone = rawPhone.replace(/\D/g, '');
+
+        let status = 'valid';
+        let statusLabel = '<span class="badge badge-outgoing text-xs">Valid</span>';
+
+        if (!cleanPhone || cleanPhone.length < 7) {
+            status = 'invalid';
+            statusLabel = '<span class="badge badge-danger text-xs">Invalid phone</span>';
+            invalidCount++;
+        } else if (seenInFile.has(cleanPhone)) {
+            status = 'duplicate';
+            statusLabel = '<span class="badge badge-pending text-xs">Duplicate in file</span>';
+            duplicateCount++;
+        } else {
+            seenInFile.add(cleanPhone);
+            COMPOSER_CSV_VALID_PHONES.add(cleanPhone);
+            validCount++;
+        }
+
+        rowsParsed.push({
+            rowNum: i,
+            phone: rawPhone,
+            cleanPhone,
+            name,
+            label,
+            status,
+            statusLabel
+        });
+    }
+
+    COMPOSER_CSV_ROWS = rowsParsed;
+
+    if (previewArea) previewArea.hidden = false;
+    if (summaryEl) {
+        summaryEl.innerHTML = `
+            <div class="flex-center-gap-8 flex-wrap">
+                <span class="badge badge-outgoing font-bold">${validCount} Valid</span>
+                ${invalidCount > 0 ? `<span class="badge badge-danger">${invalidCount} Invalid</span>` : ''}
+                ${duplicateCount > 0 ? `<span class="badge badge-pending">${duplicateCount} Duplicate in file</span>` : ''}
+            </div>
+        `;
+    }
+
+    if (tbody) {
+        tbody.innerHTML = rowsParsed.slice(0, 10).map(r => `
+            <tr>
+                <td>${r.rowNum}</td>
+                <td><code>${escapeHtml(r.phone)}</code></td>
+                <td>${escapeHtml(r.name || '—')}</td>
+                <td>${escapeHtml(r.label || '—')}</td>
+                <td>${r.statusLabel}</td>
+            </tr>
+        `).join('');
+    }
+
+    if (confirmBtn) {
+        confirmBtn.disabled = validCount === 0;
+    }
+}
+
+function clearComposerCsvFile() {
+    const input = document.getElementById('outreachCsvFileInput');
+    if (input) input.value = '';
+    const fileNameEl = document.getElementById('outreachCsvFileName');
+    if (fileNameEl) fileNameEl.textContent = 'No file selected';
+    const previewArea = document.getElementById('outreachCsvPreviewArea');
+    if (previewArea) previewArea.hidden = true;
+    const confirmBtn = document.getElementById('outreachConfirmImportBtn');
+    if (confirmBtn) confirmBtn.disabled = true;
+    const resultBox = document.getElementById('outreachCsvResult');
+    if (resultBox) resultBox.hidden = true;
+    COMPOSER_CSV_TEXT = '';
+    COMPOSER_CSV_ROWS = [];
+    COMPOSER_CSV_VALID_PHONES.clear();
+}
+
+async function confirmComposerCsvImport() {
+    if (!COMPOSER_CSV_TEXT) {
+        showToast('Please select a CSV file first', 'error');
+        return;
+    }
+
+    const confirmBtn = document.getElementById('outreachConfirmImportBtn');
+    const resultBox = document.getElementById('outreachCsvResult');
+    if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Importing contacts…';
+    }
+
+    try {
+        const result = await api('/api/contacts/import', {
+            method: 'POST',
+            body: JSON.stringify({ csv: COMPOSER_CSV_TEXT })
+        });
+
+        await loadOutreachPickerContacts('', '');
+        await loadOutreachPickerLabels();
+
+        const eligibleFromCsv = OUTREACH_PICKER_CONTACTS.filter(c => 
+            !c.is_opted_out && COMPOSER_CSV_VALID_PHONES.has(String(c.phone).replace(/\D/g, ''))
+        );
+
+        const toSelect = eligibleFromCsv.slice(0, 25);
+        SELECTED_CONTACTS.clear();
+        toSelect.forEach(c => {
+            SELECTED_CONTACTS.set(c.id, { id: c.id, phone: c.phone, name: c.name, reached: !!c.last_outreach_at });
+        });
+
+        renderOutreachPickerList();
+        updateOutreachModalSelectionState();
+        updateSelectionBar();
+
+        let batchNotice = '';
+        if (eligibleFromCsv.length > 25) {
+            batchNotice = `
+                <div class="composer-alert-warning mt-xs">
+                    <strong>Batch limit notice:</strong> WorkPilot limits each campaign batch to 25 recipients. The first 25 contacts have been selected. You can launch subsequent campaigns for the remaining contacts.
+                </div>
+            `;
+            showToast(`Imported ${eligibleFromCsv.length} contacts. First 25 selected for this campaign batch.`, 'info');
+        } else {
+            showToast(`Imported and selected ${toSelect.length} contacts for this campaign.`, 'success');
+        }
+
+        if (resultBox) {
+            resultBox.hidden = false;
+            resultBox.innerHTML = `
+                <div class="p-xs border-rounded bg-subtle">
+                    <p class="text-success-bold">
+                        ${Icon('check-circle')} Import complete: ${result.imported || 0} added, ${result.updated || 0} updated, ${result.skipped || 0} skipped (of ${result.total || 0} rows).
+                    </p>
+                    ${batchNotice}
+                </div>
+            `;
+        }
+
+        setTimeout(() => {
+            switchComposerTab('existing');
+        }, 1200);
+
+        loadContacts(0);
+
+    } catch (err) {
+        showToast(err.message || 'CSV Import failed', 'error');
+        if (resultBox) {
+            resultBox.hidden = false;
+            resultBox.innerHTML = `<p class="text-danger">${Icon('x-circle')} ${escapeHtml(err.message || 'Import failed')}</p>`;
+        }
+    } finally {
+        if (confirmBtn) {
+            confirmBtn.disabled = false;
+            confirmBtn.innerHTML = '<span data-icon="check" aria-hidden="true"></span> Import &amp; Add to Campaign';
+            if (typeof hydrateIcons === 'function') hydrateIcons(confirmBtn);
+        }
+    }
+}
+
+function updateOutreachSendBtnState() {
+    const btn = document.getElementById('outreachSendBtn');
+    const msg = (document.getElementById('outreachMessage')?.value || '').trim();
+    if (btn) {
+        btn.disabled = SELECTED_CONTACTS.size === 0 || !msg;
+    }
+}
+
+async function openOutreachModal(opts = {}) {
+    const isFromCampaigns = !!opts.fromCampaigns;
+    const modalTitle = document.getElementById('outreachModalTitle');
+    if (modalTitle) {
+        modalTitle.textContent = isFromCampaigns ? 'Create Campaign' : 'Send Outreach';
+    }
+
+    const composeView = document.getElementById('outreachComposeView');
+    const progressView = document.getElementById('outreachProgressView');
+    if (composeView) {
+        composeView.hidden = false;
+        composeView.style.display = '';
+    }
+    if (progressView) {
+        progressView.hidden = true;
+        progressView.style.display = 'none';
+    }
+
+    const modal = document.getElementById('outreachModalBackdrop');
+    if (modal) {
+        modal.hidden = false;
+        modal.style.display = 'flex';
+        if (typeof hydrateIcons === 'function') hydrateIcons(modal);
+    }
+
+    switchComposerTab('existing');
+    clearComposerCsvFile();
+
+    populateOutreachMediaSelect();
+    loadOutreachPickerLabels();
+
+    const searchInput = document.getElementById('outreachContactSearch');
+    if (searchInput) searchInput.value = '';
+    const labelFilter = document.getElementById('outreachContactLabelFilter');
+    if (labelFilter) labelFilter.value = '';
+
+    await loadOutreachPickerContacts('', '');
+    updateOutreachModalSelectionState();
+    updateOutreachMessageStats();
+
+    const msgEl = document.getElementById('outreachMessage');
+    if (msgEl) {
+        msgEl.focus();
+    }
 }
 
 function closeOutreachModal() {
     if (OUTREACH_POLL_TIMER) { clearTimeout(OUTREACH_POLL_TIMER); OUTREACH_POLL_TIMER = null; }
-    document.getElementById('outreachModalBackdrop').style.display = 'none';
+    OUTREACH_POLL_ERRORS = 0;
+    const modal = document.getElementById('outreachModalBackdrop');
+    if (modal) {
+        modal.hidden = true;
+        modal.style.display = 'none';
+    }
+    clearComposerCsvFile();
+    if (currentSection === 'campaigns') {
+        loadCampaigns(0);
+    }
 }
 
 async function submitOutreach() {
     const message = document.getElementById('outreachMessage').value.trim();
     if (!message) { showToast('Write a message first', 'error'); return; }
+
+    const mediaSelect = document.getElementById('outreachMediaSelect');
+    const mediaAssetId = mediaSelect && mediaSelect.value ? parseInt(mediaSelect.value, 10) : null;
 
     const btn = document.getElementById('outreachSendBtn');
     btn.disabled = true;
@@ -1933,15 +2744,33 @@ async function submitOutreach() {
         const contactIds = Array.from(SELECTED_CONTACTS.keys());
         const { jobId, total } = await api('/api/contacts/outreach', {
             method: 'POST',
-            body: JSON.stringify({ contactIds, message })
+            body: JSON.stringify({ contactIds, message, mediaAssetId })
         });
 
-        document.getElementById('outreachComposeView').style.display = 'none';
-        document.getElementById('outreachProgressView').style.display = 'block';
-        document.getElementById('outreachDoneBtn').style.display = 'none';
+        const composeView = document.getElementById('outreachComposeView');
+        const progressView = document.getElementById('outreachProgressView');
+        const doneBtn = document.getElementById('outreachDoneBtn');
+
+        if (composeView) {
+            composeView.hidden = true;
+            composeView.style.display = 'none';
+        }
+        if (progressView) {
+            progressView.hidden = false;
+            progressView.style.display = 'block';
+        }
+        if (doneBtn) {
+            doneBtn.hidden = true;
+            doneBtn.style.display = 'none';
+        }
         document.getElementById('outreachProgressList').innerHTML = '';
         document.getElementById('outreachProgressSummary').textContent = `Sending to ${total} contacts — this runs in the background with a delay between each send, so it'll take a while. You can close this and it'll keep going.`;
 
+        if (currentSection === 'campaigns') {
+            loadCampaigns(0);
+        }
+
+        OUTREACH_POLL_ERRORS = 0;
         pollOutreachJob(jobId);
     } catch (err) {
         showToast(err.message || 'Could not start outreach', 'error');
@@ -1952,30 +2781,424 @@ async function submitOutreach() {
 async function pollOutreachJob(jobId) {
     try {
         const job = await api(`/api/contacts/outreach/${jobId}`);
+        OUTREACH_POLL_ERRORS = 0;
         const list = document.getElementById('outreachProgressList');
-        list.innerHTML = job.results.map(r => `
-            <div class="outreach-progress-row ${r.status === 'sent' ? 'ok' : 'fail'}">
-                <span>${escapeHtml(r.name || r.phone)}</span>
-                <span>${r.status === 'sent' ? Icon('check-circle') : (r.reason ? escapeHtml(r.reason) : 'failed')}</span>
-            </div>
-        `).join('');
+        if (list && Array.isArray(job.results)) {
+            list.innerHTML = job.results.map(r => `
+                <div class="outreach-progress-row ${r.status === 'sent' ? 'ok' : 'fail'}">
+                    <span>${escapeHtml(r.name || r.phone)}</span>
+                    <span>${r.status === 'sent' ? Icon('check-circle') : (r.reason ? escapeHtml(r.reason) : 'failed')}</span>
+                </div>
+            `).join('');
+        }
 
-        const doneCount = job.sent + job.failed + job.skipped;
-        document.getElementById('outreachProgressSummary').textContent =
-            job.status === 'done'
-                ? `Done — ${job.sent} sent, ${job.failed} failed, ${job.skipped} skipped.`
-                : `Sending… ${doneCount}/${job.total} processed so far.`;
+        const terminalStatuses = ['completed', 'cancelled', 'interrupted', 'done'];
+        const isTerminal = terminalStatuses.includes(job.status);
 
-        if (job.status === 'done') {
-            document.getElementById('outreachDoneBtn').style.display = '';
-            showToast(`Outreach finished — ${job.sent} sent`, job.failed > job.sent ? 'error' : 'success');
-            SELECTED_CONTACTS.clear();
-            loadContacts();
+        if (isTerminal) {
+            if (OUTREACH_POLL_TIMER) {
+                clearTimeout(OUTREACH_POLL_TIMER);
+                OUTREACH_POLL_TIMER = null;
+            }
+
+            const statusLabels = {
+                completed: 'Finished',
+                cancelled: 'Cancelled',
+                interrupted: 'Interrupted',
+                done: 'Finished'
+            };
+            const label = statusLabels[job.status] || 'Finished';
+            const sent = job.sent || 0;
+            const failed = job.failed || 0;
+            const skipped = job.skipped || 0;
+
+            let summaryText = `${label} — ${sent} sent, ${failed} failed, ${skipped} skipped.`;
+            if (job.error) {
+                summaryText += ` (${escapeHtml(job.error)})`;
+            }
+            document.getElementById('outreachProgressSummary').textContent = summaryText;
+            const doneBtn = document.getElementById('outreachDoneBtn');
+            if (doneBtn) {
+                doneBtn.hidden = false;
+                doneBtn.style.display = '';
+            }
+
+            if (job.status === 'cancelled') {
+                showToast(`Outreach cancelled — ${sent} sent`, 'info');
+            } else if (job.status === 'interrupted') {
+                showToast(`Outreach interrupted — ${sent} sent`, 'error');
+            } else {
+                showToast(`Outreach finished — ${sent} sent`, failed > sent ? 'error' : 'success');
+            }
+
+            // Clear selection and refresh list if outreach completed or actually sent
+            if (sent > 0 || job.status === 'completed') {
+                SELECTED_CONTACTS.clear();
+                updateSelectionBar();
+                loadContacts();
+            }
+
+            if (currentSection === 'campaigns') {
+                loadCampaigns(campaignsCurrentOffset);
+            }
         } else {
+            const doneCount = (job.sent || 0) + (job.failed || 0) + (job.skipped || 0);
+            const total = job.total || (job.results ? job.results.length : 0);
+            const statusLabel = job.status === 'cancel_requested' ? 'Cancelling…' : 'Sending…';
+            document.getElementById('outreachProgressSummary').textContent =
+                `${statusLabel} ${doneCount}/${total} processed so far.`;
+
             OUTREACH_POLL_TIMER = setTimeout(() => pollOutreachJob(jobId), 2000);
         }
     } catch (err) {
-        document.getElementById('outreachProgressSummary').textContent = 'Lost track of this job — it may still be sending in the background.';
+        OUTREACH_POLL_ERRORS++;
+        if (OUTREACH_POLL_ERRORS < 3) {
+            OUTREACH_POLL_TIMER = setTimeout(() => pollOutreachJob(jobId), 3000);
+        } else {
+            if (OUTREACH_POLL_TIMER) {
+                clearTimeout(OUTREACH_POLL_TIMER);
+                OUTREACH_POLL_TIMER = null;
+            }
+            document.getElementById('outreachDoneBtn').style.display = '';
+            document.getElementById('outreachProgressSummary').textContent =
+                `Lost track of this job (${err.message || 'connection error'}) — it may still be sending in the background. You can close this window.`;
+            showToast('Unable to check outreach progress', 'error');
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  CAMPAIGNS (OUTREACH HISTORY & MANAGEMENT)
+// ═══════════════════════════════════════════════════════════
+let campaignsCurrentOffset = 0;
+const CAMPAIGNS_PER_PAGE = 20;
+let currentViewedCampaignId = null;
+
+function startNewCampaignFromCampaigns() {
+    openOutreachModal({ fromCampaigns: true });
+}
+
+async function loadCampaigns(offset = 0) {
+    clearErrorBanner('campaignsError');
+    const tbody = document.getElementById('campaignsBody');
+    if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="9" class="empty-state">Loading campaigns…</td></tr>`;
+    }
+
+    try {
+        const statusFilterEl = document.getElementById('campaignStatusFilter');
+        const status = statusFilterEl ? statusFilterEl.value.trim() : '';
+        const queryParams = new URLSearchParams({
+            limit: String(CAMPAIGNS_PER_PAGE),
+            offset: String(offset)
+        });
+        if (status) queryParams.set('status', status);
+
+        const res = await apiWithMeta(`/api/contacts/outreach?${queryParams.toString()}`);
+        const jobs = res.data || [];
+        const meta = res.meta || { total: jobs.length, limit: CAMPAIGNS_PER_PAGE, offset };
+
+        campaignsCurrentOffset = offset;
+        renderCampaignsTable(jobs);
+        renderCampaignsPagination(meta.total, offset, meta.limit);
+    } catch (err) {
+        if (tbody) {
+            tbody.innerHTML = `<tr><td colspan="9" class="empty-state text-danger">Failed to load campaigns.</td></tr>`;
+        }
+        showErrorBanner('campaignsError', err.message || 'Failed to load campaigns', () => loadCampaigns(offset));
+    }
+}
+
+function renderCampaignsTable(jobs) {
+    const tbody = document.getElementById('campaignsBody');
+    if (!tbody) return;
+
+    if (!jobs || jobs.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="9">
+                    <div class="empty-state">
+                        <span class="empty-state-icon" aria-hidden="true">${Icon('send')}</span>
+                        <div class="empty-state-title">No campaigns found</div>
+                        <p>Launch an outreach campaign from Contacts to see campaign history and delivery tracking here.</p>
+                    </div>
+                </td>
+            </tr>`;
+        return;
+    }
+
+    tbody.innerHTML = jobs.map(job => {
+        const statusBadgeMap = {
+            running: '<span class="pill pill-running">Running</span>',
+            cancel_requested: '<span class="pill badge-cancel-requested">Cancelling…</span>',
+            completed: '<span class="pill pill-active">Completed</span>',
+            cancelled: '<span class="pill pill-neutral">Cancelled</span>',
+            interrupted: '<span class="pill badge-interrupted">Interrupted</span>'
+        };
+        const statusHtml = statusBadgeMap[job.status] || `<span class="pill pill-neutral">${escapeHtml(job.status || 'unknown')}</span>`;
+        const shortId = escapeHtml(String(job.id).slice(0, 8));
+        const fullId = escapeHtml(String(job.id));
+        const messagePreview = escapeHtml(job.message_template || '—');
+        const startedText = job.started_at ? formatDate(job.started_at) : '—';
+
+        const isCancellable = job.cancellable || ['running', 'cancel_requested'].includes(job.status);
+        const cancelBtnHtml = isCancellable
+            ? `<button type="button" class="btn btn-secondary btn-xs text-danger" data-cancel-campaign="${fullId}" title="Cancel this campaign">Cancel</button>`
+            : '';
+
+        const displayedFileName = job.asset_display_name || job.asset_file_name;
+        const attachmentBadgeHtml = displayedFileName
+            ? `<span class="badge-attachment" title="${escapeHtml(job.asset_mime_type || '')}">📎 ${escapeHtml(displayedFileName)}</span>`
+            : '';
+
+        return `
+            <tr>
+                <td class="font-mono text-secondary-sm" title="${fullId}">${shortId}…</td>
+                <td class="truncate-cell" title="${messagePreview}">${attachmentBadgeHtml}${messagePreview}</td>
+                <td>${statusHtml}</td>
+                <td class="font-bold">${job.total || 0}</td>
+                <td class="text-success font-bold">${job.sent || 0}</td>
+                <td class="${job.failed > 0 ? 'text-danger font-bold' : 'text-secondary'}">${job.failed || 0}</td>
+                <td class="${job.skipped > 0 ? 'text-warning font-bold' : 'text-secondary'}">${job.skipped || 0}</td>
+                <td class="text-secondary-nowrap">${startedText}</td>
+                <td class="text-right">
+                    <div class="flex-center-gap-8 justify-end">
+                        <button type="button" class="btn btn-secondary btn-xs" data-view-campaign="${fullId}">View</button>
+                        ${cancelBtnHtml}
+                    </div>
+                </td>
+            </tr>`;
+    }).join('');
+
+    if (typeof hydrateIcons === 'function') {
+        hydrateIcons(tbody);
+    }
+}
+
+function renderCampaignsPagination(total, offset, limit) {
+    const paginationEl = document.getElementById('campaignsPagination');
+    const infoEl = document.getElementById('campaignsPaginationInfo');
+    const prevBtn = document.getElementById('campaignsPrevBtn');
+    const nextBtn = document.getElementById('campaignsNextBtn');
+
+    if (!paginationEl) return;
+
+    if (total <= limit && offset === 0) {
+        paginationEl.hidden = true;
+        return;
+    }
+
+    paginationEl.hidden = false;
+    const start = total === 0 ? 0 : offset + 1;
+    const end = Math.min(offset + limit, total);
+    const currentPage = Math.floor(offset / limit) + 1;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+
+    if (infoEl) {
+        infoEl.textContent = `Showing ${start}–${end} of ${total} (Page ${currentPage} of ${totalPages})`;
+    }
+
+    if (prevBtn) {
+        prevBtn.disabled = offset <= 0;
+    }
+    if (nextBtn) {
+        nextBtn.disabled = offset + limit >= total;
+    }
+}
+
+function campaignsPrevPage() {
+    const newOffset = Math.max(0, campaignsCurrentOffset - CAMPAIGNS_PER_PAGE);
+    loadCampaigns(newOffset);
+}
+
+function campaignsNextPage() {
+    const newOffset = campaignsCurrentOffset + CAMPAIGNS_PER_PAGE;
+    loadCampaigns(newOffset);
+}
+
+async function viewCampaignDetails(jobId) {
+    currentViewedCampaignId = jobId;
+    const modal = document.getElementById('campaignDetailModalBackdrop');
+    if (!modal) return;
+
+    modal.hidden = false;
+    modal.style.display = 'flex';
+
+    const subTitle = document.getElementById('campaignDetailSubTitle');
+    if (subTitle) subTitle.textContent = `Campaign ID: ${jobId}`;
+
+    const statsContainer = document.getElementById('campaignDetailSummaryStats');
+    if (statsContainer) {
+        statsContainer.innerHTML = '<div class="empty-state-sm">Loading summary…</div>';
+    }
+
+    const messagePreview = document.getElementById('campaignDetailMessagePreview');
+    if (messagePreview) messagePreview.textContent = 'Loading…';
+
+    const errorBox = document.getElementById('campaignDetailErrorBox');
+    const errorText = document.getElementById('campaignDetailErrorText');
+    if (errorBox) errorBox.hidden = true;
+
+    const tbody = document.getElementById('campaignDetailRecipientsBody');
+    if (tbody) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Loading recipients…</td></tr>';
+    }
+
+    const cancelBtn = document.getElementById('campaignDetailCancelBtn');
+    if (cancelBtn) {
+        cancelBtn.hidden = true;
+        cancelBtn.dataset.jobId = jobId;
+    }
+
+    try {
+        const job = await api(`/api/contacts/outreach/${encodeURIComponent(jobId)}`);
+
+        // Update cancel button visibility
+        const isCancellable = job.cancellable || ['running', 'cancel_requested'].includes(job.status);
+        if (cancelBtn) {
+            cancelBtn.hidden = !isCancellable;
+            cancelBtn.dataset.jobId = job.id;
+        }
+
+        // Summary chips
+        const statusBadgeMap = {
+            running: '<span class="pill pill-running">Running</span>',
+            cancel_requested: '<span class="pill badge-cancel-requested">Cancelling…</span>',
+            completed: '<span class="pill pill-active">Completed</span>',
+            cancelled: '<span class="pill pill-neutral">Cancelled</span>',
+            interrupted: '<span class="pill badge-interrupted">Interrupted</span>'
+        };
+        const statusHtml = statusBadgeMap[job.status] || `<span class="pill pill-neutral">${escapeHtml(job.status || 'unknown')}</span>`;
+
+        if (statsContainer) {
+            statsContainer.innerHTML = `
+                <div class="stat-chip">
+                    <span class="stat-chip-label">Status</span>
+                    <span class="stat-chip-val stat-chip-val-status">${statusHtml}</span>
+                </div>
+                <div class="stat-chip">
+                    <span class="stat-chip-label">Total</span>
+                    <span class="stat-chip-val">${job.total || (job.results ? job.results.length : 0)}</span>
+                </div>
+                <div class="stat-chip">
+                    <span class="stat-chip-label">Sent</span>
+                    <span class="stat-chip-val text-success">${job.sent || 0}</span>
+                </div>
+                <div class="stat-chip">
+                    <span class="stat-chip-label">Failed</span>
+                    <span class="stat-chip-val ${job.failed > 0 ? 'text-danger' : ''}">${job.failed || 0}</span>
+                </div>
+                <div class="stat-chip">
+                    <span class="stat-chip-label">Skipped</span>
+                    <span class="stat-chip-val ${job.skipped > 0 ? 'text-warning' : ''}">${job.skipped || 0}</span>
+                </div>
+            `;
+        }
+
+        if (messagePreview) {
+            messagePreview.textContent = job.message_template || '—';
+        }
+
+        const attachmentBox = document.getElementById('campaignDetailAttachmentBox');
+        const attachmentName = document.getElementById('campaignDetailAttachmentName');
+        const attachmentMeta = document.getElementById('campaignDetailAttachmentMeta');
+        const attachmentLink = document.getElementById('campaignDetailAttachmentLink');
+
+        const activeAssetName = job.asset_display_name || job.asset_file_name;
+        if (activeAssetName && attachmentBox) {
+            attachmentBox.hidden = false;
+            if (attachmentName) attachmentName.textContent = activeAssetName;
+            if (attachmentMeta) {
+                const projStr = job.project_name ? `Project: ${job.project_name}` : '';
+                const typeStr = job.asset_type ? `Type: ${job.asset_type}` : '';
+                const mimeStr = job.asset_mime_type || '';
+                attachmentMeta.textContent = [projStr, typeStr, mimeStr].filter(Boolean).join(' • ');
+            }
+            if (attachmentLink && job.media_asset_id) {
+                attachmentLink.href = `/api/inventory/assets/${job.media_asset_id}/file`;
+                attachmentLink.hidden = false;
+            } else if (attachmentLink) {
+                attachmentLink.hidden = true;
+            }
+        } else if (attachmentBox) {
+            attachmentBox.hidden = true;
+        }
+
+        if (job.error && errorBox && errorText) {
+            errorText.textContent = job.error;
+            errorBox.hidden = false;
+        }
+
+        // Recipients list
+        if (tbody) {
+            const results = job.results || [];
+            if (results.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No recipients found for this campaign.</td></tr>';
+            } else {
+                tbody.innerHTML = results.map(r => {
+                    let statusPill = '<span class="pill pill-neutral">Pending</span>';
+                    if (r.status === 'sent') {
+                        statusPill = '<span class="pill pill-active">Sent</span>';
+                    } else if (r.status === 'failed') {
+                        statusPill = '<span class="pill pill-error">Failed</span>';
+                    } else if (r.status === 'skipped') {
+                        statusPill = '<span class="pill pill-warning">Skipped</span>';
+                    } else if (r.status === 'unknown') {
+                        statusPill = '<span class="pill pill-neutral">Unknown</span>';
+                    }
+
+                    const contactName = r.name ? escapeHtml(r.name) : '<span class="text-secondary">—</span>';
+                    const phone = r.phone ? escapeHtml(r.phone) : '—';
+                    const reason = r.reason ? escapeHtml(r.reason) : '<span class="text-secondary">—</span>';
+                    const sentAt = r.sent_at ? formatDate(r.sent_at) : '<span class="text-secondary">—</span>';
+
+                    return `
+                        <tr>
+                            <td>${contactName}</td>
+                            <td class="font-mono text-secondary-sm">${phone}</td>
+                            <td>${statusPill}</td>
+                            <td class="text-secondary-sm">${reason}</td>
+                            <td class="text-secondary-nowrap">${sentAt}</td>
+                        </tr>`;
+                }).join('');
+            }
+        }
+    } catch (err) {
+        showToast(err.message || 'Failed to load campaign details', 'error');
+        closeCampaignDetailModal();
+    }
+}
+
+function closeCampaignDetailModal() {
+    currentViewedCampaignId = null;
+    const modal = document.getElementById('campaignDetailModalBackdrop');
+    if (modal) {
+        modal.hidden = true;
+        modal.style.display = 'none';
+    }
+}
+
+async function cancelCampaign(jobId) {
+    if (!jobId) return;
+    if (!confirm('Are you sure you want to cancel this campaign? Any pending messages will be halted.')) {
+        return;
+    }
+
+    try {
+        await api(`/api/contacts/outreach/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
+        showToast('Campaign cancellation requested', 'info');
+
+        // If detail modal is open for this campaign, refresh its details
+        if (currentViewedCampaignId === jobId) {
+            await viewCampaignDetails(jobId);
+        }
+
+        // Refresh campaign list
+        if (currentSection === 'campaigns') {
+            await loadCampaigns(campaignsCurrentOffset);
+        }
+    } catch (err) {
+        showToast(err.message || 'Failed to cancel campaign', 'error');
     }
 }
 
@@ -2654,6 +3877,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             case 'toggle-rule': toggleRule(id, Number(button.dataset.value)); break;
             case 'delete-rule': deleteRule(id); break;
             case 'toggle-optout': toggleContactOptOut(id, button.dataset.opted === '1'); break;
+            case 'edit-contact': openEditContactModal(id); break;
             case 'delete-contact': deleteContact(id); break;
             case 'cancel-scheduled': cancelScheduled(id); break;
             case 'cancel-appointment': cancelAppointment(id); break;
@@ -2805,7 +4029,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
             showToast('Contact added!', 'success');
             document.getElementById('addContactForm').reset();
-            loadContacts();
+            loadContactLabels();
+            loadContacts(0);
         } catch (err) {
             showToast('Failed to add contact', 'error');
         } finally {
@@ -2814,12 +4039,33 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    // ── Contact search ──────────────────────────────────────
+    // ── Contact search, label filter & pagination ───────────
     let contactSearchTimeout;
-    document.getElementById('contactSearch').addEventListener('input', () => {
+    document.getElementById('contactSearch')?.addEventListener('input', () => {
         clearTimeout(contactSearchTimeout);
-        contactSearchTimeout = setTimeout(loadContacts, 300);
+        contactSearchTimeout = setTimeout(() => {
+            contactsCurrentOffset = 0;
+            loadContacts(0);
+        }, 300);
     });
+    document.getElementById('contactLabelFilter')?.addEventListener('change', () => {
+        contactsCurrentOffset = 0;
+        loadContacts(0);
+    });
+    document.getElementById('contactsPageSize')?.addEventListener('change', () => {
+        contactsCurrentOffset = 0;
+        loadContacts(0);
+    });
+    document.getElementById('contactsPrevBtn')?.addEventListener('click', contactsPrevPage);
+    document.getElementById('contactsNextBtn')?.addEventListener('click', contactsNextPage);
+
+    // ── Edit contact modal listeners ────────────────────────
+    document.getElementById('editContactModalClose')?.addEventListener('click', closeEditContactModal);
+    document.getElementById('editContactCancelBtn')?.addEventListener('click', closeEditContactModal);
+    document.getElementById('editContactModalBackdrop')?.addEventListener('click', (e) => {
+        if (e.target.id === 'editContactModalBackdrop') closeEditContactModal();
+    });
+    document.getElementById('editContactForm')?.addEventListener('submit', saveContactFromForm);
 
     // ── CSV import ───────────────────────────────────────────
     document.getElementById('csvFileInput').addEventListener('change', handleCsvFileSelected);
@@ -2832,6 +4078,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('contactsSelectAll').addEventListener('change', (e) => {
         const checked = e.target.checked;
         document.querySelectorAll('.contact-row-check').forEach(cb => {
+            if (cb.disabled || cb.dataset.opted === '1') {
+                cb.checked = false;
+                return;
+            }
             cb.checked = checked;
             cb.dispatchEvent(new Event('change'));
         });
@@ -2855,15 +4105,80 @@ document.addEventListener('DOMContentLoaded', async () => {
         quickSelectNext(n);
     });
 
-    // ── Outreach modal ───────────────────────────────────────
-    document.getElementById('openOutreachBtn').addEventListener('click', openOutreachModal);
-    document.getElementById('outreachModalClose').addEventListener('click', closeOutreachModal);
-    document.getElementById('outreachCancelBtn').addEventListener('click', closeOutreachModal);
-    document.getElementById('outreachModalBackdrop').addEventListener('click', (e) => {
+    // ── Outreach modal & Campaign Composer ───────────────────
+    document.getElementById('openOutreachBtn')?.addEventListener('click', openOutreachModal);
+    document.getElementById('outreachModalClose')?.addEventListener('click', closeOutreachModal);
+    document.getElementById('outreachCancelBtn')?.addEventListener('click', closeOutreachModal);
+    document.getElementById('outreachModalBackdrop')?.addEventListener('click', (e) => {
         if (e.target.id === 'outreachModalBackdrop') closeOutreachModal();
     });
-    document.getElementById('outreachSendBtn').addEventListener('click', submitOutreach);
-    document.getElementById('outreachDoneBtn').addEventListener('click', closeOutreachModal);
+    document.getElementById('outreachSendBtn')?.addEventListener('click', submitOutreach);
+    document.getElementById('outreachDoneBtn')?.addEventListener('click', closeOutreachModal);
+    document.getElementById('outreachMediaSelect')?.addEventListener('change', onOutreachMediaChange);
+    document.getElementById('outreachClearMediaBtn')?.addEventListener('click', clearOutreachMedia);
+
+    // Composer tabs
+    document.getElementById('tabSelectExisting')?.addEventListener('click', () => switchComposerTab('existing'));
+    document.getElementById('tabImportCsv')?.addEventListener('click', () => switchComposerTab('csv'));
+
+    // Message personalization and char counter
+    document.getElementById('outreachInsertNameTag')?.addEventListener('click', insertNameTokenToMessage);
+    document.getElementById('outreachMessage')?.addEventListener('input', updateOutreachMessageStats);
+
+    // CSV import controls inside composer
+    document.getElementById('outreachDownloadCsvTemplate')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        downloadCsvTemplate();
+    });
+    document.getElementById('outreachCsvFileInput')?.addEventListener('change', handleComposerCsvSelected);
+    document.getElementById('outreachConfirmImportBtn')?.addEventListener('click', confirmComposerCsvImport);
+    document.getElementById('outreachCancelCsvBtn')?.addEventListener('click', clearComposerCsvFile);
+
+    let outreachSearchTimeout;
+    document.getElementById('outreachContactSearch')?.addEventListener('input', (e) => {
+        clearTimeout(outreachSearchTimeout);
+        outreachSearchTimeout = setTimeout(() => {
+            const label = document.getElementById('outreachContactLabelFilter')?.value || '';
+            loadOutreachPickerContacts(e.target.value.trim(), label);
+        }, 250);
+    });
+    document.getElementById('outreachContactLabelFilter')?.addEventListener('change', (e) => {
+        const search = document.getElementById('outreachContactSearch')?.value.trim() || '';
+        loadOutreachPickerContacts(search, e.target.value);
+    });
+    document.getElementById('outreachPreset10')?.addEventListener('click', () => quickSelectOutreachPicker(10));
+    document.getElementById('outreachPreset20')?.addEventListener('click', () => quickSelectOutreachPicker(20));
+    document.getElementById('outreachPreset25')?.addEventListener('click', () => quickSelectOutreachPicker(25));
+    document.getElementById('outreachSelectAllBtn')?.addEventListener('click', selectEligibleOutreachPicker);
+    document.getElementById('outreachClearRecipientsBtn')?.addEventListener('click', clearOutreachPickerSelection);
+
+    // ── Campaigns section & modal ─────────────────────────────
+    document.getElementById('newCampaignBtn')?.addEventListener('click', startNewCampaignFromCampaigns);
+    document.getElementById('refreshCampaignsBtn')?.addEventListener('click', () => loadCampaigns(0));
+    document.getElementById('campaignStatusFilter')?.addEventListener('change', () => loadCampaigns(0));
+    document.getElementById('campaignsPrevBtn')?.addEventListener('click', campaignsPrevPage);
+    document.getElementById('campaignsNextBtn')?.addEventListener('click', campaignsNextPage);
+    document.getElementById('campaignsBody')?.addEventListener('click', (e) => {
+        const viewBtn = e.target.closest('[data-view-campaign]');
+        if (viewBtn) {
+            viewCampaignDetails(viewBtn.dataset.viewCampaign);
+            return;
+        }
+        const cancelBtn = e.target.closest('[data-cancel-campaign]');
+        if (cancelBtn) {
+            cancelCampaign(cancelBtn.dataset.cancelCampaign);
+            return;
+        }
+    });
+    document.getElementById('campaignDetailModalClose')?.addEventListener('click', closeCampaignDetailModal);
+    document.getElementById('campaignDetailDoneBtn')?.addEventListener('click', closeCampaignDetailModal);
+    document.getElementById('campaignDetailCancelBtn')?.addEventListener('click', (e) => {
+        const jobId = e.currentTarget.dataset.jobId;
+        if (jobId) cancelCampaign(jobId);
+    });
+    document.getElementById('campaignDetailModalBackdrop')?.addEventListener('click', (e) => {
+        if (e.target.id === 'campaignDetailModalBackdrop') closeCampaignDetailModal();
+    });
 
     // ── Message search & filter ─────────────────────────────
     let messageSearchTimeout;
@@ -2895,7 +4210,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (contactSearchEl) contactSearchEl.value = term;
         if (messageSearchEl) messageSearchEl.value = term;
         navigateTo('contacts');
-        loadContacts();
+        contactsCurrentOffset = 0;
+        loadContacts(0);
     });
 
     // ── Lead analysis controls ──────────────────────────────
@@ -2991,6 +4307,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (e.key === 'Escape') {
             closeDealModal();
             closeAgentModal();
+            closeCampaignDetailModal();
+            closeOutreachModal();
         }
     });
     document.getElementById('agentModal')?.addEventListener('click', (e) => e.stopPropagation());
@@ -3367,6 +4685,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             loadLeads();
         } else if (currentSection === 'crm') {
             loadCrm();
+        } else if (currentSection === 'campaigns') {
+            loadCampaigns(campaignsCurrentOffset);
         }
     }, 15000);
 });

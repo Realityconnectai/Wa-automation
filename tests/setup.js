@@ -54,6 +54,7 @@ process.env.GEMINI_API_KEY = '';
 process.env.MAX_CONCURRENT_WHATSAPP_SESSIONS = '5';
 process.env.DISABLE_RATE_LIMITS = 'true';
 process.env.BCRYPT_ROUNDS = '4';
+process.env.PGMAX_CONNECTIONS = process.env.PGMAX_CONNECTIONS || '5';
 
 function ensureDir(dir) {
     fs.mkdirSync(dir, { recursive: true });
@@ -264,12 +265,12 @@ module.exports = {
 
 if (typeof afterAll === 'function') {
     afterAll(async () => {
-        try { require('../src/services/database').stopPersistence(); } catch (e) {}
+        try { await require('../src/services/database').stopPersistence(); } catch (e) {}
         try { await require('../src/services/whatsapp-client').destroyAllClients(); } catch (e) {}
         try { await require('../src/services/outreach').cancelAllOutreachJobs(); } catch (e) {}
         try { require('../src/services/lead-analyzer').clearPendingAutoAnalyses(); } catch (e) {}
         try { require('../src/services/scheduler').stopScheduler(); } catch (e) {}
-        try { require('../src/services/db-pool').closePool().catch(() => {}); } catch (e) {}
+        try { await require('../src/services/db-pool').closePool(); } catch (e) {}
         rmrf(TEST_ROOT);
     });
 }

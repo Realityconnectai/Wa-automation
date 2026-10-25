@@ -31,6 +31,7 @@ const {
     isEncrypted,
     getEncryptionKey
 } = require('../utils/token-crypto');
+const { resolveDisplayFilename } = require('../utils/media-filename');
 
 
 // ─── Versioned Migrations ───────────────────────────────────
@@ -172,8 +173,8 @@ async function closeDatabase() {
 }
 
 // Legacy alias for compatibility with test teardowns
-function stopPersistence() {
-    closePool().catch(() => {});
+async function stopPersistence() {
+    await closePool();
 }
 
 // Legacy alias: in PostgreSQL, WAL / transaction commit makes writes durable immediately
@@ -481,15 +482,49 @@ async function getMonthlyOutgoingCount(userId) {
 
 // ─── Contact Helpers ────────────────────────────────────────
 
+function buildContactSearchClause(search, startIdx) {
+    if (!search || typeof search !== 'string' || !search.trim()) {
+        return { clause: '', params: [], nextIdx: startIdx };
+    }
+    const trimmed = search.trim();
+    const hasLetters = /[a-zA-Z]/.test(trimmed);
+    const digits = trimmed.replace(/\D/g, '');
+    let idx = startIdx;
+    const params = [];
+    const conditions = [];
+
+    // Always match name against the query
+    conditions.push(`name ILIKE $${idx++}`);
+    params.push(`%${trimmed}%`);
+
+    // If query has no letters and has digits, normalize punctuation (+, spaces, hyphens, parens) to match stored digits
+    if (!hasLetters && digits.length > 0) {
+        conditions.push(`phone ILIKE $${idx++}`);
+        params.push(`%${digits}%`);
+    } else {
+        conditions.push(`phone ILIKE $${idx++}`);
+        params.push(`%${trimmed}%`);
+    }
+
+    return {
+        clause: ` AND (${conditions.join(' OR ')})`,
+        params,
+        nextIdx: idx
+    };
+}
+
 async function getContacts(userId, search = '', label = '', { limit = null, offset = 0 } = {}) {
     let sql = 'SELECT * FROM contacts WHERE user_id = $1';
-    const params = [userId];
+    let params = [userId];
     let idx = 2;
 
     if (search) {
-        sql += ` AND (name ILIKE $${idx} OR phone ILIKE $${idx + 1})`;
-        params.push(`%${search}%`, `%${search}%`);
-        idx += 2;
+        const searchClause = buildContactSearchClause(search, idx);
+        if (searchClause.clause) {
+            sql += searchClause.clause;
+            params = params.concat(searchClause.params);
+            idx = searchClause.nextIdx;
+        }
     }
     if (label) {
         sql += ` AND label = $${idx++}`;
@@ -503,9 +538,60 @@ async function getContacts(userId, search = '', label = '', { limit = null, offs
     return queryAll(sql, params);
 }
 
-async function countContacts(userId) {
-    const row = await queryGet('SELECT COUNT(*) as count FROM contacts WHERE user_id = $1', [userId]);
-    return row ? row.count : 0;
+async function countContacts(userId, search = '', label = '') {
+    let sql = 'SELECT COUNT(*) as count FROM contacts WHERE user_id = $1';
+    let params = [userId];
+    let idx = 2;
+
+    if (search) {
+        const searchClause = buildContactSearchClause(search, idx);
+        if (searchClause.clause) {
+            sql += searchClause.clause;
+            params = params.concat(searchClause.params);
+            idx = searchClause.nextIdx;
+        }
+    }
+    if (label) {
+        sql += ` AND label = $${idx++}`;
+        params.push(label);
+    }
+    const row = await queryGet(sql, params);
+    return row ? Number(row.count) || 0 : 0;
+}
+
+async function getContactById(userId, id) {
+    const cleanId = typeof id === 'number' ? id : parseInt(id, 10);
+    if (!Number.isSafeInteger(cleanId) || cleanId <= 0) return null;
+    return queryGet('SELECT * FROM contacts WHERE user_id = $1 AND id = $2', [userId, cleanId]);
+}
+
+async function getContactLabels(userId) {
+    const rows = await queryAll(
+        "SELECT DISTINCT label FROM contacts WHERE user_id = $1 AND label IS NOT NULL AND TRIM(label) != '' ORDER BY label ASC",
+        [userId]
+    );
+    return (rows || []).map(r => r.label);
+}
+
+async function updateContact(userId, id, { name, label, notes } = {}) {
+    const cleanId = typeof id === 'number' ? id : parseInt(id, 10);
+    if (!Number.isSafeInteger(cleanId) || cleanId <= 0) return null;
+
+    const existing = await queryGet('SELECT * FROM contacts WHERE user_id = $1 AND id = $2', [userId, cleanId]);
+    if (!existing) return null;
+
+    const newName = name !== undefined ? name : existing.name;
+    const newLabel = label !== undefined ? label : existing.label;
+    const newNotes = notes !== undefined ? notes : existing.notes;
+
+    const updated = await queryGet(
+        `UPDATE contacts
+         SET name = $1, label = $2, notes = $3, updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = $4 AND id = $5
+         RETURNING *`,
+        [newName, newLabel, newNotes, userId, cleanId]
+    );
+    return updated;
 }
 
 async function getContactByPhone(userId, phone) {
@@ -1177,10 +1263,32 @@ async function getAppointmentReminders(userId, appointmentId) {
 }
 
 // ─── Durable outreach jobs ──────────────────────────────────────────────
-async function createOutreachJob(userId, id, messageTemplate, contacts) {
+let _hasMediaAssetIdColumn = null;
+async function checkMediaAssetColumn(client = null) {
+    if (_hasMediaAssetIdColumn !== null) return _hasMediaAssetIdColumn;
+    try {
+        const row = await queryGet(
+            "SELECT 1 FROM information_schema.columns WHERE table_name = 'outreach_jobs' AND column_name = 'media_asset_id'",
+            [],
+            client
+        );
+        _hasMediaAssetIdColumn = Boolean(row);
+    } catch (e) {
+        _hasMediaAssetIdColumn = false;
+    }
+    return _hasMediaAssetIdColumn;
+}
+
+async function createOutreachJob(userId, id, messageTemplate, contacts, mediaAssetId = null) {
     return transaction(async (tx) => {
-        await tx.query(`INSERT INTO outreach_jobs (id,user_id,message_template,status,total)
-                        VALUES ($1,$2,$3,'running',$4)`, [id, userId, messageTemplate, contacts.length]);
+        const hasMediaCol = await checkMediaAssetColumn(tx.client);
+        if (hasMediaCol) {
+            await tx.query(`INSERT INTO outreach_jobs (id,user_id,message_template,status,total,media_asset_id)
+                            VALUES ($1,$2,$3,'running',$4,$5)`, [id, userId, messageTemplate, contacts.length, mediaAssetId || null]);
+        } else {
+            await tx.query(`INSERT INTO outreach_jobs (id,user_id,message_template,status,total)
+                            VALUES ($1,$2,$3,'running',$4)`, [id, userId, messageTemplate, contacts.length]);
+        }
         for (const contact of contacts) {
             if (contact.id) {
                 const ownedContact = await tx.query('SELECT id FROM contacts WHERE id=$1 AND user_id=$2', [contact.id, userId]);
@@ -1198,13 +1306,33 @@ async function createOutreachJob(userId, id, messageTemplate, contacts) {
 }
 
 async function getOutreachJob(userId, id, client = null) {
-    const job = await queryGet('SELECT * FROM outreach_jobs WHERE id=$1 AND user_id=$2', [id, userId], client);
+    const hasMediaCol = await checkMediaAssetColumn(client);
+    let job;
+    if (hasMediaCol) {
+        job = await queryGet(`
+            SELECT j.*,
+                   m.file_name AS asset_file_name,
+                   m.mime_type AS asset_mime_type,
+                   m.asset_type,
+                   m.size_bytes AS asset_size_bytes,
+                   p.name AS project_name
+            FROM outreach_jobs j
+            LEFT JOIN media_assets m ON m.id = j.media_asset_id AND m.user_id = j.user_id
+            LEFT JOIN projects p ON p.id = m.project_id AND p.user_id = m.user_id
+            WHERE j.id=$1 AND j.user_id=$2
+        `, [id, userId], client);
+    } else {
+        job = await queryGet('SELECT * FROM outreach_jobs WHERE id=$1 AND user_id=$2', [id, userId], client);
+    }
     if (!job) return null;
-    const results = await queryAll(`SELECT phone, contact_name AS name, status, reason FROM outreach_recipients
+    const results = await queryAll(`SELECT phone, contact_name AS name, status, reason, sent_at FROM outreach_recipients
                                     WHERE job_id=$1 AND user_id=$2 ORDER BY id`, [id, userId], client);
     const counts = results.reduce((out, row) => { out[row.status] = (out[row.status] || 0) + 1; return out; }, {});
+    const assetDisplay = job.asset_file_name ? resolveDisplayFilename(job.asset_file_name, job.user_id) : null;
     return {
         ...job,
+        asset_file_name: assetDisplay || job.asset_file_name || null,
+        asset_display_name: assetDisplay,
         results,
         sent: counts.sent || 0,
         failed: counts.failed || 0,
@@ -1212,8 +1340,93 @@ async function getOutreachJob(userId, id, client = null) {
         total_recipients: job.total || results.length,
         sent_count: counts.sent || 0,
         failed_count: (counts.failed || 0) + (counts.skipped || 0) + (counts.unknown || 0),
-        cancelRequested: job.status === 'cancel_requested'
+        cancelRequested: job.status === 'cancel_requested',
+        cancellable: ['running', 'cancel_requested'].includes(job.status)
     };
+}
+
+async function getOutreachJobs(userId, { status = '', limit = 20, offset = 0 } = {}) {
+    const hasMediaCol = await checkMediaAssetColumn();
+    let sql = `
+        SELECT 
+            j.id,
+            j.user_id,
+            j.message_template,
+            j.status,
+            j.total,
+            j.started_at,
+            j.finished_at,
+            j.error,
+            ${hasMediaCol ? `
+            j.media_asset_id,
+            m.file_name AS asset_file_name,
+            m.mime_type AS asset_mime_type,
+            m.asset_type,
+            p.name AS project_name,` : ''}
+            COUNT(r.id) FILTER (WHERE r.status = 'sent')::int AS sent_count,
+            COUNT(r.id) FILTER (WHERE r.status = 'failed')::int AS failed_count,
+            COUNT(r.id) FILTER (WHERE r.status IN ('skipped', 'unknown'))::int AS skipped_count
+        FROM outreach_jobs j
+        ${hasMediaCol ? `
+        LEFT JOIN media_assets m ON m.id = j.media_asset_id AND m.user_id = j.user_id
+        LEFT JOIN projects p ON p.id = m.project_id AND p.user_id = m.user_id` : ''}
+        LEFT JOIN outreach_recipients r ON r.job_id = j.id AND r.user_id = j.user_id
+        WHERE j.user_id = $1
+    `;
+    const params = [userId];
+    let idx = 2;
+
+    if (status) {
+        sql += ` AND j.status = $${idx++}`;
+        params.push(status);
+    }
+
+    if (hasMediaCol) {
+        sql += ` GROUP BY j.id, m.id, p.id ORDER BY j.started_at DESC LIMIT $${idx++} OFFSET $${idx++}`;
+    } else {
+        sql += ` GROUP BY j.id ORDER BY j.started_at DESC LIMIT $${idx++} OFFSET $${idx++}`;
+    }
+    params.push(limit, offset);
+
+    const rows = await queryAll(sql, params);
+    return rows.map(r => {
+        const assetDisplay = r.asset_file_name ? resolveDisplayFilename(r.asset_file_name, r.user_id) : null;
+        return {
+            id: r.id,
+            user_id: r.user_id,
+            message_template: r.message_template,
+            status: r.status,
+            total: Number(r.total || 0),
+            started_at: r.started_at,
+            finished_at: r.finished_at,
+            error: r.error || '',
+            sent: Number(r.sent_count || 0),
+            failed: Number(r.failed_count || 0),
+            skipped: Number(r.skipped_count || 0),
+            sent_count: Number(r.sent_count || 0),
+            failed_count: Number(r.failed_count || 0),
+            skipped_count: Number(r.skipped_count || 0),
+            cancelRequested: r.status === 'cancel_requested',
+            cancellable: ['running', 'cancel_requested'].includes(r.status),
+            media_asset_id: r.media_asset_id || null,
+            asset_file_name: assetDisplay || r.asset_file_name || null,
+            asset_display_name: assetDisplay,
+            asset_mime_type: r.asset_mime_type || null,
+            asset_type: r.asset_type || null,
+            project_name: r.project_name || null
+        };
+    });
+}
+
+async function countOutreachJobs(userId, status = '') {
+    let sql = 'SELECT COUNT(*)::int AS count FROM outreach_jobs WHERE user_id = $1';
+    const params = [userId];
+    if (status) {
+        sql += ' AND status = $2';
+        params.push(status);
+    }
+    const row = await queryGet(sql, params);
+    return Number(row?.count || 0);
 }
 
 async function countRunningOutreachJobs(userId = null) {
@@ -2143,21 +2356,51 @@ async function createMediaAsset(userId, { projectId, unitId, assetType, fileName
         `INSERT INTO media_assets (user_id,project_id,unit_id,asset_type,file_name,storage_path,mime_type,size_bytes,rera_verified)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
         [userId, projectId, unitId||null, assetType, fileName, storagePath, mimeType, sizeBytes||0, reraVerified?1:0]);
-    return res.rows[0];
+    const row = res.rows[0];
+    if (row) {
+        row.display_name = resolveDisplayFilename(row.file_name, row.user_id);
+        row.file_name = row.display_name;
+    }
+    return row;
 }
 
-async function getMediaAssets(userId, projectId, { assetType, unitId, activeOnly=true } = {}) {
-    let sql = 'SELECT * FROM media_assets WHERE user_id=$1 AND project_id=$2';
-    const params=[userId, projectId]; let idx=3;
-    if (activeOnly) sql += ' AND is_active=1';
-    if (assetType) { sql += ` AND asset_type=$${idx++}`; params.push(assetType); }
-    if (unitId)    { sql += ` AND unit_id=$${idx++}`; params.push(unitId); }
-    sql += ' ORDER BY created_at ASC';
-    return queryAll(sql, params);
+async function getMediaAssets(userId, projectId = null, { assetType, unitId, activeOnly=true } = {}) {
+    let sql = `
+        SELECT m.*, p.name AS project_name
+        FROM media_assets m
+        LEFT JOIN projects p ON p.id = m.project_id AND p.user_id = m.user_id
+        WHERE m.user_id = $1
+    `;
+    const params = [userId];
+    let idx = 2;
+    if (projectId) {
+        sql += ` AND m.project_id = $${idx++}`;
+        params.push(projectId);
+    }
+    if (activeOnly) sql += ' AND m.is_active = 1';
+    if (assetType)  { sql += ` AND m.asset_type = $${idx++}`; params.push(assetType); }
+    if (unitId)     { sql += ` AND m.unit_id = $${idx++}`; params.push(unitId); }
+    sql += ' ORDER BY m.created_at DESC';
+    const rows = await queryAll(sql, params);
+    return rows.map(r => {
+        const display = resolveDisplayFilename(r.file_name, r.user_id);
+        return {
+            ...r,
+            display_name: display,
+            file_name: display
+        };
+    });
 }
 
 async function getMediaAssetById(userId, id) {
-    return queryGet('SELECT * FROM media_assets WHERE id=$1 AND user_id=$2', [id, userId]);
+    const row = await queryGet('SELECT * FROM media_assets WHERE id=$1 AND user_id=$2', [id, userId]);
+    if (!row) return null;
+    const display = resolveDisplayFilename(row.file_name, row.user_id);
+    return {
+        ...row,
+        display_name: display,
+        file_name: display
+    };
 }
 
 async function deleteMediaAsset(userId, id) {
@@ -2246,6 +2489,10 @@ module.exports = {
     // Tenant data
     getContacts,
     countContacts,
+    getContactById,
+    getContactLabels,
+    updateContact,
+    buildContactSearchClause,
     getContactByPhone,
     getContactsByIds,
     upsertContact,
@@ -2275,6 +2522,8 @@ module.exports = {
     cancelScheduledMessage,
     createOutreachJob,
     getOutreachJob,
+    getOutreachJobs,
+    countOutreachJobs,
     countRunningOutreachJobs,
     requestOutreachCancellation,
     recoverInterruptedOutreachJobs,

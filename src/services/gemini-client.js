@@ -30,8 +30,7 @@ const ALL_GEMINI_MODELS = [
     'gemini-3.8-flash',              // Flagship model, high capability & agentic reasoning
     'gemini-3.6-flash',              // Fast reasoning model (~2s)
     'gemini-3.7-flash',              // High-performance driver
-    'gemini-3.5-flash',              // Fast & capable
-    'gemini-2.5-flash-lite'          // Reliable fallback
+    'gemini-3.5-flash'               // Fast & capable
 ];
 
 const MODELS_TO_TRY = ALL_GEMINI_MODELS;

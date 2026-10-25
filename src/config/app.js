@@ -85,50 +85,9 @@ function createApp() {
     }));
 
     // ─── CORS & Cross-Origin Security ───────────────────────────
-    // Allow only legitimate SaaS domains and localhost development.
-    // Untrusted cross-origin requests are blocked to prevent data theft and unauthorized remote access.
-    const defaultAllowedOrigins = [
-        'https://workpilots.dpdns.org',
-        'https://workpilot.co.in',
-        'https://leadfinder.workpilot.co.in',
-        'https://linkdinpilot.workpilot.co.in',
-        'http://localhost:3000',
-        'http://localhost:5000',
-        'http://127.0.0.1:3000',
-        'http://127.0.0.1:5000'
-    ];
-    const envOrigins = (process.env.ALLOWED_ORIGINS || '')
-        .split(',')
-        .map(s => s.trim())
-        .filter(s => s && s !== '*');
-    const allowedOriginsList = Array.from(new Set([...defaultAllowedOrigins, ...envOrigins]));
+    const { isOriginAllowed, corsOptions } = require('./cors');
 
-    function isOriginAllowed(origin) {
-        if (!origin) return true; // Same-origin, direct server-to-server, or native calls
-        const trimmed = origin.trim().toLowerCase();
-        if (allowedOriginsList.some(o => o.toLowerCase() === trimmed)) return true;
-        try {
-            const parsed = new URL(trimmed);
-            const host = parsed.hostname.toLowerCase();
-            if (host === 'workpilot.co.in' || host.endsWith('.workpilot.co.in')) return true;
-            if (host === 'workpilots.dpdns.org') return true;
-            if (host === 'localhost' || host === '127.0.0.1') return true;
-        } catch (e) {
-            return false;
-        }
-        return false;
-    }
-
-    app.use(cors({
-        origin: (origin, callback) => {
-            if (isOriginAllowed(origin)) return callback(null, true);
-            return callback(null, false);
-        },
-        credentials: true,
-        methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
-        maxAge: 86400
-    }));
+    app.use(cors(corsOptions));
 
     // Strict Cross-Origin Enforcement Middleware for API endpoints:
     // Any browser-initiated request from an untrusted origin is rejected with 403 Forbidden.
@@ -322,7 +281,9 @@ app.get('/health', (req, res) => {
     return app;
 }
 
-module.exports = { createApp };
+const { isOriginAllowed, getAllowedOrigins } = require('./cors');
+
+module.exports = { createApp, isOriginAllowed, getAllowedOrigins };
 
 
 

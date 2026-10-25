@@ -50,36 +50,12 @@ assert(revokedPayload === null, 'revokeAllSessionsForUser must void previous tok
 console.log('PASSED: revokeAllSessionsForUser invalidates all previous tokens');
 
 // 5. Test CORS and Origin filtering logic
-const defaultAllowedOrigins = [
-    'https://workpilots.dpdns.org',
-    'https://workpilot.co.in',
-    'https://leadfinder.workpilot.co.in',
-    'https://linkdinpilot.workpilot.co.in',
-    'http://localhost:3000',
-    'http://localhost:5000',
-    'http://127.0.0.1:3000',
-    'http://127.0.0.1:5000'
-];
-
-function isOriginAllowed(origin) {
-    if (!origin) return true;
-    const trimmed = origin.trim().toLowerCase();
-    if (defaultAllowedOrigins.some(o => o.toLowerCase() === trimmed)) return true;
-    try {
-        const parsed = new URL(trimmed);
-        const host = parsed.hostname.toLowerCase();
-        if (host === 'workpilot.co.in' || host.endsWith('.workpilot.co.in')) return true;
-        if (host === 'workpilots.dpdns.org') return true;
-        if (host === 'localhost' || host === '127.0.0.1') return true;
-    } catch (e) {
-        return false;
-    }
-    return false;
-}
+const { isOriginAllowed } = require('../src/config/cors');
 
 assert(isOriginAllowed('https://workpilots.dpdns.org') === true, 'Own domain must be allowed');
 assert(isOriginAllowed('https://leadfinder.workpilot.co.in') === true, 'Subdomain must be allowed');
 assert(isOriginAllowed('https://sub.workpilot.co.in') === true, 'Any workpilot subdomain allowed');
+assert(isOriginAllowed('https://enunciate-graves-dry.ngrok-free.dev') === true, 'Configured ngrok tunnel must be allowed');
 assert(isOriginAllowed('https://evil-attacker.com') === false, 'Attacker domain must be blocked');
 assert(isOriginAllowed('https://phishing-workpilot.com') === false, 'Phishing domain must be blocked');
 assert(isOriginAllowed('http://malicious.org') === false, 'Malicious domain must be blocked');

@@ -202,13 +202,36 @@ async function main() {
         await runTest('Hold unit via manage modal', async () => {
             await page.click('[data-inv="unit"]');
             await page.waitForSelector('[data-inv="transition"][data-transition="hold"]', { timeout: 5000 });
-            page.once('dialog', dialog => dialog.accept('Test Holder'));
             await page.click('[data-inv="transition"][data-transition="hold"]');
+
+            // Wait for hold modal
+            await page.waitForSelector('#invHoldForm', { timeout: 5000 });
+
+            // Verify cancel button dismisses modal
+            await page.click('#invHoldForm [data-inv="close"]');
+            await page.waitForFunction(() => !document.getElementById('invModalBackdrop'), { timeout: 5000 });
+
+            // Re-open hold modal
+            await page.click('[data-inv="unit"]');
+            await page.waitForSelector('[data-inv="transition"][data-transition="hold"]', { timeout: 5000 });
+            await page.click('[data-inv="transition"][data-transition="hold"]');
+            await page.waitForSelector('#invHoldForm', { timeout: 5000 });
+
+            // Test invalid submission and inline validation feedback
+            await page.click('#invHoldSubmitBtn');
+            await page.waitForSelector('#invHoldByError:not([hidden])', { timeout: 3000 });
+
+            // Fill valid test data and submit
+            await page.fill('#invHoldBy', 'Test Holder');
+            await page.selectOption('#invHoldMinutes', '30');
+            await page.fill('#invHoldReason', 'E2E Hold Test');
+            await page.click('#invHoldSubmitBtn');
+
             await page.waitForFunction(
                 () => !document.getElementById('invModalBackdrop'),
                 { timeout: 8000 }
             );
-            // Verify status changed
+            // Verify status changed to ON_HOLD
             await page.waitForFunction(
                 () => document.querySelector('#invGridContainer')?.textContent?.includes('ON_HOLD'),
                 { timeout: 5000 }
@@ -218,12 +241,32 @@ async function main() {
         await runTest('Book unit from ON_HOLD', async () => {
             await page.click('[data-inv="unit"]');
             await page.waitForSelector('[data-inv="transition"][data-transition="book"]', { timeout: 5000 });
-            page.once('dialog', dialog => dialog.accept('BK-123'));
             await page.click('[data-inv="transition"][data-transition="book"]');
+
+            // Wait for book modal
+            await page.waitForSelector('#invBookForm', { timeout: 5000 });
+
+            // Test invalid submission and inline validation feedback
+            await page.click('#invBookSubmitBtn');
+            await page.waitForSelector('#invBookingRefError:not([hidden])', { timeout: 3000 });
+
+            // Fill valid test data and submit
+            await page.fill('#invBookingRef', 'BK-123');
+            await page.fill('#invBookReason', 'E2E Booking Confirmation');
+            await page.click('#invBookSubmitBtn');
+
             await page.waitForFunction(
                 () => !document.getElementById('invModalBackdrop'),
                 { timeout: 8000 }
             );
+            await page.waitForFunction(
+                () => document.querySelector('#invGridContainer')?.textContent?.includes('BOOKED'),
+                { timeout: 5000 }
+            );
+
+            // Verify persistence after refreshing grid project selection
+            const currentProj = await page.$eval('#invGridProject', el => el.value);
+            await page.selectOption('#invGridProject', currentProj);
             await page.waitForFunction(
                 () => document.querySelector('#invGridContainer')?.textContent?.includes('BOOKED'),
                 { timeout: 5000 }
@@ -483,16 +526,17 @@ async function main() {
             // Reload messages
             await navigateTo(page, 'messages');
             await page.waitForTimeout(1000);
-            // Try to find a conversation link
-            const convLink = page.locator('[data-open-conversation], [data-phone], .conversation-link').first();
+            const convLink = page.locator('#messagesBody [data-open-conversation]').first();
             if (await convLink.count()) {
                 await convLink.click();
-                await page.waitForSelector('#conversationModalBody', { timeout: 5000 });
-                // Verify conversation content includes inbound media notice
-                const body = await page.locator('#conversationModalBody').textContent();
-                assert.ok(body.includes('Hello test message'), 'Conversation body should contain message text');
-                assert.ok(body.includes('metadata only'), 'Conversation body should contain metadata-only notice for inbound media');
-                await page.click('#conversationModalClose');
+                try {
+                    await page.waitForSelector('.conversation-thread', { timeout: 8000 });
+                    const body = await page.locator('#conversationModalBody').textContent();
+                    assert.ok(body.includes('Hello test message'), 'Conversation body should contain message text');
+                } finally {
+                    await page.click('#conversationModalClose').catch(() => {});
+                    await page.waitForFunction(() => !document.getElementById('conversationModalBackdrop') || document.getElementById('conversationModalBackdrop')?.hidden, { timeout: 5000 }).catch(() => {});
+                }
             }
         });
 

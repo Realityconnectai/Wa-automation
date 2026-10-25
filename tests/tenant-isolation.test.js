@@ -17,6 +17,14 @@ describe('Multi-tenant isolation', () => {
     let app;
     let admin, alice, bob;
 
+    beforeAll(() => {
+        require('../src/services/whatsapp-client').setMockAllowedForTesting(true);
+    });
+
+    afterAll(async () => {
+        require('../src/services/whatsapp-client').setMockAllowedForTesting(false);
+    });
+
     /** Populates one tenant with a row in every table, returning their ids. */
     async function seed(tenant, tag) {
         const post = (path, body) =>
@@ -113,14 +121,23 @@ describe('Multi-tenant isolation', () => {
             expect(body).not.toContain('911111111111');
         });
 
-        test('each tenant sees exactly their own counts', async () => {
+        test('each tenant sees exactly their own counts and non-admin phone masking contract', async () => {
+            const { maskPhoneNumber } = require('../src/utils/phone-mask');
             const aliceContacts = await request(app).get('/api/contacts').set('Cookie', alice.cookie);
             const bobContacts   = await request(app).get('/api/contacts').set('Cookie', bob.cookie);
 
             expect(aliceContacts.body.data).toHaveLength(1);
             expect(bobContacts.body.data).toHaveLength(1);
-            expect(aliceContacts.body.data[0].phone).toBe('911111111111');
-            expect(bobContacts.body.data[0].phone).toBe('922222222222');
+            expect(aliceContacts.body.data[0].phone).toBe(maskPhoneNumber('911111111111'));
+            expect(bobContacts.body.data[0].phone).toBe(maskPhoneNumber('922222222222'));
+
+            // Verify admin role has privileged access to unmasked phones
+            const { upsertContact } = require('../src/services/database');
+            await upsertContact(admin.user.id, '913333333333', 'Admin Lead', 'VIP', 'Privileged notes');
+            const adminContacts = await request(app).get('/api/contacts').set('Cookie', admin.cookie);
+            const adminRow = adminContacts.body.data.find(c => c.phone === '913333333333');
+            expect(adminRow).toBeDefined();
+            expect(adminRow.phone).toBe('913333333333');
         });
 
         test('dashboard statistics are computed per tenant', async () => {

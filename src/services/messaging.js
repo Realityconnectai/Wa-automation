@@ -182,7 +182,7 @@ async function sendText(userId, phone, text) {
  * @returns {{ waMessageId: string|null, sizeBytes: number, fileName: string }}
  * @throws  Error with .code if validation fails or WA client not connected
  */
-async function sendMedia(userId, phone, { filePath, mimeType, caption = '', idempotencyKey = null, mediaAssetId = null }) {
+async function sendMedia(userId, phone, { filePath, mimeType, caption = '', idempotencyKey = null, mediaAssetId = null, fileName = null }) {
     const digits = String(phone).replace(/\D/g, '');
 
     // Validate before reading the file into memory
@@ -194,7 +194,8 @@ async function sendMedia(userId, phone, { filePath, mimeType, caption = '', idem
         throw err;
     }
 
-    const { sizeBytes, fileName } = validation;
+    const { sizeBytes } = validation;
+    const resolvedFileName = fileName || validation.fileName;
     const normMime = mimeType.toLowerCase().trim();
     // Map mime to the message_type stored in DB
     const messageType = normMime.startsWith('video/') ? 'video'
@@ -215,7 +216,7 @@ async function sendMedia(userId, phone, { filePath, mimeType, caption = '', idem
 
     // Log as 'pending' BEFORE sending — same idempotency pattern as sendText
     let logRow;
-    const bodyText = caption ? `${caption} [${fileName}]` : `[${fileName}]`;
+    const bodyText = caption ? `${caption} [${resolvedFileName}]` : `[${resolvedFileName}]`;
 
     if (idempotencyKey) {
         const claim = await logOutgoingMessageIdempotent(userId, idempotencyKey, {
@@ -224,7 +225,7 @@ async function sendMedia(userId, phone, { filePath, mimeType, caption = '', idem
         });
         if (!claim.created) {
             // Already sent — return original row info
-            return { waMessageId: claim.row.wa_message_id, sizeBytes, fileName, duplicate: true };
+            return { waMessageId: claim.row.wa_message_id, sizeBytes, fileName: resolvedFileName, duplicate: true };
         }
         logRow = claim.row;
         if (mediaAssetId) {
@@ -234,7 +235,7 @@ async function sendMedia(userId, phone, { filePath, mimeType, caption = '', idem
 
     let result;
     try {
-        result = await sendMediaMessage(userId, digits, { base64Data, mimeType: normMime, fileName, caption });
+        result = await sendMediaMessage(userId, digits, { base64Data, mimeType: normMime, fileName: resolvedFileName, caption });
     } catch (sendErr) {
         // Mark as failed in the log row if we created one
         if (logRow) {
@@ -260,7 +261,7 @@ async function sendMedia(userId, phone, { filePath, mimeType, caption = '', idem
         }
     }
 
-    return { waMessageId: waId, sizeBytes, fileName };
+    return { waMessageId: waId, sizeBytes, fileName: resolvedFileName };
 }
 
 module.exports = { sendText, sendMedia, validateMediaFile, ALLOWED_TYPES };

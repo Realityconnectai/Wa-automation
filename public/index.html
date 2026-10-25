@@ -6,7 +6,7 @@
     <title>WhatsApp Automation — Dashboard</title>
     <meta name="description" content="Manage your WhatsApp Business automation — chatbot rules, contacts, scheduled messages and analytics.">
     <meta name="theme-color" content="#0D4530">
-    <link rel="stylesheet" href="css/style.css?v=20260917_4">
+    <link rel="stylesheet" href="css/style.css?v=20261018_3">
 </head>
 <body>
 
@@ -53,6 +53,10 @@
         <a href="#" class="nav-item" data-section="contacts" id="nav-contacts" role="menuitem">
             <span class="nav-icon" data-icon="users" aria-hidden="true"></span>
             <span class="nav-label">Contacts</span>
+        </a>
+        <a href="#" class="nav-item" data-section="campaigns" id="nav-campaigns" role="menuitem">
+            <span class="nav-icon" data-icon="send" aria-hidden="true"></span>
+            <span class="nav-label">Campaigns</span>
         </a>
         <a href="#" class="nav-item" data-section="scheduled" id="nav-scheduled" role="menuitem">
             <span class="nav-icon" data-icon="clock" aria-hidden="true"></span>
@@ -670,9 +674,14 @@
                 <div id="csvImportResult" hidden class="mt-md"></div>
             </div>
 
-            <div class="toolbar">
+            <div class="toolbar flex-wrap-gap">
                 <div class="search-box">
-                    <input type="search" id="contactSearch" placeholder="Search contacts…" aria-label="Search contacts">
+                    <input type="search" id="contactSearch" placeholder="Search contacts by name or phone…" aria-label="Search contacts">
+                </div>
+                <div class="filter-box">
+                    <select id="contactLabelFilter" aria-label="Filter by label" class="form-select-sm">
+                        <option value="">All Labels</option>
+                    </select>
                 </div>
             </div>
 
@@ -726,6 +735,99 @@
                             <tr><td colspan="8" class="empty-state">Loading contacts…</td></tr>
                         </tbody>
                     </table>
+                </div>
+
+                <div class="contacts-pagination" id="contactsPagination" hidden>
+                    <div class="flex-center-gap-12">
+                        <span id="contactsPaginationInfo" class="text-secondary-sm">Page 1</span>
+                        <div class="flex-center-gap-8">
+                            <label for="contactsPageSize" class="text-secondary-sm">Page size:</label>
+                            <select id="contactsPageSize" class="form-select-sm" aria-label="Contacts per page">
+                                <option value="20">20</option>
+                                <option value="50" selected>50</option>
+                                <option value="100">100</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="flex-center-gap-8">
+                        <button type="button" class="btn btn-sm btn-secondary" id="contactsPrevBtn" disabled>
+                            &larr; Previous
+                        </button>
+                        <button type="button" class="btn btn-sm btn-secondary" id="contactsNextBtn" disabled>
+                            Next &rarr;
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ── CAMPAIGNS ── -->
+    <section class="section" id="section-campaigns" aria-labelledby="campaigns-heading">
+        <div class="page-inner">
+            <div class="section-header">
+                <div>
+                    <h1 id="campaigns-heading">Campaigns</h1>
+                    <p class="section-subtitle">Track, inspect, and manage bulk outreach campaigns</p>
+                </div>
+            </div>
+
+            <div id="campaignsError" hidden></div>
+
+            <div class="toolbar">
+                <div class="filter-group">
+                    <label for="campaignStatusFilter" class="sr-only">Filter by status</label>
+                    <select id="campaignStatusFilter" aria-label="Filter by status">
+                        <option value="">All Statuses</option>
+                        <option value="running">Running</option>
+                        <option value="cancel_requested">Cancel Requested</option>
+                        <option value="completed">Completed</option>
+                        <option value="cancelled">Cancelled</option>
+                        <option value="interrupted">Interrupted</option>
+                    </select>
+                </div>
+                <div class="toolbar-actions flex-center-gap-8">
+                    <button type="button" class="btn btn-primary btn-sm" id="newCampaignBtn" title="Create a new outreach campaign">
+                        <span data-icon="plus" aria-hidden="true"></span> New Campaign
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="refreshCampaignsBtn" title="Refresh campaign list">
+                        <span data-icon="refresh-cw" aria-hidden="true"></span> Refresh
+                    </button>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="table-container">
+                    <table class="data-table" aria-label="Campaigns list">
+                        <thead>
+                            <tr>
+                                <th scope="col">Campaign ID</th>
+                                <th scope="col">Message Preview</th>
+                                <th scope="col">Status</th>
+                                <th scope="col">Total</th>
+                                <th scope="col">Sent</th>
+                                <th scope="col">Failed</th>
+                                <th scope="col">Skipped</th>
+                                <th scope="col">Started At</th>
+                                <th scope="col"><span class="sr-only">Actions</span></th>
+                            </tr>
+                        </thead>
+                        <tbody id="campaignsBody">
+                            <tr><td colspan="9" class="empty-state">Loading campaigns…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="campaigns-pagination" id="campaignsPagination" hidden>
+                    <span id="campaignsPaginationInfo" class="text-secondary-sm">Page 1</span>
+                    <div class="flex-center-gap-8">
+                        <button type="button" class="btn btn-sm btn-secondary" id="campaignsPrevBtn" disabled>
+                            &larr; Previous
+                        </button>
+                        <button type="button" class="btn btn-sm btn-secondary" id="campaignsNextBtn" disabled>
+                            Next &rarr;
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1417,41 +1519,232 @@
     </div>
 </div>
 
-<!-- ── Outreach Modal ── -->
+<!-- ── Outreach / Campaign Composer Modal ── -->
 <div class="modal-backdrop" id="outreachModalBackdrop" hidden role="dialog" aria-modal="true" aria-labelledby="outreachModalTitle">
-    <div class="modal" id="outreachModal">
+    <div class="modal modal-composer" id="outreachModal">
         <div class="modal-header">
-            <h2 id="outreachModalTitle">Send Outreach</h2>
+            <div class="composer-header-left">
+                <div class="composer-header-icon-wrap" aria-hidden="true">
+                    <span data-icon="send" class="icon"></span>
+                </div>
+                <div class="composer-header-titles">
+                    <h2 id="outreachModalTitle">Create Campaign</h2>
+                    <p class="composer-header-subtitle">Select recipients, draft message &amp; launch WhatsApp campaign</p>
+                </div>
+            </div>
             <button class="modal-close" id="outreachModalClose" aria-label="Close" type="button">×</button>
         </div>
-        <div class="modal-body">
-            <div class="outreach-warning">
-                <span data-icon="triangle-alert" aria-hidden="true"></span>
-                <span>WhatsApp's own terms prohibit bulk/automated messaging, and accounts that message many
-                    people in a short window risk being flagged or banned — this includes numbers connected
-                    through this dashboard. Only message contacts who've messaged you first or clearly opted
-                    in. Sends go out with a randomized delay between each; there's no way to make bulk
-                    outreach fully risk-free.</span>
+        <div class="modal-body composer-modal-body">
+            <!-- 1. Compliance notice -->
+            <div class="composer-compliance-banner">
+                <span data-icon="shield-check" aria-hidden="true" class="compliance-icon"></span>
+                <div class="compliance-text">
+                    <strong>WhatsApp Compliance &amp; Anti-Spam Notice</strong>
+                    <span>Only message contacts who have opted in or engaged with you first. Messages are dispatched with randomized pacing to keep your WhatsApp number in good standing.</span>
+                </div>
             </div>
-
-            <p id="outreachRecipientCount" class="font-bold-mb-sm"></p>
 
             <div id="outreachComposeView">
-                <div class="form-group">
-                    <label for="outreachMessage">Message</label>
-                    <textarea id="outreachMessage" rows="5" placeholder="Hi {{name}}, ..."></textarea>
-                    <div class="help-text-sm">
-                        Use <code>{{name}}</code> to personalize with each contact's saved name.
+                <div class="composer-main-grid">
+                    <!-- 2. Recipient selection panel -->
+                    <div class="composer-panel" id="outreachRecipientSection">
+                        <div class="composer-panel-header">
+                            <h3 class="composer-panel-title">
+                                <span data-icon="users" aria-hidden="true" class="icon-inline"></span> 1. Recipients
+                            </h3>
+                            <span class="composer-limit-pill" id="outreachRecipientPill">0 / 25 selected</span>
+                            <span id="outreachRecipientCount" class="sr-only">0 selected (max 25)</span>
+                        </div>
+
+                        <!-- Recipient Mode Tabs (Segmented Control) -->
+                        <div class="composer-tabs" role="tablist" aria-label="Recipient selection mode">
+                            <button type="button" class="composer-tab active" id="tabSelectExisting" role="tab" aria-selected="true" aria-controls="paneSelectExisting">
+                                <span data-icon="users" aria-hidden="true"></span> Existing Contacts
+                            </button>
+                            <button type="button" class="composer-tab" id="tabImportCsv" role="tab" aria-selected="false" aria-controls="paneImportCsv">
+                                <span data-icon="file-up" aria-hidden="true"></span> Import from CSV
+                            </button>
+                        </div>
+
+                        <!-- Tab 1: Existing Contacts -->
+                        <div class="composer-tab-pane" id="paneSelectExisting" role="tabpanel" aria-labelledby="tabSelectExisting">
+                            <div class="composer-recipient-controls">
+                                <div class="recipient-filter-row">
+                                    <div class="recipient-search-wrap">
+                                        <span data-icon="search" aria-hidden="true" class="search-input-icon"></span>
+                                        <input type="search" id="outreachContactSearch" class="composer-input recipient-search" placeholder="Search contacts by name or phone…">
+                                    </div>
+                                    <select id="outreachContactLabelFilter" class="composer-select recipient-label-select" aria-label="Filter contacts by label">
+                                        <option value="">All Labels</option>
+                                    </select>
+                                </div>
+                                <div class="recipient-quick-actions">
+                                    <span class="quick-label">Quick select:</span>
+                                    <div class="quick-btn-group">
+                                        <button type="button" class="btn btn-secondary btn-xs" id="outreachPreset10">10</button>
+                                        <button type="button" class="btn btn-secondary btn-xs" id="outreachPreset20">20</button>
+                                        <button type="button" class="btn btn-secondary btn-xs" id="outreachPreset25">25</button>
+                                        <button type="button" class="btn btn-secondary btn-xs" id="outreachSelectAllBtn">Select All</button>
+                                        <button type="button" class="btn btn-secondary btn-xs" id="outreachClearRecipientsBtn">Clear</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="recipient-list-container" id="outreachContactPickerContainer">
+                                <div id="outreachContactPickerList" class="recipient-list">
+                                    <!-- populated by JS -->
+                                </div>
+                            </div>
+
+                            <div id="outreachReachedWarning" class="composer-alert-warning" hidden></div>
+                        </div>
+
+                        <!-- Tab 2: CSV Import -->
+                        <div class="composer-tab-pane" id="paneImportCsv" role="tabpanel" aria-labelledby="tabImportCsv" hidden>
+                            <div class="csv-import-box">
+                                <div class="csv-instruction-card">
+                                    <div class="csv-instruction-header">
+                                        <strong>CSV Column Format</strong>
+                                        <button type="button" class="btn-link-xs" id="outreachDownloadCsvTemplate">
+                                            <span data-icon="download" aria-hidden="true"></span> Download Template
+                                        </button>
+                                    </div>
+                                    <div class="csv-badges-row">
+                                        <span class="csv-pill-tag required">Required</span> <code>phone</code> (with country code, e.g. 919876543210)
+                                    </div>
+                                    <div class="csv-badges-row">
+                                        <span class="csv-pill-tag optional">Optional</span> <code>name</code>, <code>label</code>, <code>notes</code>
+                                    </div>
+                                </div>
+
+                                <div class="csv-file-dropzone" id="outreachCsvDropzone">
+                                    <div class="csv-dropzone-left">
+                                        <div class="csv-upload-icon-wrap" aria-hidden="true">
+                                            <span data-icon="upload" class="icon"></span>
+                                        </div>
+                                        <div class="flex-column">
+                                            <input type="file" id="outreachCsvFileInput" accept=".csv,text/csv" class="sr-only">
+                                            <label for="outreachCsvFileInput" class="btn btn-secondary btn-sm" id="outreachCsvFileLabel" tabindex="0">
+                                                Choose CSV File
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <span id="outreachCsvFileName" class="csv-selected-filename">No file selected</span>
+                                </div>
+
+                                <div id="outreachCsvPreviewArea" class="csv-preview-area" hidden>
+                                    <div class="csv-validation-summary" id="outreachCsvValidationSummary"></div>
+                                    <div class="csv-preview-table-wrap">
+                                        <table class="csv-preview-table">
+                                            <thead>
+                                                <tr>
+                                                    <th>#</th>
+                                                    <th>Phone</th>
+                                                    <th>Name</th>
+                                                    <th>Label</th>
+                                                    <th>Status</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="outreachCsvPreviewTbody"></tbody>
+                                        </table>
+                                    </div>
+                                    <div class="csv-import-actions">
+                                        <button type="button" class="btn btn-primary btn-sm" id="outreachConfirmImportBtn" disabled>
+                                            <span data-icon="check" aria-hidden="true"></span> Import &amp; Add to Campaign
+                                        </button>
+                                        <button type="button" class="btn btn-secondary btn-sm" id="outreachCancelCsvBtn">
+                                            Clear File
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div id="outreachCsvResult" class="csv-result-box" hidden></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 3. Message composition & 4. Media attachment panel -->
+                    <div class="composer-panel">
+                        <div class="composer-panel-header">
+                            <h3 class="composer-panel-title">
+                                <span data-icon="message-square" aria-hidden="true" class="icon-inline"></span> 2. Message &amp; Content
+                            </h3>
+                            <button type="button" class="btn-tag-pill" id="outreachInsertNameTag" title="Insert personalization token">
+                                <span data-icon="plus" aria-hidden="true"></span> {{name}}
+                            </button>
+                        </div>
+
+                        <!-- Message textarea -->
+                        <div class="form-group mb-sm">
+                            <label for="outreachMessage" class="composer-field-label">
+                                Campaign Message <span class="text-danger">*</span>
+                            </label>
+                            <textarea id="outreachMessage" class="composer-textarea" rows="4" placeholder="Hi {{name}}, we have an exciting new property update for you..."></textarea>
+                            <div class="composer-help-text">
+                                <span>Personalized with recipient's <code>{{name}}</code></span>
+                                <span id="outreachCharCount" class="text-secondary-sm">0 chars</span>
+                            </div>
+                        </div>
+
+                        <!-- Optional media attachment -->
+                        <div class="form-group mb-sm">
+                            <div class="flex-between mb-xs">
+                                <label for="outreachMediaSelect" class="composer-field-label">
+                                    Attach Media <span class="text-secondary-sm">(Optional)</span>
+                                </label>
+                                <button type="button" class="btn-link-xs text-danger" id="outreachClearMediaBtn" hidden>
+                                    <span data-icon="x" aria-hidden="true"></span> Remove Media
+                                </button>
+                            </div>
+                            <select id="outreachMediaSelect" class="composer-select w-100">
+                                <option value="">No attachment (Text only)</option>
+                            </select>
+
+                            <div id="outreachMediaEmptyState" class="composer-media-empty">
+                                <span data-icon="info" aria-hidden="true"></span>
+                                <span>No attachment selected (Text-only message)</span>
+                            </div>
+
+                            <div id="outreachMediaPreviewCard" class="composer-media-card mt-xs" hidden>
+                                <div class="media-card-icon">
+                                    <span data-icon="paperclip" aria-hidden="true"></span>
+                                </div>
+                                <div class="media-card-info">
+                                    <div id="outreachMediaPreviewTitle" class="media-card-title"></div>
+                                    <div id="outreachMediaPreviewMeta" class="media-card-meta"></div>
+                                </div>
+                                <a id="outreachMediaPreviewLink" href="#" target="_blank" rel="noopener" class="btn btn-secondary btn-xs">
+                                    Preview
+                                </a>
+                            </div>
+                            <div class="composer-help-text">
+                                Select a property brochure or photo. The message above is sent as its caption.
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div class="modal-actions">
-                    <button type="button" class="btn btn-secondary" id="outreachCancelBtn">Cancel</button>
-                    <button type="button" class="btn btn-primary" id="outreachSendBtn">
-                        <span data-icon="send" aria-hidden="true"></span> Send
-                    </button>
+
+                <!-- 5. Campaign summary and actions (Sticky Persistent Footer) -->
+                <div class="composer-footer">
+                    <div class="composer-summary-box">
+                        <div class="summary-line">
+                            <span data-icon="send" aria-hidden="true" class="summary-icon"></span>
+                            <span id="outreachSummaryText">0 recipients selected • Text only</span>
+                        </div>
+                        <div class="summary-subtext" id="outreachSummarySubtext">
+                            Campaign limit: max 25 recipients per batch.
+                        </div>
+                    </div>
+                    <div class="composer-actions">
+                        <button type="button" class="btn btn-secondary" id="outreachCancelBtn">Cancel</button>
+                        <button type="button" class="btn btn-primary" id="outreachSendBtn" disabled>
+                            <span data-icon="send" aria-hidden="true"></span> Start Campaign
+                        </button>
+                    </div>
                 </div>
             </div>
 
+            <!-- Progress View -->
             <div id="outreachProgressView" hidden>
                 <p id="outreachProgressSummary" class="mb-sm"></p>
                 <div class="outreach-progress-list" id="outreachProgressList"></div>
@@ -1533,12 +1826,122 @@
     </div>
 </div>
 
+<!-- ── Campaign Detail Modal ── -->
+<div class="modal-backdrop" id="campaignDetailModalBackdrop" hidden role="dialog" aria-modal="true" aria-labelledby="campaignDetailModalTitle">
+    <div class="modal modal-lg" id="campaignDetailModal">
+        <div class="modal-header">
+            <div>
+                <h2 id="campaignDetailModalTitle">Campaign Details</h2>
+                <div id="campaignDetailSubTitle" class="text-secondary-sm font-mono mt-4"></div>
+            </div>
+            <button class="modal-close" id="campaignDetailModalClose" aria-label="Close" type="button">×</button>
+        </div>
+        <div class="modal-body">
+            <div id="campaignDetailSummaryStats" class="campaign-summary-chips mb-md">
+                <!-- Filled by JS: Chips for Status, Total, Sent, Failed, Skipped -->
+            </div>
+
+            <div class="form-group mb-md" id="campaignDetailAttachmentBox" hidden>
+                <label class="form-label text-sm font-bold">Media Attachment</label>
+                <div class="flex-between p-sm bg-subtle border-rounded">
+                    <div class="flex-column">
+                        <span id="campaignDetailAttachmentName" class="font-bold text-sm"></span>
+                        <span id="campaignDetailAttachmentMeta" class="text-secondary-sm"></span>
+                    </div>
+                    <a id="campaignDetailAttachmentLink" href="#" target="_blank" rel="noopener" class="btn btn-secondary btn-xs" hidden>
+                        Preview File
+                    </a>
+                </div>
+            </div>
+
+            <div class="form-group mb-md">
+                <label class="form-label text-sm font-bold">Message Template</label>
+                <div id="campaignDetailMessagePreview" class="message-preview-box"></div>
+            </div>
+
+            <div class="form-group mb-md" id="campaignDetailErrorBox" hidden>
+                <label class="form-label text-sm font-bold text-danger">Error / Interrupt Reason</label>
+                <div id="campaignDetailErrorText" class="text-danger-sm"></div>
+            </div>
+
+            <h3 class="card-title text-sm mb-sm">Recipients Breakdown</h3>
+            <div class="table-container max-h-400">
+                <table class="data-table" aria-label="Campaign recipients breakdown">
+                    <thead>
+                        <tr>
+                            <th scope="col">Contact</th>
+                            <th scope="col">Phone</th>
+                            <th scope="col">Status</th>
+                            <th scope="col">Reason / Error</th>
+                            <th scope="col">Sent At</th>
+                        </tr>
+                    </thead>
+                    <tbody id="campaignDetailRecipientsBody">
+                        <tr><td colspan="5" class="empty-state">Loading recipients…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="modal-actions mt-md flex-between">
+                <div>
+                    <button type="button" class="btn btn-danger btn-sm" id="campaignDetailCancelBtn" hidden>
+                        <span data-icon="circle-x" aria-hidden="true"></span> Cancel Send
+                    </button>
+                </div>
+                <div>
+                    <button type="button" class="btn btn-secondary" id="campaignDetailDoneBtn">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Edit Contact Modal ── -->
+<div class="modal-backdrop" id="editContactModalBackdrop" hidden role="dialog" aria-modal="true" aria-labelledby="editContactModalTitle">
+    <div class="modal" id="editContactModal">
+        <div class="modal-header">
+            <div>
+                <h2 id="editContactModalTitle">Edit Contact</h2>
+                <div id="editContactSubTitle" class="text-secondary-sm mt-4 font-mono"></div>
+            </div>
+            <button class="modal-close" id="editContactModalClose" aria-label="Close" type="button">×</button>
+        </div>
+        <form id="editContactForm">
+            <div class="modal-body">
+                <input type="hidden" id="editContactId">
+                <div class="form-group mb-md">
+                    <label for="editContactName">Name</label>
+                    <input type="text" id="editContactName" class="form-control" placeholder="Contact name" maxlength="200" autocomplete="name">
+                </div>
+                <div class="form-group mb-md">
+                    <label for="editContactPhone">Phone</label>
+                    <input type="text" id="editContactPhone" class="form-control" disabled readonly aria-describedby="editContactPhoneHelp">
+                    <small id="editContactPhoneHelp" class="text-secondary-sm">Phone numbers cannot be changed to preserve message history and delivery integrity.</small>
+                </div>
+                <div class="form-group mb-md">
+                    <label for="editContactLabel">Label</label>
+                    <input type="text" id="editContactLabel" class="form-control" placeholder="e.g. Lead, VIP, Investor" maxlength="60">
+                </div>
+                <div class="form-group mb-md">
+                    <label for="editContactNotes">Notes</label>
+                    <textarea id="editContactNotes" class="form-control" rows="3" placeholder="Additional notes or preferences" maxlength="2000"></textarea>
+                </div>
+                <div id="editContactSafetyInfo" class="text-secondary-sm mb-sm"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" id="editContactCancelBtn">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="editContactSaveBtn">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- Toast container -->
 <div class="toast-container" id="toastContainer" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <script src="js/chart.umd.min.js"></script>
 <script src="js/icons.js"></script>
-<script src="js/app.js?v=20260919_4"></script>
-<script src="js/inventory.js?v=20261012_1"></script>
+<script src="js/app.js?v=20261018_2"></script>
+<script src="js/inventory.js?v=20261018_3"></script>
 </body>
 </html>
