@@ -1,30 +1,27 @@
 # WORKPILOT AUTONOMOUS LOOP — CURRENT HANDOFF
 
-**Current Cycle:** Iteration 10  
-**Active Item:** `W9` — Agent availability (Set Busy toast but card stays `available`, repeated toasts, wrong ID, DB write, stale state, polling overwrite, double submit)  
-**Previous Item:** `W8` — Reminders 24h + 2h (VERIFIED — Advance policies, PostgreSQL row status updates, idempotency, server restart recovery, cancellation suppression, invalid phone bounds)  
-**Timestamp:** 2026-10-26T02:56:00+05:30  
+**Current Cycle:** Iteration 11  
+**Active Item:** `W10` — SLA breached badges (verify rules/timestamps first — breaches may be legitimate; fix only if calculation, first-response tracking, reassignment handling, sweep, or UI mapping is wrong)  
+**Previous Item:** `W9` — Agent availability (VERIFIED — `PUT /crm/agents/:id` payload whitelist fixed to include `routing_status`, button double-submit disabled, agent self-toggle authorized, live script + 17 unit tests verified)  
+**Timestamp:** 2026-10-26T03:05:00+05:30  
 
 ### What Was Just Done
-1. Completed **W8 (Reminders 24h + 2h)**:
-   - Validated PostgreSQL `scheduled_messages` schema (`appointment_id`, `reminder_type`, `error_message`).
-   - Built and ran [`tests/live/live_reminders.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_reminders.js):
-     - Step 1: Verified short-notice scheduling policies (>24h schedules 2, 10h schedules 1, 1h schedules 0).
-     - Step 2: Verified scheduler execution claims due rows, dispatches, and updates status to `sent`.
-     - Step 3: Verified idempotency (subsequent tick claims 0).
-     - Step 4: Verified worker restart / crash recovery (`reclaimStuckScheduledMessages`) marks interrupted rows as `failed` with diagnostic reason.
-     - Step 5: Verified cancellation suppression marks pending reminders as `cancelled`.
-     - Step 6: Verified invalid recipient fails boundedly with status `failed`.
-   - Ran `npx jest tests/appointment-reminders.test.js`: 12/12 passed.
-   - Saved system evidence in `.workpilot/evidence/W8/evidence.json`.
+1. Completed **W9 (Agent availability)**:
+   - Diagnosed root cause: `PUT /crm/agents/:id` in [`src/routes/api.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/routes/api.js) omitted `routing_status`, `weight`, and `max_concurrent_leads`, resulting in empty field updates to `updateAgent()`, no database persistence, and repeated clicks on frontend button.
+   - Added support for `routing_status`, `weight`, and `max_concurrent_leads` in `PUT /crm/agents/:id` and `POST /crm/agents`.
+   - Authorized agents with role `agent` to update their own `routing_status`/`status`.
+   - Updated [`public/js/app.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/public/js/app.js) to disable button during toggle request, await server response, and reload verified state.
+   - Fixed missing `dotenv` loading in `tests/bugfixes-verification.test.js`.
+   - Built and ran [`tests/live/live_agent_status.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_agent_status.js): Set Busy -> PostgreSQL `status = 'paused'` -> Workload returns `busy` -> Lead routing skips busy agent -> Set Available -> PostgreSQL `status = 'active'` -> Cross-tenant 404 isolation.
+   - Ran `node --test tests/bugfixes-verification.test.js`: 6/6 passed.
+   - Ran `npx jest tests/lead-assignment-sla.test.js`: 17/17 passed.
+   - Saved system evidence in `.workpilot/evidence/W9/evidence.json`.
    - Set status to **`VERIFIED`**.
 
 ### What Is Next
-1. Investigate and verify **W9 (Agent availability)**:
-   - Investigate why user observed: "Set Busy toast but card stays `available`, repeated toasts: wrong ID? DB write? stale state? polling overwrite? double submit? toast before confirmation? Verify routing honors status".
-   - Inspect backend endpoints for agent status toggle (`src/routes/` and `src/services/database.js`).
-   - Inspect frontend UI (`public/` JS scripts, agent cards, status buttons, polling intervals).
-   - Formulate falsifiable hypothesis, fix root cause, write automated regression test, build and execute `tests/live/live_agent_status.js`.
+1. Investigate and verify **W10 (SLA breached badges)**:
+   - Verify rules/timestamps: calculation of `sla_response_due_at`, first-response tracking (`first_response_at`), reassignment handling, sweep process (`checkSlaBreaches`), and UI badge mapping in CRM kanban/deals.
+   - Build `tests/live/live_sla.js` covering on-time response, breach detection, sweep escalation, reassignment reset/preservation, and UI mapping.
 
 ### Open Questions / Human Input Needed
 - As required by §0, please provide your test device numbers to populate the live allowlist:

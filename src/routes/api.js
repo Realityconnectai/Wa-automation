@@ -1257,6 +1257,7 @@ router.post('/crm/agents', writeLimiter, requireDurableWrite, requireManagerOrAd
         phone: optionalString(body.phone, 'phone', 30),
         role: body.role || 'agent',
         status: body.status || 'active',
+        routing_status: body.routing_status,
         // Accept both naming conventions from callers
         routingWeight: body.weight || body.routing_weight || 1,
         maxActiveLeads: body.max_concurrent_leads || body.max_active_leads || 20,
@@ -1271,22 +1272,42 @@ router.get('/crm/agents/:id', asyncHandler(async (req, res) => {
     res.json({ success: true, data: agent });
 }));
 
-router.put('/crm/agents/:id', writeLimiter, requireDurableWrite, requireManagerOrAdmin, asyncHandler(async (req, res) => {
+router.put('/crm/agents/:id', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
     const uid = req.user.id;
     const agentId = requireId(req.params.id, 'agent id');
     const body = req.body || {};
+
+    // Check permissions: manager/admin or agent updating their own status
+    const isManagerOrAdmin = req.user.role === 'admin' || req.user.role === 'manager';
+    if (!isManagerOrAdmin) {
+        const currentAgent = await leadAssignment.getAgentById(uid, agentId);
+        if (!currentAgent || (currentAgent.user_account_id !== uid && currentAgent.id !== uid)) {
+            return res.status(403).json({ success: false, error: 'Only admins and managers can perform this action' });
+        }
+        const keys = Object.keys(body);
+        const allowedAgentKeys = ['routing_status', 'status'];
+        const hasDisallowedKeys = keys.some(k => !allowedAgentKeys.includes(k));
+        if (hasDisallowedKeys) {
+            return res.status(403).json({ success: false, error: 'Agents can only update their own routing status' });
+        }
+    }
+
     const fields = {};
     if (body.name !== undefined) fields.name = requireString(body.name, 'name', { max: 200 });
     if (body.email !== undefined) fields.email = optionalString(body.email, 'email', 255);
     if (body.phone !== undefined) fields.phone = optionalString(body.phone, 'phone', 30);
     if (body.role !== undefined) fields.role = body.role;
     if (body.status !== undefined) fields.status = body.status;
+    if (body.routing_status !== undefined) fields.routing_status = body.routing_status;
     if (body.routing_weight !== undefined) fields.routing_weight = body.routing_weight;
+    if (body.weight !== undefined) fields.weight = body.weight;
     if (body.max_active_leads !== undefined) fields.max_active_leads = body.max_active_leads;
+    if (body.max_concurrent_leads !== undefined) fields.max_concurrent_leads = body.max_concurrent_leads;
     if (body.user_account_id !== undefined) fields.user_account_id = body.user_account_id;
+
     const agent = await leadAssignment.updateAgent(uid, agentId, fields);
     if (!agent) return res.status(404).json({ success: false, error: 'Agent not found' });
-    res.json({ success: true, data: agent });
+    res.json({ success: true, data: agent, agent });
 }));
 
 router.delete('/crm/agents/:id', writeLimiter, requireManagerOrAdmin, asyncHandler(async (req, res) => {

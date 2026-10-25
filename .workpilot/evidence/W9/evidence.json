@@ -1,0 +1,43 @@
+{
+  "id": "W9",
+  "title": "Agent availability: Set Busy toast but card stays available, repeated toasts",
+  "status": "VERIFIED",
+  "timestamp": "2026-10-26T03:03:30+05:30",
+  "evidence": {
+    "live_script": "tests/live/live_agent_status.js",
+    "regression_suites": [
+      "tests/bugfixes-verification.test.js",
+      "tests/lead-assignment-sla.test.js"
+    ],
+    "verification_results": {
+      "set_busy_http_put": {
+        "status_code": 200,
+        "response_routing_status": "busy",
+        "postgres_raw_status": "paused",
+        "workload_api_routing_status": "busy"
+      },
+      "routing_honors_busy": {
+        "deal_assigned_to": 1,
+        "busy_agent_id": 35,
+        "skipped_busy_agent": true
+      },
+      "set_available_http_put": {
+        "status_code": 200,
+        "response_routing_status": "available",
+        "postgres_raw_status": "active"
+      },
+      "tenant_isolation": {
+        "tenant_b_cross_tenant_update_status": 404,
+        "tenant_a_agent_unaffected": true
+      },
+      "double_submit_protection": {
+        "button_disabled_during_request": true
+      }
+    },
+    "root_cause_analysis": {
+      "backend": "PUT /crm/agents/:id in src/routes/api.js omitted routing_status, weight, and max_concurrent_leads from the allowed fields map, causing updateAgent() to receive an empty object and persist zero changes.",
+      "frontend": "public/js/app.js did not disable the toggle button during request execution, allowing repeated rapid clicks, and re-fetched the unchanged agent workload which reverted the card to available.",
+      "permissions": "Agents with role 'agent' were blocked by requireManagerOrAdmin from updating their own routing status."
+    }
+  }
+}

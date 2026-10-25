@@ -137,12 +137,17 @@
   {
     "id": "W9",
     "title": "Agent availability: Set Busy toast but card stays available, repeated toasts",
-    "status": "OPEN",
-    "attempts": 0,
-    "hypotheses": [],
+    "status": "VERIFIED",
+    "attempts": 1,
+    "hypotheses": [
+      {
+        "text": "PUT /crm/agents/:id discarded routing_status from request payload causing DB writes to be no-ops while returning HTTP 200, and client lacked double-submit protection causing repeated toasts",
+        "result": "CONFIRMED"
+      }
+    ],
     "last_error_signature": null,
-    "next_action": "Awaiting W0 verification",
-    "evidence": [".workpilot/evidence/W9/"]
+    "next_action": "None (W9 Verified)",
+    "evidence": [".workpilot/evidence/W9/evidence.json"]
   },
   {
     "id": "W10",

@@ -1455,17 +1455,19 @@ async function deleteAgentFromForm() {
     }
 }
 
-async function toggleAgentStatus(agentId, currentStatus) {
+async function toggleAgentStatus(agentId, currentStatus, btn = null) {
     const nextStatus = currentStatus === 'available' ? 'busy' : 'available';
+    if (btn) btn.disabled = true;
     try {
         await api(`/api/crm/agents/${agentId}`, {
             method: 'PUT',
             body: JSON.stringify({ routing_status: nextStatus })
         });
         showToast(`Agent status updated to ${nextStatus}`, 'success');
-        loadAgentWorkload();
+        await loadAgentWorkload();
     } catch (err) {
         showToast(err.message || 'Failed to update agent status', 'error');
+        if (btn) btn.disabled = false;
     }
 }
 
@@ -4285,10 +4287,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     document.getElementById('agentWorkloadList')?.addEventListener('click', (e) => {
         const btn = e.target.closest('[data-agent-action]');
-        if (!btn) return;
+        if (!btn || btn.disabled) return;
         const agentId = Number(btn.dataset.agentId);
         if (btn.dataset.agentAction === 'toggle-status') {
-            toggleAgentStatus(agentId, btn.dataset.currentStatus);
+            toggleAgentStatus(agentId, btn.dataset.currentStatus, btn);
         } else if (btn.dataset.agentAction === 'edit') {
             const agent = agentsCache.find(a => a.id === agentId);
             if (agent) openAgentModal(agent);

@@ -175,5 +175,23 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
   - `npx jest tests/appointment-reminders.test.js` executed: 12/12 unit tests passed.
 - **Status Change:** `W8` → **`VERIFIED`**. Next: `W9`.
 
+### Iteration 10 — 2026-10-26 (W9 Agent Availability: VERIFIED)
+- **Target:** W9 Agent availability (Set Busy toast but card stays available, repeated toasts: wrong ID? DB write? stale state? polling overwrite? double submit? toast before confirmation? Verify routing honors status)
+- **Root Cause (CONFIRMED):**
+  1. **Backend Payload Whitelist Omission:** In [`src/routes/api.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/routes/api.js), `PUT /crm/agents/:id` explicitly whitelisted fields from `req.body`, but completely omitted `routing_status`, `weight`, and `max_concurrent_leads`. When the frontend sent `{ routing_status: 'busy' }`, `updateAgent` was called with `{}`. The database row was never updated, yet HTTP 200 was returned.
+  2. **Agent Self-Update Permission:** `PUT /crm/agents/:id` was guarded exclusively by `requireManagerOrAdmin`, preventing logged-in agent user accounts from toggling their own availability status.
+  3. **Frontend Double-Submit:** In [`public/js/app.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/public/js/app.js), the toggle button was not disabled during the in-flight request, allowing rapid clicks to trigger repeated API calls and toasts. Furthermore, `loadAgentWorkload()` was invoked following the false 200, reloading the unchanged DB row and flipping the UI back to `available`.
+- **Files Changed:**
+  - [`src/routes/api.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/routes/api.js): Added `routing_status`, `weight`, and `max_concurrent_leads` to allowed fields in `PUT /crm/agents/:id` and `POST /crm/agents`. Updated role authorization to allow agents to update their own `routing_status`/`status`.
+  - [`public/js/app.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/public/js/app.js): Updated `toggleAgentStatus` and click handler to disable button during API execution, await server state confirmation, and prevent duplicate submissions.
+  - [`tests/bugfixes-verification.test.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/bugfixes-verification.test.js): Added missing `require('dotenv').config()` for database tests.
+  - [`tests/live/live_agent_status.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_agent_status.js): Live test verifying Set Busy HTTP PUT, DB `status = 'paused'`, GET workload returning `busy`, lead routing skipping busy agent, Set Available HTTP PUT, DB `status = 'active'`, and tenant isolation (Tenant B 404).
+- **Verification:**
+  - `tests/live/live_agent_status.js` executed: all steps passed (Set Busy, routing skip, Set Available, tenant isolation).
+  - `node --test tests/bugfixes-verification.test.js` executed: 6/6 tests passed.
+  - `npx jest tests/lead-assignment-sla.test.js` executed: 17/17 tests passed.
+- **Status Change:** `W9` → **`VERIFIED`**. Next: `W10`.
+
+
 
 
