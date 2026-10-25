@@ -1,0 +1,16 @@
+{
+  "item": "W5",
+  "timestamp": "2026-10-26T02:28:45+05:30",
+  "investigation": {
+    "findings": "Inspected multi-turn Gemini 2.5/3.x function calling in src/services/ai.js. When Gemini generated tool calls for check_availability or book_appointment, previously stripped candidate parts caused 'HTTP 400: Function call is missing a thought_signature in functionCall parts'. By preserving response.candidates[0].content directly, the thoughtSignature and callId are preserved across turns.",
+    "root_cause": "CONFIRMED: Gemini 2.5/3.x requires candidate thoughtSignature in multi-turn tool response history. Preserved via candidateContent push in src/services/ai.js."
+  },
+  "changes": [
+    "src/services/ai.js: Preserved response.candidates[0].content with thoughtSignature and callId across tool loop turns.",
+    "tests/live/live_gemini.js: Live verification script executing real multi-turn tool calling against Gemini API (check_availability returning real slots for property viewing), verifying zero thought_signature errors and honest 400 rejection on invalid keys."
+  ],
+  "verification": {
+    "live_script": "tests/live/live_gemini.js passed (real Gemini API execution, multi-turn tool execution, slots offered, invalid key honest rejection)",
+    "status": "VERIFIED"
+  }
+}

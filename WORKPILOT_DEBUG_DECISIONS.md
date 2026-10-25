@@ -33,8 +33,8 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
 | **W2** | Text-only campaign | **LIVE_PENDING_HUMAN** | W1 | Pacing, isolation, name template fallback, counters (Automated checks PASS, awaiting live device send) |
 | **W3** | Shared media service ("id property... undefined") | **LIVE_PENDING_HUMAN** | W1 | `MessageMedia` construction, `newMsgKey` preserve in injected utils (Automated checks PASS, awaiting live device send) |
 | **W4** | Campaign media end-to-end | **LIVE_PENDING_HUMAN** | W2, W3 | Media campaign dispatch + counters (Automated checks PASS, awaiting live device send) |
-| **W5** | Gemini/AI tools & `thought_signature` | **INVESTIGATING** | W0 | Gemini 2.5/3.x thought signature preservation on multi-turn function calls |
-| **W6** | Brochure/property intent | **OPEN** | W3, W5 | Intent matching, PDF asset lookup, honest failure response |
+| **W5** | Gemini/AI tools & `thought_signature` | **VERIFIED** | W0 | Gemini 2.5/3.x thought signature preservation on multi-turn function calls |
+| **W6** | Brochure/property intent | **INVESTIGATING** | W3, W5 | Intent matching, PDF asset lookup, honest failure response |
 | **W7** | Appointment booking flow | **OPEN** | W1, W5 | Intent to real slot query, booking persistence, double-booking rejection |
 | **W8** | Reminders 24h + 2h scheduling | **OPEN** | W1, W7 | Reminder job generation, time calculation, cancellation handling |
 | **W9** | Agent availability toggle | **OPEN** | W0 | Set Busy/Available UI state, double-toast fix, routing skip |
@@ -106,3 +106,13 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
   - `tests/live/live_campaign_media.js` executed: all 4 automated steps passed.
   - `npx jest tests/outreach-ui-unit.test.js` executed: 12/12 passed.
 - **Status Change:** `W4` → **`LIVE_PENDING_HUMAN`** (Automated checks complete; live media campaign dispatch awaiting §0 allowlist input from operator). Next: `W5`.
+
+### Iteration 6 — 2026-10-26 (W5 Gemini AI Tools & Thought Signature: VERIFIED)
+- **Target:** W5 Gemini AI tools (`thought_signature` preservation, multi-turn tool calling, honest fallback)
+- **Root Cause (CONFIRMED):** Gemini 2.5/3.x returns candidate `functionCall` parts alongside an internal `thoughtSignature`. When `ai.js` constructed synthetic parts for round 2, it omitted `thoughtSignature`, triggering `HTTP 400: Function call is missing a thought_signature in functionCall parts`. Preserving `response.candidates[0].content` resolved the turn-2 crash.
+- **Files Changed:**
+  - [`src/services/ai.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/ai.js): Preserved `response.candidates[0].content` with `thoughtSignature` and `callId` across tool loop turns.
+  - [`tests/live/live_gemini.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_gemini.js): Live verification script performing real multi-turn tool calls (`check_availability` returning real slots), verifying zero thought signature errors, and testing honest failure rejection.
+- **Verification:**
+  - `tests/live/live_gemini.js` executed: all 3 automated steps passed against live Gemini API.
+- **Status Change:** `W5` → **`VERIFIED`**. Next: `W6`.

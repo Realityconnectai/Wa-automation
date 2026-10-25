@@ -1,25 +1,27 @@
 # WORKPILOT AUTONOMOUS LOOP — CURRENT HANDOFF
 
-**Current Cycle:** Iteration 6  
-**Active Item:** `W5` — Gemini/AI tools (`thought_signature` preservation, valid model IDs, tool arg validation, honest fallback)  
-**Previous Item:** `W4` — Campaign media end-to-end + counters (LIVE_PENDING_HUMAN — Automated fixture, tenant isolation, linkage tests & Jest suites PASS)  
-**Timestamp:** 2026-10-26T02:26:00+05:30  
+**Current Cycle:** Iteration 7  
+**Active Item:** `W6` — Brochure/property intent (`mujhe boruchure share kro iska`, context `noida`: intent -> project match -> asset lookup -> shared media send -> confirm only after dispatch; clarify if ambiguous; honest if asset missing; do NOT substitute meeting offer)  
+**Previous Item:** `W5` — Gemini/AI tools & thought_signature (VERIFIED — Live multi-turn tool calling with real slots executed against live Gemini API)  
+**Timestamp:** 2026-10-26T02:30:00+05:30  
 
 ### What Was Just Done
-1. Completed **W4 (Campaign media end-to-end + counters)** automated verification:
-   - Verified active fixtures on disk: `WorkPilot_Solutions.pdf` and `TECH_EVENTS.jpeg`.
-   - Verified tenant isolation on media assets (other tenants cannot attach or select user 3's assets).
-   - Verified `media_asset_id` column persistence on `outreach_jobs` and deterministic idempotency key construction.
-   - Built and executed [`tests/live/live_campaign_media.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_campaign_media.js) (passed all 4 automated steps).
-   - Verified `npx jest tests/outreach-ui-unit.test.js` (12/12 passed) and `npx jest tests/outreach-media-unit.test.js` (13/13 passed).
-   - Set status to `LIVE_PENDING_HUMAN`.
+1. Completed **W5 (Gemini/AI tools & thought_signature)** verification:
+   - Preserved `response.candidates[0].content` with `thoughtSignature` and `callId` across tool calling turns in [`src/services/ai.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/ai.js).
+   - Built and executed [`tests/live/live_gemini.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_gemini.js) against live Gemini API with real tenant 3 key:
+     - Turn 1: Model called `check_availability`.
+     - Tool execution: Retrieved actual PostgreSQL availability slots for business.
+     - Turn 2: Preserved `thoughtSignature` seamlessly without HTTP 400. Model responded naturally with real slots.
+     - Negative test: Invalid key correctly rejected without fabricating success.
+   - Set status to **`VERIFIED`**.
 
 ### What Is Next
-1. Investigate and verify **W5 (Gemini/AI tools & thought_signature)**:
-   - Audit `src/services/ai.js` and `src/services/gemini-client.js`.
-   - Verify `thought_signature` is preserved across tool-call turns without stripping candidate parts.
-   - Build `tests/live/live_gemini.js` with multi-turn tool execution.
-   - Verify honest error fallback when Gemini key is exhausted/invalid.
+1. Investigate and verify **W6 (Brochure/property intent)**:
+   - Audit `src/services/brochure-drop.js` and `src/services/chatbot.js`.
+   - Verify intent matching for phrases like `"mujhe boruchure share kro iska"` with locality context (e.g. `noida`).
+   - Ensure project matching identifies project, finds active PDF brochure, and dispatches via shared media send.
+   - Verify that if asset is missing or project is ambiguous, it clarifies or honestly states so without substituting a meeting offer.
+   - Build `tests/live/live_brochure_chat.js` and verify.
 
 ### Open Questions / Human Input Needed
 - As required by §0, please provide your test device numbers to populate the live allowlist:

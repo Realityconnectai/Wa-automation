@@ -77,26 +77,31 @@
   {
     "id": "W5",
     "title": "Gemini/AI tools: model IDs valid, thought_signature preserved across tool-call turns, tool arg validation, no fabricated success",
-    "status": "INVESTIGATING",
+    "status": "VERIFIED",
     "attempts": 1,
     "hypotheses": [
       {
         "text": "Gemini 2.5/3.x returns candidate functionCall parts with thoughtSignature. In multi-turn tool calling, stripping candidate content and pushing synthetic parts causes HTTP 400: Function call is missing a thought_signature in functionCall parts.",
-        "result": "CONFIRMED: Addressed in src/services/ai.js by preserving candidate content directly; need live verification script live_gemini.js."
+        "result": "CONFIRMED: Addressed in src/services/ai.js by preserving candidate content directly; verified with live_gemini.js real API call across multiple turns."
       }
     ],
     "last_error_signature": "Function call is missing a thought_signature in functionCall parts",
-    "next_action": "Verify live_gemini.js multi-turn tool execution with real/mock Gemini client",
-    "evidence": [".workpilot/evidence/W5/"]
+    "next_action": "Complete",
+    "evidence": [".workpilot/evidence/W5/evidence.json"]
   },
   {
     "id": "W6",
     "title": "Brochure/property intent: intent -> project match -> asset lookup -> shared media send -> confirm only after dispatch",
-    "status": "OPEN",
-    "attempts": 0,
-    "hypotheses": [],
+    "status": "INVESTIGATING",
+    "attempts": 1,
+    "hypotheses": [
+      {
+        "text": "Inbound brochure intent detection requires matching project from conversation context, looking up active PDF asset, and sending via shared media send with honest fallback when asset is missing.",
+        "result": "INVESTIGATING"
+      }
+    ],
     "last_error_signature": null,
-    "next_action": "Awaiting W3, W5",
+    "next_action": "Audit src/services/brochure-drop.js and chatbot.js brochure routing; build tests/live/live_brochure_chat.js",
     "evidence": [".workpilot/evidence/W6/"]
   },
   {
