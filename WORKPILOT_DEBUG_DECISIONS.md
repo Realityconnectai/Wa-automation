@@ -233,7 +233,19 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
 - **Verification:**
   - `tests/live/live_auth_cors.js` executed: all 6 steps passed.
   - `npx jest tests/cors.test.js` executed: 10/10 tests passed.
-- **Status Change:** `W11` → **`VERIFIED`**. Next: `W12`.
+### Iteration 13 — 2026-10-26 (W12 UI Assets, Icons, CSS & CSP Sweep: VERIFIED)
+- **Target:** W12 UI assets, icons, CSS & inline-blocking sweep across all pages and roles.
+- **Root Cause (CONFIRMED):**
+  1. The application's SVG icon library (`public/js/icons.js`) had missing definitions for 10 icons referenced across templates and dynamic JS (`alert-circle`, `alert-triangle`, `shield-alert`, `x`, `circle-x`, `paperclip`, `file-up`, `git-pull-request`, `edit-2`, `loader`), causing empty rendered spans and missing close/attach buttons.
+  2. Verified first-party HTML/JS files contain 0 inline `style="..."` attributes and 0 inline `on*="..."` handlers.
+- **Files Changed:**
+  - [`public/js/icons.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/public/js/icons.js): Added full SVG definitions for all 10 missing icons.
+  - [`tests/live/live_ui_sweep.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_ui_sweep.js): Playwright test suite checking all 17 public, admin, dashboard sections, modals, and responsive viewports (1280px & 390px) for CSP violations, console errors, failed asset requests, and non-zero icon dimensions.
+  - [`.workpilot/evidence/W12/evidence.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/.workpilot/evidence/W12/evidence.json): Snapshot containing verification metrics and 17 screenshots.
+- **Verification:**
+  - `tests/live/live_ui_sweep.js` executed: 17 screenshots captured, 322 icons verified, 0 failed asset requests, 0 console errors, 0 CSP violations.
+- **Status Change:** `W12` → **`VERIFIED`**. Next: `W13`.
+
 
 
 

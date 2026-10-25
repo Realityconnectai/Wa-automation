@@ -1,26 +1,38 @@
 # WORKPILOT AUTONOMOUS LOOP — CURRENT HANDOFF
 
-**Current Cycle:** Iteration 13  
-**Active Item:** `W12` — UI assets, icons, CSS & inline-blocking sweep (see §4A) — every page, every role  
-**Previous Item:** `W11` — CORS / CSP / login (VERIFIED — `FRONTEND_ORIGIN` incorporated into `getAllowedOrigins()`, CSP `img-src` enriched with `blob:` for preview URLs, `connect-src` expanded to allowed origins, error responses guaranteed CORS headers without wildcard, verified via `tests/live/live_auth_cors.js` + 10 unit tests)  
-**Timestamp:** 2026-10-26T03:14:30+05:30  
+**Current Cycle:** Iteration 14  
+**Active Item:** `W13` — Full regression + cross-feature audit (§6)  
+**Previous Item:** `W12` — UI assets, icons, CSS & inline-blocking sweep (VERIFIED — Added 10 missing SVG definitions in `public/js/icons.js`, validated 0 inline styles/handlers, executed Playwright sweep across 17 pages/modals with 0 CSP violations, 0 failed asset requests, 0 console errors, verified 322 icons)  
+**Timestamp:** 2026-10-26T03:25:00+05:30  
 
 ### What Was Just Done
-1. Completed **W11 (CORS / CSP / login)**:
-   - Updated [`src/config/cors.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/config/cors.js) so `getAllowedOrigins()` reads both `ALLOWED_ORIGINS` and `FRONTEND_ORIGIN`.
-   - Updated CSP in [`src/config/app.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/config/app.js) to allow `blob:` in `img-src` (for client media attachment object URLs) and dynamically permitted HTTP origins in `connect-src`.
-   - Updated `errorHandler` in [`src/utils/errors.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/utils/errors.js) to guarantee `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials: true` on error responses for allowed origins without ever using wildcard `*`.
-   - Built and ran [`tests/live/live_auth_cors.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_auth_cors.js): all 6 steps passed (preflight 204, bad credentials 401 with CORS, valid credentials, authenticated calls, unapproved origin 403, and strict CSP validation).
-   - Ran `npx jest tests/cors.test.js`: 10/10 passed.
-   - Saved system evidence in `.workpilot/evidence/W11/evidence.json`.
+1. Completed **W12 (UI assets, icons, CSS & inline-blocking sweep)**:
+   - Audited icon dictionary (`public/js/icons.js`) against all templates and dynamic JS. Added 10 missing SVG icons: `alert-circle`, `alert-triangle`, `shield-alert`, `x`, `circle-x`, `paperclip`, `file-up`, `git-pull-request`, `edit-2`, and `loader`.
+   - Audited inline CSS and event handlers: 0 inline styles, 0 inline event handlers in first-party templates and JS.
+   - Built and ran Playwright live sweep suite [`tests/live/live_ui_sweep.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_ui_sweep.js) verifying 17 pages, sections, modals, and responsive viewports (1280px & 390px mobile).
+   - Captured 17 visual screenshots in `.workpilot/evidence/W12/`.
+   - Verified 322 rendered icons, 0 failed asset requests, 0 console errors, and 0 CSP violations.
+   - Saved system evidence in [`.workpilot/evidence/W12/evidence.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/.workpilot/evidence/W12/evidence.json).
    - Set status to **`VERIFIED`**.
 
 ### What Is Next
-1. Investigate and execute **W12 (UI assets, icons, CSS & inline-blocking sweep)**:
-   - Discover all pages, modals, drawers, toasts, dropdowns, empty/loading states for all roles (`admin`, `manager`, `agent`, and public `landing`, `login`, `signup`).
-   - Audit inline styles, inline scripts, event handlers (`onclick=`, etc.), and icon fonts / SVG icons across all HTML/CSS/JS files.
-   - Build automated Playwright/Puppeteer sweep test `tests/live/live_ui_sweep.js` asserting 0 app-owned CSP violations, 0 console errors, 0 failed asset requests (404s), and non-zero icon sizes.
-   - Capture evidence and screenshots in `.workpilot/evidence/W12/<page>/`.
+1. Execute **W13 (Full regression + cross-feature audit)**:
+   - Run the complete live suite under `tests/live/`:
+     - `tests/live/live_manual_text.js`
+     - `tests/live/live_campaign_text.js`
+     - `tests/live/live_media_matrix.js`
+     - `tests/live/live_campaign_media.js`
+     - `tests/live/live_gemini.js`
+     - `tests/live/live_brochure_chat.js`
+     - `tests/live/live_appointment.js`
+     - `tests/live/live_reminders.js`
+     - `tests/live/live_agent_status.js`
+     - `tests/live/live_sla.js`
+     - `tests/live/live_auth_cors.js`
+     - `tests/live/live_ui_sweep.js`
+   - Run full unit/integration test suites (`npm test`).
+   - Run tenant isolation test across contacts, deals, campaigns, media, appointments, and agents.
+   - Finalize verification matrix in `WORKPILOT_DEBUG_DECISIONS.md`.
 
 ### Open Questions / Human Input Needed
 - As required by §0, please provide your test device numbers to populate the live allowlist:

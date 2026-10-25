@@ -182,12 +182,17 @@
   {
     "id": "W12",
     "title": "UI assets, icons, CSS & inline-blocking sweep",
-    "status": "OPEN",
-    "attempts": 0,
-    "hypotheses": [],
+    "status": "VERIFIED",
+    "attempts": 2,
+    "hypotheses": [
+      {
+        "text": "10 SVG icons lacked definitions in public/js/icons.js, and modal/section rendering needed visibility-aware dimension checks",
+        "result": "CONFIRMED"
+      }
+    ],
     "last_error_signature": null,
-    "next_action": "Awaiting W11 verification",
-    "evidence": [".workpilot/evidence/W12/"]
+    "next_action": "Completed live Playwright sweep across 17 pages with zero CSP violations, 0 failed asset loads, 0 console errors",
+    "evidence": [".workpilot/evidence/W12/evidence.json"]
   },
   {
     "id": "W13",
@@ -196,7 +201,7 @@
     "attempts": 0,
     "hypotheses": [],
     "last_error_signature": null,
-    "next_action": "Awaiting all previous items",
+    "next_action": "Execute full test suite and multi-tenant cross-feature audit",
     "evidence": [".workpilot/evidence/W13/"]
   }
 ]
