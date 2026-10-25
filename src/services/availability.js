@@ -22,10 +22,11 @@
 const {
     getAvailabilitySettings, saveAvailabilitySettings, countOverlappingAppointments,
     listAppointments, createAppointment, countAppointments,
+    getAppointmentById, updateAppointment, getLatestAppointmentForPhone,
     cancelAppointment: dbCancelAppointment
 } = require('./database');
 const { getBusyBlocks, createAppointmentEvent, cancelAppointmentEvent } = require('./google-calendar');
-const { scheduleAppointmentReminders, cancelAppointmentReminders } = require('./appointment-reminders');
+const { scheduleAppointmentReminders, cancelAppointmentReminders, rescheduleAppointmentReminders } = require('./appointment-reminders');
 const { zonedWallTimeToUtc, utcToZonedParts, isValidTimeZone, formatInZone } = require('../utils/tz');
 const { ValidationError, toSqliteUtc, assertHHMM, normalizeWorkingDays, LIMITS } = require('../utils/validate');
 
@@ -271,6 +272,61 @@ async function bookAppointment(userId, { phone, contactName = '', startIso, note
     return appointment;
 }
 
+/** Reschedules an existing confirmed appointment to a new slot with full conflict re-validation. */
+async function rescheduleAppointment(userId, id, { startIso, notes }) {
+    const existing = await getAppointmentById(userId, id);
+    if (!existing || existing.status !== 'confirmed') {
+        const err = new Error('Appointment not found or not confirmed.');
+        err.code = 'NOT_FOUND';
+        throw err;
+    }
+
+    const start = new Date(startIso);
+    if (isNaN(start.getTime())) {
+        const err = new ValidationError('startIso is not a valid date/time.', 'startIso');
+        err.code = 'INVALID_SLOT';
+        throw err;
+    }
+
+    const settings = await getSettings(userId);
+    const end = new Date(start.getTime() + settings.slotDurationMinutes * 60000);
+
+    if (start.getTime() < Date.now()) {
+        const err = new Error('That slot is in the past.');
+        err.code = 'SLOT_IN_PAST';
+        throw err;
+    }
+
+    if (!isValidSlotBoundary(settings, start)) {
+        const err = new Error('That is not one of the available appointment slots.');
+        err.code = 'INVALID_SLOT';
+        throw err;
+    }
+
+    const startSql = toSqliteUtc(start);
+    const endSql = toSqliteUtc(end);
+
+    const updated = await updateAppointment(userId, id, {
+        startAt: startSql,
+        endAt: endSql,
+        notes: notes !== undefined ? notes : existing.notes
+    });
+
+    if (!updated) {
+        const err = new Error('That slot was just booked by someone else. Please pick another.');
+        err.code = 'SLOT_TAKEN';
+        throw err;
+    }
+
+    try {
+        await rescheduleAppointmentReminders(userId, updated);
+    } catch (remErr) {
+        console.warn('⚠️ Could not reschedule appointment reminders (non-fatal):', remErr.message);
+    }
+
+    return updated;
+}
+
 /** Cancels an appointment and best-effort removes its calendar event and scheduled reminders. Returns the cancelled row, or null if it didn't exist. */
 async function cancelAppointment(userId, id) {
     const row = await dbCancelAppointment(userId, id);
@@ -293,5 +349,7 @@ module.exports = {
     saveSettings,
     getAvailableSlots,
     bookAppointment,
-    cancelAppointment
+    rescheduleAppointment,
+    cancelAppointment,
+    getLatestAppointmentForPhone
 };

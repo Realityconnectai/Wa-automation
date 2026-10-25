@@ -107,12 +107,17 @@
   {
     "id": "W7",
     "title": "Appointment booking: intent -> real slots -> collect details -> confirm slot -> persist -> confirmation only after persistence",
-    "status": "OPEN",
-    "attempts": 0,
-    "hypotheses": [],
-    "last_error_signature": "Generic acknowledgment instead of booking flow",
-    "next_action": "Awaiting W1, W5",
-    "evidence": [".workpilot/evidence/W7/"]
+    "status": "VERIFIED",
+    "attempts": 1,
+    "hypotheses": [
+      {
+        "text": "Appointment booking requires intent detection, real available slot retrieval, durable PostgreSQL persistence, double-booking rejection via advisory locking, reminder scheduling, and full reschedule/cancel tool support in Gemini.",
+        "result": "CONFIRMED: Added reschedule_appointment and cancel_appointment to AI tools, implemented updateAppointment and rescheduleAppointment with reminder invalidation, added PATCH /api/appointments/:id endpoint, and verified with live_appointment.js."
+      }
+    ],
+    "last_error_signature": null,
+    "next_action": "Complete; proceed to W8",
+    "evidence": [".workpilot/evidence/W7/evidence.json"]
   },
   {
     "id": "W8",

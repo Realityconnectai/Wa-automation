@@ -1,0 +1,37 @@
+{
+  "title": "Appointment booking lifecycle and persistence",
+  "status": "VERIFIED",
+  "timestamp": "2026-10-25T21:18:43.110Z",
+  "evidence": [
+    {
+      "step": "chat_intent",
+      "prompt": "I want to do an appointment",
+      "response": "I'd be happy to help you schedule an appointment with R2PROPERTY. \n\nWe have several open slots available on Monday, 26 October. For example, we have slots at 10:00 am, 10:30 am, or 11:00 am. Which of those works best for you?"
+    },
+    {
+      "step": "slot_booked",
+      "appointmentId": 10,
+      "slot": {
+        "startIso": "2026-10-26T04:30:00.000Z",
+        "endIso": "2026-10-26T05:00:00.000Z",
+        "label": "Mon, 26 Oct, 10:00 am"
+      },
+      "reminders": 1
+    },
+    {
+      "step": "double_booking_prevention",
+      "result": "cleanly_rejected_SLOT_TAKEN"
+    },
+    {
+      "step": "rescheduled",
+      "newSlot": "2026-10-26T05:00:00.000Z",
+      "cancelledReminders": 1,
+      "pendingReminders": 1
+    },
+    {
+      "step": "cancelled",
+      "appointmentId": 10,
+      "remainingPendingReminders": 0
+    }
+  ]
+}

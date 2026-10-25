@@ -2086,6 +2086,40 @@ async function getAppointmentById(userId, id) {
     return queryGet('SELECT * FROM appointments WHERE id = $1 AND user_id = $2', [id, userId]);
 }
 
+async function getLatestAppointmentForPhone(userId, phone) {
+    return queryGet(
+        `SELECT * FROM appointments
+         WHERE user_id = $1 AND phone = $2 AND status = 'confirmed' AND start_at > CURRENT_TIMESTAMP
+         ORDER BY start_at ASC LIMIT 1`,
+        [userId, phone]
+    );
+}
+
+async function updateAppointment(userId, id, { startAt, endAt, notes }) {
+    return transaction(async (tx) => {
+        await tx.query('SELECT pg_advisory_xact_lock($1)', [userId]);
+
+        const conflictRow = await tx.query(
+            `SELECT COUNT(*) as count FROM appointments
+             WHERE user_id = $1 AND id != $2 AND status = 'confirmed' AND start_at < $3 AND end_at > $4`,
+            [userId, id, endAt, startAt]
+        );
+
+        if (conflictRow.rows[0].count > 0) {
+            return null; // Slot already booked
+        }
+
+        const res = await tx.query(
+            `UPDATE appointments
+             SET start_at = $1, end_at = $2, notes = COALESCE($3, notes)
+             WHERE id = $4 AND user_id = $5 AND status = 'confirmed'
+             RETURNING *`,
+            [startAt, endAt, notes !== undefined ? notes : null, id, userId]
+        );
+        return res.rows[0] || null;
+    });
+}
+
 async function cancelAppointment(userId, id) {
     const row = await queryGet("SELECT * FROM appointments WHERE id = $1 AND user_id = $2 AND status = 'confirmed'", [id, userId]);
     if (!row) return null;
@@ -2572,6 +2606,8 @@ module.exports = {
     countAppointments,
     createAppointment,
     getAppointmentById,
+    getLatestAppointmentForPhone,
+    updateAppointment,
     cancelAppointment,
     createAppointmentReminder,
     cancelAppointmentReminders,

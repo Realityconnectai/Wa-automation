@@ -10,7 +10,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { getSettings, saveSettings, getAvailableSlots, bookAppointment, cancelAppointment } = require('../services/availability');
+const { getSettings, saveSettings, getAvailableSlots, bookAppointment, rescheduleAppointment, cancelAppointment } = require('../services/availability');
 const { listAppointments, countAppointments, assertPersistable } = require('../services/database');
 const { asyncHandler } = require('../utils/errors');
 const { perUser } = require('../middleware/rateLimit');
@@ -90,6 +90,26 @@ router.post('/', writeLimiter, requireDurableWrite, asyncHandler(async (req, res
         res.json({ success: true, data: appt });
     } catch (err) {
         if (['SLOT_TAKEN', 'INVALID_SLOT', 'SLOT_IN_PAST', 'APPOINTMENT_LIMIT'].includes(err.code)) {
+            return res.status(409).json({ success: false, error: err.message, code: err.code });
+        }
+        throw err;
+    }
+}));
+
+router.patch('/:id', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
+    const id = requireId(req.params.id, 'appointment id');
+    const body = req.body || {};
+    if (!body.startIso) {
+        throw new ValidationError('startIso is required.', 'startIso');
+    }
+    try {
+        const updated = await rescheduleAppointment(req.user.id, id, {
+            startIso: body.startIso,
+            notes: body.notes
+        });
+        res.json({ success: true, data: updated });
+    } catch (err) {
+        if (['SLOT_TAKEN', 'INVALID_SLOT', 'SLOT_IN_PAST', 'NOT_FOUND'].includes(err.code)) {
             return res.status(409).json({ success: false, error: err.message, code: err.code });
         }
         throw err;

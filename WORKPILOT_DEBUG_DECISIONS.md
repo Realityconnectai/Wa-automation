@@ -141,3 +141,22 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
   - `npx jest tests/brochure-drop.test.js` executed: 21/21 passed.
 - **Status Change:** `W6` → **`LIVE_PENDING_HUMAN`** (Automated checks complete; live media brochure dispatch awaiting §0 allowlist input from operator). Next: `W7`.
 
+### Iteration 8 — 2026-10-26 (W7 Appointment Booking Lifecycle: VERIFIED)
+- **Target:** W7 Appointment booking (intent -> real slots -> collect details -> confirm slot -> persist -> double-booking rejection -> cancel/reschedule)
+- **Root Cause (CONFIRMED):**
+  1. AI tool loop had `check_availability` and `book_appointment`, but lacked `reschedule_appointment` and `cancel_appointment` tool declarations and execution handlers for chatbot inbound flows.
+  2. Rescheduling required durable atomic transaction logic in `database.js` (`updateAppointment` with advisory locking and conflict checking) and `availability.js` (`rescheduleAppointment` invalidating old reminders and scheduling updated ones).
+  3. `appointments` router lacked a `PATCH /:id` endpoint for dashboard and programmatic rescheduling.
+- **Files Changed:**
+  - [`src/services/database.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/database.js): Added `updateAppointment` and `getLatestAppointmentForPhone`.
+  - [`src/services/availability.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/availability.js): Added `rescheduleAppointment` with full conflict re-validation and reminder rescheduling.
+  - [`src/services/ai.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/ai.js): Added `reschedule_appointment` and `cancel_appointment` to `BOOKING_TOOLS` and `generateReplyWithBooking`.
+  - [`src/routes/appointments.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/routes/appointments.js): Added `PATCH /api/appointments/:id` endpoint for rescheduling.
+  - [`tests/live/live_appointment.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_appointment.js): Comprehensive live test for intent detection, slot booking, DB persistence, double-booking rejection (`SLOT_TAKEN`), rescheduling with reminder invalidation, and cancellation.
+- **Verification:**
+  - `tests/live/live_appointment.js` executed: all 5 steps passed.
+  - `node --test tests/bugfixes-verification.test.js` executed: 6/6 passed.
+  - `npx jest tests/appointment-reminders.test.js` executed: 12/12 passed.
+- **Status Change:** `W7` → **`VERIFIED`**. Next: `W8`.
+
+

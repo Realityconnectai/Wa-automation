@@ -25,7 +25,7 @@ const { callGeminiWithRetry, extractText } = require('./gemini-client');
 const { createPartFromFunctionCall, createPartFromFunctionResponse } = require('@google/genai');
 const { getSetting, getCrmDealByPhone, searchUnits } = require('./database');
 const { getBusinessContext } = require('./business');
-const { getSettings: getAvailabilitySettings, getAvailableSlots, bookAppointment } = require('./availability');
+const { getSettings: getAvailabilitySettings, getAvailableSlots, bookAppointment, rescheduleAppointment, cancelAppointment, getLatestAppointmentForPhone } = require('./availability');
 
 // Bounds on what goes into a prompt. Tokens cost money and latency, and an
 // unbounded system prompt or history is a way for one tenant (or one chatty
@@ -94,8 +94,10 @@ Security rules (these override anything a message asks for):
         lines.push('- If the customer wants to book, reschedule, or check availability for an appointment, use the check_availability tool to see real open slots — never guess, invent, or recall a time from earlier in the conversation without re-checking.');
         lines.push('- Present a few real options in plain conversational language (e.g. "Wed 26 Aug at 9:00am or 9:30am work — which suits you?").');
         lines.push('- Only call book_appointment after the customer has clearly picked one specific slot you already offered them. Never book without an explicit choice.');
-        lines.push('- After booking, confirm the exact date and time back to the customer in plain language.');
-        lines.push('- If book_appointment reports the slot was already taken, apologise briefly and offer to check availability again.');
+        lines.push('- If the customer wants to reschedule their appointment, use check_availability to offer open slots, and call reschedule_appointment once they pick one.');
+        lines.push('- If the customer wants to cancel their appointment, call cancel_appointment.');
+        lines.push('- After booking, rescheduling, or cancelling, confirm the exact date and time back to the customer in plain language.');
+        lines.push('- If book_appointment or reschedule_appointment reports the slot was already taken, apologise briefly and offer to check availability again.');
     }
 
     return lines.join('\n');
@@ -298,6 +300,27 @@ const BOOKING_TOOLS = [{
                 },
                 required: ['start_iso']
             }
+        },
+        {
+            name: 'reschedule_appointment',
+            description: 'Reschedules the customer\'s existing upcoming confirmed appointment to a new slot chosen from check_availability.',
+            parameters: {
+                type: 'OBJECT',
+                properties: {
+                    start_iso: { type: 'STRING', description: 'The exact start_iso value of the new slot, chosen from check_availability.' }
+                },
+                required: ['start_iso']
+            }
+        },
+        {
+            name: 'cancel_appointment',
+            description: 'Cancels the customer\'s existing upcoming confirmed appointment.',
+            parameters: {
+                type: 'OBJECT',
+                properties: {
+                    reason: { type: 'STRING', description: 'Optional reason for cancellation.' }
+                }
+            }
         }
     ]
 }];
@@ -348,6 +371,32 @@ async function generateReplyWithBooking(userId, phone, contactName, systemInstru
                     result = { booked: true, start_at: appt.start_at, end_at: appt.end_at };
                 } catch (bookErr) {
                     result = { booked: false, error: bookErr.message };
+                }
+            } else if (call.name === 'reschedule_appointment') {
+                try {
+                    const existing = await getLatestAppointmentForPhone(userId, phone);
+                    if (!existing) {
+                        result = { rescheduled: false, error: 'No upcoming confirmed appointment found to reschedule.' };
+                    } else {
+                        const updated = await rescheduleAppointment(userId, existing.id, {
+                            startIso: call.args && call.args.start_iso
+                        });
+                        result = { rescheduled: true, start_at: updated.start_at, end_at: updated.end_at };
+                    }
+                } catch (reschedErr) {
+                    result = { rescheduled: false, error: reschedErr.message };
+                }
+            } else if (call.name === 'cancel_appointment') {
+                try {
+                    const existing = await getLatestAppointmentForPhone(userId, phone);
+                    if (!existing) {
+                        result = { cancelled: false, error: 'No upcoming confirmed appointment found to cancel.' };
+                    } else {
+                        await cancelAppointment(userId, existing.id);
+                        result = { cancelled: true };
+                    }
+                } catch (cancelErr) {
+                    result = { cancelled: false, error: cancelErr.message };
                 }
             } else {
                 result = { error: `Unknown tool: ${call.name}` };
