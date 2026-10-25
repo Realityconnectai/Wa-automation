@@ -1,0 +1,18 @@
+{
+  "item": "W0",
+  "timestamp": "2026-10-26T02:08:00+05:30",
+  "investigation": {
+    "log_findings": "Found outreach_recipients row with reason 'Send failed: t' (job a05c183d-57ff-40e9-9a27-864775e977ed, phone 105957396857003). In minified WhatsApp Web code, thrown error object is an exception t. When outreach.js did `Send failed: ${err.message}` without checking length or fallback, it logged 'Send failed: t'. Furthermore, src/utils/errors.js previously masked all status 502 errors to generic 500 'Something went wrong on our side. Please try again.', preventing operators and users from understanding upstream WhatsApp errors.",
+    "root_cause": "CONFIRMED: Minified exceptions produce single-character error messages ('t'), and errorHandler in src/utils/errors.js previously treated status 502 as a generic server error instead of forwarding actionable, redacted upstream diagnostics. Frontend public/js/app.js api() and showToast() lacked un-truncation guards for single-character error responses."
+  },
+  "changes": [
+    "tests/live/harness.js: Added assertRecipientAllowlisted safety guard and test harness.",
+    "src/utils/errors.js: Permitted status 502 and upstream WA errors through with redacted details; replaced single-character errors with code/name.",
+    "src/services/outreach.js: Added fallback to err.code/stack/name when err.message is 't' or single character.",
+    "public/js/app.js: Updated api() to safely parse non-JSON responses and un-truncate single character errors; updated showToast() to handle error objects."
+  ],
+  "verification": {
+    "unit_tests": "tests/w0-bootstrap.test.js & tests/live/harness.test.js (8/8 passed)",
+    "status": "VERIFIED"
+  }
+}

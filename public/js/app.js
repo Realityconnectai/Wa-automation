@@ -92,8 +92,25 @@ async function api(endpoint, options = {}) {
                 throw new Error('Not authenticated');
             }
         }
-        const data = await res.json();
-        if (!data.success) throw new Error(data.error || 'API request failed');
+        let data;
+        try {
+            data = await res.json();
+        } catch (_) {
+            data = null;
+        }
+        if (!data) {
+            throw new Error(`Server returned HTTP ${res.status}${res.statusText ? ` (${res.statusText})` : ''}`);
+        }
+        if (!data.success) {
+            let errMsg = data.error || data.message || `API error (${res.status})`;
+            if (typeof errMsg !== 'string') errMsg = JSON.stringify(errMsg);
+            if (errMsg === 't' || errMsg.length <= 1) errMsg = data.code || `WhatsApp operation failed (${errMsg})`;
+            const errorObj = new Error(errMsg);
+            if (data.code) errorObj.code = data.code;
+            if (data.ref) errorObj.ref = data.ref;
+            errorObj.status = res.status;
+            throw errorObj;
+        }
         return data.data;
     } catch (err) {
         console.error(`API Error [${endpoint}]:`, err);
@@ -140,11 +157,19 @@ function showToast(message, type = 'info') {
     const container = document.getElementById('toastContainer');
     const iconNames = { success: 'check-circle', error: 'x-circle', info: 'info' };
 
+    let text = message;
+    if (typeof text !== 'string') {
+        text = text?.message || text?.error || (text ? JSON.stringify(text) : 'Notification');
+    }
+    if (text === 't' || text.length === 1) {
+        text = `Action failed (${text})`;
+    }
+
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
     toast.innerHTML = `
-        <span class="toast-icon" aria-hidden="true">${Icon(iconNames[type])}</span>
-        <span class="toast-text">${escapeHtml(message)}</span>
+        <span class="toast-icon" aria-hidden="true">${Icon(iconNames[type] || 'info')}</span>
+        <span class="toast-text">${escapeHtml(text)}</span>
         <button class="toast-close" aria-label="Dismiss notification" type="button">×</button>
     `;
     container.appendChild(toast);

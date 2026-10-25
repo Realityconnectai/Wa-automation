@@ -1,0 +1,152 @@
+[
+  {
+    "id": "W0",
+    "title": "Bootstrap: locate project/frontend/backend/ports/env, confirm log sources, confirm WA session, build test harness + allowlist guard, make errors un-truncated",
+    "status": "VERIFIED",
+    "attempts": 1,
+    "hypotheses": [
+      {
+        "text": "Frontend 'Send failed: t' error occurs because err.message is a single character string or error object indexing err[0] / err.error string instead of structured error parsing.",
+        "result": "CONFIRMED: Minified exceptions produce single-character error messages ('t'), and errorHandler in src/utils/errors.js previously treated status 502 as a generic server error instead of forwarding actionable, redacted upstream diagnostics. Frontend public/js/app.js api() and showToast() lacked un-truncation guards for single-character error responses."
+      }
+    ],
+    "last_error_signature": "Send failed: t",
+    "next_action": "Complete",
+    "evidence": [".workpilot/evidence/W0/evidence.json"]
+  },
+  {
+    "id": "W1",
+    "title": "Shared text dispatch service: phone / @c.us / @lid resolution, recipient validation, session checks, real message-ID capture, honest status, idempotency",
+    "status": "INVESTIGATING",
+    "attempts": 1,
+    "hypotheses": [
+      {
+        "text": "Multi-device @lid contacts fail with 'No LID for user' when addressed as digits@c.us, and unnormalized 10-digit contacts fail without country prefix.",
+        "result": "CONFIRMED: Addressed via resolveDestinationChatId and bidirectional fallback in sendTextMessage."
+      }
+    ],
+    "last_error_signature": "No LID for user (502)",
+    "next_action": "Verify resolveDestinationChatId with negative and simulated test fixtures; prepare live script live_manual_text.",
+    "evidence": [".workpilot/evidence/W1/"]
+  },
+  {
+    "id": "W2",
+    "title": "Text-only campaign: template rendering, missing-name fallback, per-recipient isolation, counters, opt-out, pacing",
+    "status": "OPEN",
+    "attempts": 0,
+    "hypotheses": [],
+    "last_error_signature": null,
+    "next_action": "Awaiting W1 verification",
+    "evidence": [".workpilot/evidence/W2/"]
+  },
+  {
+    "id": "W3",
+    "title": "Shared media service: id property ... got undefined",
+    "status": "OPEN",
+    "attempts": 0,
+    "hypotheses": [],
+    "last_error_signature": "Data passed to get must include an id property ... but got undefined",
+    "next_action": "Awaiting W1 verification",
+    "evidence": [".workpilot/evidence/W3/"]
+  },
+  {
+    "id": "W4",
+    "title": "Campaign media end-to-end + counters",
+    "status": "OPEN",
+    "attempts": 0,
+    "hypotheses": [],
+    "last_error_signature": null,
+    "next_action": "Awaiting W2, W3",
+    "evidence": [".workpilot/evidence/W4/"]
+  },
+  {
+    "id": "W5",
+    "title": "Gemini/AI tools: model IDs valid, thought_signature preserved across tool-call turns, tool arg validation, no fabricated success",
+    "status": "OPEN",
+    "attempts": 0,
+    "hypotheses": [],
+    "last_error_signature": "Function call is missing a thought_signature in functionCall parts",
+    "next_action": "Awaiting W0 verification",
+    "evidence": [".workpilot/evidence/W5/"]
+  },
+  {
+    "id": "W6",
+    "title": "Brochure/property intent: intent -> project match -> asset lookup -> shared media send -> confirm only after dispatch",
+    "status": "OPEN",
+    "attempts": 0,
+    "hypotheses": [],
+    "last_error_signature": null,
+    "next_action": "Awaiting W3, W5",
+    "evidence": [".workpilot/evidence/W6/"]
+  },
+  {
+    "id": "W7",
+    "title": "Appointment booking: intent -> real slots -> collect details -> confirm slot -> persist -> confirmation only after persistence",
+    "status": "OPEN",
+    "attempts": 0,
+    "hypotheses": [],
+    "last_error_signature": "Generic acknowledgment instead of booking flow",
+    "next_action": "Awaiting W1, W5",
+    "evidence": [".workpilot/evidence/W7/"]
+  },
+  {
+    "id": "W8",
+    "title": "Reminders 24h + 2h: job creation, timezone/UTC math, scheduler running, due-query, locking",
+    "status": "OPEN",
+    "attempts": 0,
+    "hypotheses": [],
+    "last_error_signature": null,
+    "next_action": "Awaiting W1, W7",
+    "evidence": [".workpilot/evidence/W8/"]
+  },
+  {
+    "id": "W9",
+    "title": "Agent availability: Set Busy toast but card stays available, repeated toasts",
+    "status": "OPEN",
+    "attempts": 0,
+    "hypotheses": [],
+    "last_error_signature": null,
+    "next_action": "Awaiting W0 verification",
+    "evidence": [".workpilot/evidence/W9/"]
+  },
+  {
+    "id": "W10",
+    "title": "SLA breached badges: calculation, first-response tracking, reassignment handling",
+    "status": "OPEN",
+    "attempts": 0,
+    "hypotheses": [],
+    "last_error_signature": null,
+    "next_action": "Awaiting W0 verification",
+    "evidence": [".workpilot/evidence/W10/"]
+  },
+  {
+    "id": "W11",
+    "title": "CORS/CSP/login: config-driven allowed origins, preflight, credentials, headers on error responses",
+    "status": "OPEN",
+    "attempts": 0,
+    "hypotheses": [],
+    "last_error_signature": null,
+    "next_action": "Awaiting W0 verification",
+    "evidence": [".workpilot/evidence/W11/"]
+  },
+  {
+    "id": "W12",
+    "title": "UI assets, icons, CSS & inline-blocking sweep",
+    "status": "OPEN",
+    "attempts": 0,
+    "hypotheses": [],
+    "last_error_signature": null,
+    "next_action": "Awaiting W11 verification",
+    "evidence": [".workpilot/evidence/W12/"]
+  },
+  {
+    "id": "W13",
+    "title": "Full regression + cross-feature audit",
+    "status": "OPEN",
+    "attempts": 0,
+    "hypotheses": [],
+    "last_error_signature": null,
+    "next_action": "Awaiting all previous items",
+    "evidence": [".workpilot/evidence/W13/"]
+  }
+]

@@ -196,8 +196,19 @@ async function runJob(jobOrId, maybeUser = null) {
             await runSql("UPDATE outreach_recipients SET status='sent', sent_at=CURRENT_TIMESTAMP WHERE id=$1 AND user_id=$2", [recipient.id,user.id]);
             logOutreachEvent(fresh.id, { phone, name: contact.name, message: personalized }).catch?.(() => {});
         } catch (err) {
-            const isDisconnect = /not connected/i.test(err.message) || err.code === 'WA_NOT_CONNECTED';
-            const failReason = isDisconnect ? 'WhatsApp disconnected' : (err.message ? `Send failed: ${err.message}`.slice(0, 200) : 'Send failed');
+            const isDisconnect = /not connected/i.test(err?.message || '') || err?.code === 'WA_NOT_CONNECTED';
+            let detail = err?.message;
+            if (!detail || detail === 't' || detail.length <= 1) {
+                if (err?.code) {
+                    detail = err.code;
+                } else if (err?.stack) {
+                    const firstLine = err.stack.split('\n')[0].trim();
+                    detail = (firstLine && firstLine !== 'Error: t') ? firstLine : (err?.name || String(err));
+                } else {
+                    detail = String(err || 'Unknown dispatch error');
+                }
+            }
+            const failReason = isDisconnect ? 'WhatsApp disconnected' : `Send failed: ${detail}`.slice(0, 200);
             await runSql("UPDATE outreach_recipients SET status='failed', reason=$1 WHERE id=$2 AND user_id=$3", [failReason, recipient.id, user.id]);
             if (isDisconnect) {
                 await runSql("UPDATE outreach_recipients SET status='skipped', reason='Stopped: WhatsApp is disconnected' WHERE job_id=$1 AND user_id=$2 AND status IN ('pending','sending')", [job.id, user.id]);

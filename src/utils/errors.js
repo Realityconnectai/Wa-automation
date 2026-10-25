@@ -58,9 +58,14 @@ function errorHandler(err, req, res, next) {
 
     const status = err.status || err.statusCode || (err instanceof ValidationError ? 400 : 500);
     const isClientError = status >= 400 && status < 500;
+    const isUpstreamError = status === 502 || err.isUpstream || (err.code && err.code.startsWith('WA_'));
 
-    if (isClientError) {
-        const body = { success: false, error: redact(err.message) };
+    if (isClientError || isUpstreamError) {
+        let msg = redact(err.message || 'Request failed');
+        if (msg === 't' || msg.length <= 1) {
+            msg = err.code || err.name || 'Upstream WhatsApp error';
+        }
+        const body = { success: false, error: msg };
         if (err.code) body.code = err.code;
         if (err.field) body.field = err.field;
         return res.status(status).json(body);
