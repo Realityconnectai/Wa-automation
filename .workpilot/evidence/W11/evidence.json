@@ -1,0 +1,48 @@
+{
+  "id": "W11",
+  "title": "CORS/CSP/login (ngrok origin): config-driven allowed origins, preflight, credentials, headers on error responses",
+  "status": "VERIFIED",
+  "timestamp": "2026-10-26T03:13:22+05:30",
+  "evidence": {
+    "live_script": "tests/live/live_auth_cors.js",
+    "unit_suite": "tests/cors.test.js",
+    "verification_results": {
+      "origin_allowlist": {
+        "configured_origin": "https://enunciate-graves-dry.ngrok-free.dev",
+        "included_in_get_allowed_origins": true,
+        "is_origin_allowed": true
+      },
+      "preflight_options": {
+        "status_code": 204,
+        "access_control_allow_origin": "https://enunciate-graves-dry.ngrok-free.dev",
+        "access_control_allow_credentials": "true",
+        "access_control_allow_methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+        "access_control_allow_headers": ["Content-Type", "Authorization", "ngrok-skip-browser-warning"]
+      },
+      "error_response_cors": {
+        "status_code": 401,
+        "preserves_allow_origin": true,
+        "preserves_credentials": true,
+        "never_wildcard": true
+      },
+      "unapproved_origin_rejection": {
+        "status_code": 403,
+        "access_control_allow_origin_granted": false,
+        "error_message": "Cross-origin request blocked: origin not allowed by CORS policy."
+      },
+      "content_security_policy": {
+        "has_nonce": true,
+        "has_unsafe_inline_in_scripts": false,
+        "has_unsafe_eval": false,
+        "img_src_has_blob": true,
+        "connect_src_includes_allowed_origins": true
+      }
+    },
+    "root_cause_analysis": {
+      "env_origins": "cors.js only parsed process.env.ALLOWED_ORIGINS, ignoring process.env.FRONTEND_ORIGIN.",
+      "csp_img_src": "Content-Security-Policy img-src omitted blob:, which caused client preview renders of uploaded files and media to fail.",
+      "csp_connect_src": "Content-Security-Policy connect-src was restricted to 'self', blocking API and SSE calls when the dashboard is loaded via ngrok.",
+      "error_handler": "errorHandler in errors.js lacked an explicit guarantee of CORS headers for approved origins if unhandled exceptions occurred before response completion."
+    }
+  }
+}

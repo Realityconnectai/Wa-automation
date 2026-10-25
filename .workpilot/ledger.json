@@ -167,12 +167,17 @@
   {
     "id": "W11",
     "title": "CORS/CSP/login: config-driven allowed origins, preflight, credentials, headers on error responses",
-    "status": "OPEN",
-    "attempts": 0,
-    "hypotheses": [],
+    "status": "VERIFIED",
+    "attempts": 1,
+    "hypotheses": [
+      {
+        "text": "cors.js now includes FRONTEND_ORIGIN env var, CSP img-src includes blob:, CSP connect-src permits allowed origins, and errorHandler guarantees CORS headers on error responses without wildcard",
+        "result": "CONFIRMED"
+      }
+    ],
     "last_error_signature": null,
-    "next_action": "Awaiting W0 verification",
-    "evidence": [".workpilot/evidence/W11/"]
+    "next_action": "None (W11 Verified)",
+    "evidence": [".workpilot/evidence/W11/evidence.json"]
   },
   {
     "id": "W12",

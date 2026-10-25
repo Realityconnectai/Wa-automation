@@ -16,10 +16,15 @@ const DEFAULT_ALLOWED_ORIGINS = [
 ];
 
 function getAllowedOrigins() {
-    const envOrigins = (process.env.ALLOWED_ORIGINS || '')
+    const fromAllowed = (process.env.ALLOWED_ORIGINS || '')
         .split(',')
         .map(s => s.trim().replace(/\/+$/, ''))
         .filter(s => s && s !== '*');
+    const fromFrontend = (process.env.FRONTEND_ORIGIN || '').trim().replace(/\/+$/, '');
+    const envOrigins = [...fromAllowed];
+    if (fromFrontend && fromFrontend !== '*') {
+        envOrigins.push(fromFrontend);
+    }
     return Array.from(new Set([
         ...DEFAULT_ALLOWED_ORIGINS.map(s => s.replace(/\/+$/, '')),
         ...envOrigins

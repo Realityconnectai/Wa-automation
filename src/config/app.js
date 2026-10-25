@@ -125,13 +125,14 @@ function createApp() {
           // CSP with per-request nonce — replaces 'unsafe-inline' for scripts/styles.
           // The nonce is generated per-request in nonceMiddleware and available as res.locals.nonce.
           const nonce = res.locals.nonce;
+          const originsList = getAllowedOrigins().filter(o => o.startsWith('http'));
           res.setHeader('Content-Security-Policy', [
               "default-src 'self'",
               `script-src 'self' 'nonce-${nonce}'`,
               "script-src-attr 'none'",
               `style-src 'self' 'nonce-${nonce}'`,
-              "img-src 'self' data:",       // data: is required: QR codes are data URLs
-              "connect-src 'self'",
+              "img-src 'self' data: blob:",       // data: is required: QR codes are data URLs, blob: for uploaded media previews
+              `connect-src 'self' ${originsList.join(' ')}`,
               "font-src 'self'",
               "object-src 'none'",
               "base-uri 'none'",

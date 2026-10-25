@@ -219,6 +219,23 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
   - `npx jest tests/lead-assignment-sla.test.js` executed: 17/17 tests passed.
 - **Status Change:** `W10` → **`VERIFIED`**. Next: `W11`.
 
+### Iteration 12 — 2026-10-26 (W11 CORS / CSP / Login Origin: VERIFIED)
+- **Target:** W11 CORS/CSP/login (ngrok origin): config-driven allowed origins, preflight, credentials, headers on error responses, identify CSP script source (app vs. browser extension); no unsafe-inline shortcut
+- **Root Cause (CONFIRMED):**
+  1. `src/config/cors.js` previously only parsed `ALLOWED_ORIGINS`, neglecting `FRONTEND_ORIGIN`.
+  2. Content-Security-Policy header in `src/config/app.js` lacked `blob:` in `img-src` (causing browser violations when rendering client-side image/PDF attachment previews via `URL.createObjectURL(blob)`), and `connect-src` was strictly `'self'`, blocking external API/SSE origins.
+  3. `errorHandler` in `src/utils/errors.js` lacked explicit fallback attachment of CORS headers on unexpected 4xx/5xx exceptions.
+- **Files Changed:**
+  - [`src/config/cors.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/config/cors.js): Enhanced `getAllowedOrigins()` to automatically incorporate `process.env.FRONTEND_ORIGIN`.
+  - [`src/config/app.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/config/app.js): Added `blob:` to CSP `img-src` and dynamically allowed HTTP/HTTPS origins in `connect-src`.
+  - [`src/utils/errors.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/utils/errors.js): Guaranteed `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials: true` on error responses for allowed origins without ever resorting to `*`.
+  - [`tests/live/live_auth_cors.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_auth_cors.js): 6-step test verifying origin allowlist, preflight OPTIONS (204), bad credentials error preservation (401), authenticated call (200), unapproved origin blocking (403), and strict CSP validation (per-request nonces, no unsafe-inline, blob: support).
+- **Verification:**
+  - `tests/live/live_auth_cors.js` executed: all 6 steps passed.
+  - `npx jest tests/cors.test.js` executed: 10/10 tests passed.
+- **Status Change:** `W11` → **`VERIFIED`**. Next: `W12`.
+
+
 
 
 

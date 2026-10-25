@@ -56,6 +56,19 @@ function asyncHandler(fn) {
 function errorHandler(err, req, res, next) {
     if (res.headersSent) return next(err);
 
+    // Guarantee CORS headers on error responses for approved origins
+    const origin = req.headers.origin;
+    if (origin && !res.getHeader('Access-Control-Allow-Origin')) {
+        try {
+            const { isOriginAllowed } = require('../config/cors');
+            if (isOriginAllowed(origin)) {
+                res.setHeader('Access-Control-Allow-Origin', origin);
+                res.setHeader('Access-Control-Allow-Credentials', 'true');
+                res.setHeader('Vary', 'Origin');
+            }
+        } catch (_) {}
+    }
+
     const status = err.status || err.statusCode || (err instanceof ValidationError ? 400 : 500);
     const isClientError = status >= 400 && status < 500;
     const isUpstreamError = status === 502 || err.isUpstream || (err.code && err.code.startsWith('WA_'));
