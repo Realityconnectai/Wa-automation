@@ -1,6 +1,4 @@
-// tests/w0-bootstrap.test.js — Automated verification of W0 Bootstrap & Error Truncation fixes
-
-const test = require('node:test');
+const test = globalThis.test || require('node:test');
 const assert = require('node:assert/strict');
 const { assertRecipientAllowlisted } = require('./live/harness');
 const { errorHandler } = require('../src/utils/errors');

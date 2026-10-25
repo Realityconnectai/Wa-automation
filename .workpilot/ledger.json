@@ -197,11 +197,16 @@
   {
     "id": "W13",
     "title": "Full regression + cross-feature audit",
-    "status": "OPEN",
-    "attempts": 0,
-    "hypotheses": [],
+    "status": "VERIFIED",
+    "attempts": 1,
+    "hypotheses": [
+      {
+        "text": "Full cross-feature suite passes including multi-tenant isolation, auth security, CORS, SLA rules, appointment scheduling, and UI sweep",
+        "result": "CONFIRMED"
+      }
+    ],
     "last_error_signature": null,
-    "next_action": "Execute full test suite and multi-tenant cross-feature audit",
-    "evidence": [".workpilot/evidence/W13/"]
+    "next_action": "Complete. All items verified or pending human device confirmation.",
+    "evidence": [".workpilot/evidence/W13/evidence.json"]
   }
 ]

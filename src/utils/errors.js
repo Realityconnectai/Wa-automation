@@ -57,7 +57,7 @@ function errorHandler(err, req, res, next) {
     if (res.headersSent) return next(err);
 
     // Guarantee CORS headers on error responses for approved origins
-    const origin = req.headers.origin;
+    const origin = req?.headers?.origin;
     if (origin && !res.getHeader('Access-Control-Allow-Origin')) {
         try {
             const { isOriginAllowed } = require('../config/cors');

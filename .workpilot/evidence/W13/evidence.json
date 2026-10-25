@@ -1,0 +1,84 @@
+{
+  "timestamp": "2026-10-25T22:10:00.000Z",
+  "item": "W13",
+  "title": "Full regression + cross-feature audit",
+  "status": "VERIFIED",
+  "summary": {
+    "liveSuitesPassed": [
+      "tests/live/live_manual_text.js",
+      "tests/live/live_campaign_text.js",
+      "tests/live/live_media_matrix.js",
+      "tests/live/live_campaign_media.js",
+      "tests/live/live_gemini.js",
+      "tests/live/live_brochure_chat.js",
+      "tests/live/live_appointment.js",
+      "tests/live/live_reminders.js",
+      "tests/live/live_agent_status.js",
+      "tests/live/live_sla.js",
+      "tests/live/live_auth_cors.js",
+      "tests/live/live_ui_sweep.js"
+    ],
+    "tenantIsolation": {
+      "testSuite": "tests/tenant-isolation.test.js",
+      "testsTotal": 45,
+      "testsPassed": 45,
+      "domainsVerified": [
+        "contacts",
+        "messages",
+        "chatbot_rules",
+        "scheduled_messages",
+        "products",
+        "crm_deals",
+        "leads",
+        "business_settings",
+        "dashboard_stats",
+        "crm_analytics",
+        "IDOR_BOLA_checks",
+        "unauthorized_mutations",
+        "unauthorized_deletes",
+        "outreach_jobs",
+        "whatsapp_sessions_and_qr_codes",
+        "account_deletion_and_suspension",
+        "concurrent_access",
+        "database_layer_invariants"
+      ]
+    },
+    "jestRegressionSuites": {
+      "unitValidationAuth": {
+        "files": ["tests/validation.test.js", "tests/auth.security.test.js"],
+        "testsTotal": 188,
+        "testsPassed": 188
+      },
+      "coreServices": {
+        "files": [
+          "tests/cors.test.js",
+          "tests/lead-assignment-sla.test.js",
+          "tests/appointment-reminders.test.js",
+          "tests/inventory.test.js",
+          "tests/compliance-safety-phase1.test.js"
+        ],
+        "testsTotal": 79,
+        "testsPassed": 79
+      },
+      "w0Bootstrap": {
+        "file": "tests/w0-bootstrap.test.js",
+        "testsTotal": 4,
+        "testsPassed": 4
+      },
+      "harnessSecurity": {
+        "file": "tests/live/harness.test.js",
+        "testsTotal": 4,
+        "testsPassed": 4
+      },
+      "nodeTestBugfixes": {
+        "file": "tests/bugfixes-verification.test.js",
+        "testsTotal": 6,
+        "testsPassed": 6
+      }
+    },
+    "zeroCSPViolationsVerified": true,
+    "zeroFailedAssetRequestsVerified": true,
+    "zeroConsoleErrorsVerified": true,
+    "totalIconsAudited": 322
+  }
+}

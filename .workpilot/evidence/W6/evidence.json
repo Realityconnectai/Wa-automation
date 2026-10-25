@@ -1,7 +1,7 @@
 {
   "title": "Brochure intent and context resolution",
   "status": "LIVE_PENDING_HUMAN",
-  "timestamp": "2026-10-25T21:11:06.657Z",
+  "timestamp": "2026-10-25T21:57:20.384Z",
   "evidence": [
     {
       "step": "trigger_recognition",
@@ -28,7 +28,7 @@
         "action": "assets_sent",
         "projectName": "NEW",
         "sentCount": 1,
-        "elapsedMs": 17
+        "elapsedMs": 24
       },
       "deliveredFile": "WorkPilot_Solutions.pdf"
     },

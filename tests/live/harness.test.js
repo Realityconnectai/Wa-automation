@@ -1,6 +1,6 @@
 // tests/live/harness.test.js — Verification of allowlist guard and safety constraints
 
-const test = require('node:test');
+const test = globalThis.test || require('node:test');
 const assert = require('node:assert/strict');
 const { assertRecipientAllowlisted, NEGATIVE_TEST_RECIPIENTS } = require('./harness');
 

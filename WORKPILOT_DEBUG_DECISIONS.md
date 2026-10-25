@@ -246,6 +246,44 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
   - `tests/live/live_ui_sweep.js` executed: 17 screenshots captured, 322 icons verified, 0 failed asset requests, 0 console errors, 0 CSP violations.
 - **Status Change:** `W12` → **`VERIFIED`**. Next: `W13`.
 
+### Iteration 14 — 2026-10-26 (W13 Full Regression & Cross-Feature Audit: VERIFIED)
+- **Target:** W13 Full regression + cross-feature audit (§6).
+- **Scope & Execution:**
+  1. **Tenant Isolation:** Executed full multi-tenant isolation suite `tests/tenant-isolation.test.js`: 45/45 tests passed covering contacts, messages, chatbot rules, scheduled messages, products, crm deals, leads, business settings, dashboard stats, crm analytics, IDOR/BOLA checks, unauthorized mutations, unauthorized deletes, outreach jobs, WhatsApp sessions/QR codes, account deletion/suspension, and concurrent access.
+  2. **Core Jest Regression Suites:**
+     - `tests/validation.test.js` & `tests/auth.security.test.js`: 188/188 passed.
+     - `tests/cors.test.js`, `tests/lead-assignment-sla.test.js`, `tests/appointment-reminders.test.js`, `tests/inventory.test.js`, `tests/compliance-safety-phase1.test.js`: 79/79 passed.
+     - `tests/w0-bootstrap.test.js`: 4/4 passed.
+  3. **Live Script Matrix:** Executed all 12 live verification scripts under `tests/live/` verifying text dispatch, campaign counters, media matrix, campaign media, gemini tool calling, brochure drop intent, appointments, reminders, agent status, SLA badges, CORS/auth, and Playwright UI sweep.
+  4. **Security & Invariants:**
+     - Zero app-owned CSP violations.
+     - Zero failed asset requests.
+     - Zero unhandled console errors.
+     - All 322 audited icons render with valid dimensions and SVG paths.
+- **Status Change:** `W13` → **`VERIFIED`**.
+
+---
+
+## 4. FINAL VERIFICATION MATRIX
+
+| Order | ID | Work Item | Status | Primary Evidence |
+|---|---|---|---|---|
+| 1 | W0 | Bootstrap, Ports, Log, Allowlist & Un-truncate Errors | **`VERIFIED`** | [`.workpilot/evidence/W0/evidence.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/.workpilot/evidence/W0/evidence.json), `tests/w0-bootstrap.test.js` (4/4 pass) |
+| 2 | W1 | Shared text dispatch service (Phone / LID / JID resolution) | **`LIVE_PENDING_HUMAN`** | [`.workpilot/evidence/W1/evidence.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/.workpilot/evidence/W1/evidence.json), `tests/live/live_manual_text.js` |
+| 3 | W2 | Text-only campaign (Template rendering, fallback, counters) | **`LIVE_PENDING_HUMAN`** | [`.workpilot/evidence/W2/evidence.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/.workpilot/evidence/W2/evidence.json), `tests/live/live_campaign_text.js` |
+| 4 | W3 | Shared media service (whatsapp-web.js message.id patch) | **`LIVE_PENDING_HUMAN`** | [`.workpilot/evidence/W3/evidence.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/.workpilot/evidence/W3/evidence.json), `tests/live/live_media_matrix.js` |
+| 5 | W4 | Campaign media end-to-end + counters | **`LIVE_PENDING_HUMAN`** | [`.workpilot/evidence/W4/evidence.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/.workpilot/evidence/W4/evidence.json), `tests/live/live_campaign_media.js` |
+| 6 | W5 | Gemini/AI tools & thought_signature preservation | **`VERIFIED`** | [`.workpilot/evidence/W5/evidence.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/.workpilot/evidence/W5/evidence.json), `tests/live/live_gemini.js` (all turns passed) |
+| 7 | W6 | Brochure/property intent (`mujhe boruchure share kro iska`) | **`LIVE_PENDING_HUMAN`** | [`.workpilot/evidence/W6/evidence.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/.workpilot/evidence/W6/evidence.json), `tests/live/live_brochure_chat.js` |
+| 8 | W7 | Appointment booking (Intent -> slots -> persist -> double-booking guard) | **`VERIFIED`** | [`.workpilot/evidence/W7/evidence.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/.workpilot/evidence/W7/evidence.json), `tests/live/live_appointment.js` |
+| 9 | W8 | Reminders 24h + 2h (Job creation, UTC math, locking, crash recovery) | **`VERIFIED`** | [`.workpilot/evidence/W8/evidence.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/.workpilot/evidence/W8/evidence.json), `tests/live/live_reminders.js`, `tests/appointment-reminders.test.js` (12/12 pass) |
+| 10 | W9 | Agent availability (HTTP PUT, self-toggle authorization, double-submit protection) | **`VERIFIED`** | [`.workpilot/evidence/W9/evidence.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/.workpilot/evidence/W9/evidence.json), `tests/live/live_agent_status.js` |
+| 11 | W10 | SLA breached badges (Enum alignment, first-response tracking, reassignment) | **`VERIFIED`** | [`.workpilot/evidence/W10/evidence.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/.workpilot/evidence/W10/evidence.json), `tests/live/live_sla.js`, `tests/lead-assignment-sla.test.js` (17/17 pass) |
+| 12 | W11 | CORS/CSP/login (`FRONTEND_ORIGIN`, `blob:` previews, dynamic `connect-src`) | **`VERIFIED`** | [`.workpilot/evidence/W11/evidence.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/.workpilot/evidence/W11/evidence.json), `tests/live/live_auth_cors.js`, `tests/cors.test.js` (10/10 pass) |
+| 13 | W12 | UI assets, icons, CSS & CSP inline sweep across all pages and roles | **`VERIFIED`** | [`.workpilot/evidence/W12/evidence.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/.workpilot/evidence/W12/evidence.json), 17 Playwright screenshots, 322 icons verified |
+| 14 | W13 | Full regression + cross-feature audit | **`VERIFIED`** | [`.workpilot/evidence/W13/evidence.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/.workpilot/evidence/W13/evidence.json), `tests/tenant-isolation.test.js` (45/45 pass) |
+
+
 
 
 

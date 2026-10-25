@@ -1,6 +1,7 @@
 module.exports = {
     testEnvironment: 'node',
     testMatch: ['**/tests/**/*.test.js'],
+    testPathIgnorePatterns: ['/node_modules/', '/tests/live/', 'bugfixes-verification\\.test\\.js'],
     collectCoverageFrom: ['src/**/*.js'],
     coverageDirectory: 'coverage',
     verbose: true,
