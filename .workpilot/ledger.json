@@ -17,7 +17,7 @@
   {
     "id": "W1",
     "title": "Shared text dispatch service: phone / @c.us / @lid resolution, recipient validation, session checks, real message-ID capture, honest status, idempotency",
-    "status": "INVESTIGATING",
+    "status": "LIVE_PENDING_HUMAN",
     "attempts": 1,
     "hypotheses": [
       {
@@ -26,17 +26,22 @@
       }
     ],
     "last_error_signature": "No LID for user (502)",
-    "next_action": "Verify resolveDestinationChatId with negative and simulated test fixtures; prepare live script live_manual_text.",
-    "evidence": [".workpilot/evidence/W1/"]
+    "next_action": "Awaiting owner test device phone number in allowlist to complete live receipt check; proceed to W2",
+    "evidence": [".workpilot/evidence/W1/evidence.json"]
   },
   {
     "id": "W2",
     "title": "Text-only campaign: template rendering, missing-name fallback, per-recipient isolation, counters, opt-out, pacing",
-    "status": "OPEN",
-    "attempts": 0,
-    "hypotheses": [],
+    "status": "INVESTIGATING",
+    "attempts": 1,
+    "hypotheses": [
+      {
+        "text": "Template rendering missing-name {{name}} fallback causes malformed message or campaign recipient failure, and counters become inaccurate if errors are unhandled.",
+        "result": "INVESTIGATING"
+      }
+    ],
     "last_error_signature": null,
-    "next_action": "Awaiting W1 verification",
+    "next_action": "Audit src/services/outreach.js template rendering, opt-out check, and counter integrity; build tests/live/live_campaign_text.js",
     "evidence": [".workpilot/evidence/W2/"]
   },
   {

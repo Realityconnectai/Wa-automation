@@ -1027,7 +1027,7 @@ async function resolveDestinationChatId(client, phone) {
     }
 
     const digits = rawStr.replace(/\D/g, '');
-    if (digits.length < 7 || digits.length > 15) {
+    if (digits.length < 7 || digits.length > 15 || /^0+$/.test(digits) || /^910+$/.test(digits)) {
         const err = new Error(`Invalid destination phone number: ${phone}`);
         err.code = 'INVALID_RECIPIENT';
         err.status = 400;
@@ -1035,7 +1035,7 @@ async function resolveDestinationChatId(client, phone) {
     }
 
     if (!client || typeof client.getNumberId !== 'function') {
-        return `${digits}@c.us`;
+        return digits.length >= 14 ? `${digits}@lid` : `${digits}@c.us`;
     }
 
     // 1. Direct getNumberId
@@ -1101,12 +1101,24 @@ async function resolveDestinationChatId(client, phone) {
         }
     } catch (_) {}
 
-    // Fallback: If 10 digits and not found on WA, reject with clean descriptive error
+    // Fallback: If 10 digits or 12 digits (+91...) and not found on WA, reject with clean descriptive error
     if (digits.length === 10) {
         const err = new Error(`Recipient +91${digits} is not registered on WhatsApp`);
         err.code = 'RECIPIENT_NOT_ON_WHATSAPP';
         err.status = 400;
         throw err;
+    }
+
+    if (digits.length === 12 && digits.startsWith('91')) {
+        const err = new Error(`Recipient +${digits} is not registered on WhatsApp`);
+        err.code = 'RECIPIENT_NOT_ON_WHATSAPP';
+        err.status = 400;
+        throw err;
+    }
+
+    // 14-15 digit raw identifiers without contact resolution default to @lid
+    if (digits.length >= 14) {
+        return `${digits}@lid`;
     }
 
     return `${digits}@c.us`;

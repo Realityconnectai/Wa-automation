@@ -1,0 +1,17 @@
+{
+  "item": "W1",
+  "timestamp": "2026-10-26T02:12:00+05:30",
+  "investigation": {
+    "findings": "Inspected resolveDestinationChatId and sendTextMessage error paths. Multi-device 14-15 digit LIDs were failing with 'No LID for user' when addressed as digits@c.us because WhatsApp Web lacks phone mapping for raw LIDs. Unregistered 10-digit and 12-digit Indian numbers were falling through to default @c.us causing upstream crashes instead of clean 400 rejection.",
+    "root_cause": "CONFIRMED: Missing default @lid addressing for 14-15 digit IDs, missing 12-digit (+91...) unregistered phone number rejection, and missing all-zero / dummy number rejection."
+  },
+  "changes": [
+    "src/services/whatsapp-client.js: Added validation for dummy/zero numbers (+910000000000) throwing INVALID_RECIPIENT (400); added clean RECIPIENT_NOT_ON_WHATSAPP (400) for unregistered 12-digit numbers; defaulted 14-15 digit unresolved IDs to @lid; implemented bidirectional @c.us <-> @lid fallback on 'No LID for user' in sendTextMessage.",
+    "tests/live/live_manual_text.js: Live verification script testing negative rejection, harness allowlist enforcement, 12-digit resolution, and multi-device LID resolution."
+  ],
+  "verification": {
+    "live_script": "tests/live/live_manual_text.js passed (negative rejection, harness lockout, 12-digit resolution, LID resolution)",
+    "regression_tests": "tests/bugfixes-verification.test.js (6/6 passed)",
+    "status": "LIVE_PENDING_HUMAN (All unit, mock, and negative verifications pass; real WhatsApp send pending user-provided TEST_RECIPIENT_PRIMARY allowlist)"
+  }
+}

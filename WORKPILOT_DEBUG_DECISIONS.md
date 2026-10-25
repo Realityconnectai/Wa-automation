@@ -29,8 +29,8 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
 | ID | Title | Status | Depends On | Last Error / Notes |
 |---|---|---|---|---|
 | **W0** | Bootstrap & Test Harness & Un-truncate Errors | **VERIFIED** | — | Fixed: allowlist safety harness, un-truncated error propagation in backend & frontend |
-| **W1** | Shared text dispatch service (LID/@c.us/502) | **INVESTIGATING** | W0 | Phone normalization, `@c.us` vs `@lid` fallback, real message ID capture |
-| **W2** | Text-only campaign | **OPEN** | W1 | Pacing, isolation, name template fallback, counters |
+| **W1** | Shared text dispatch service (LID/@c.us/502) | **LIVE_PENDING_HUMAN** | W0 | Phone normalization, `@c.us` vs `@lid` fallback, real message ID capture (Automated checks PASS, awaiting live device send) |
+| **W2** | Text-only campaign | **INVESTIGATING** | W1 | Pacing, isolation, name template fallback, counters |
 | **W3** | Shared media service ("id property... undefined") | **OPEN** | W1 | `MessageMedia` construction, `newMsgKey` preserve in injected utils |
 | **W4** | Campaign media end-to-end | **OPEN** | W2, W3 | Media campaign dispatch + counters |
 | **W5** | Gemini/AI tools & `thought_signature` | **OPEN** | W0 | Gemini 2.5/3.x thought signature preservation on multi-turn function calls |
@@ -58,3 +58,16 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
   - [`public/js/app.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/public/js/app.js): Added safe JSON error parsing in `api()` and un-truncation in `showToast()`.
   - [`tests/w0-bootstrap.test.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/w0-bootstrap.test.js): Automated test suite verifying allowlist lockout, 502 upstream pass-through, and single-character error un-truncation. (4/4 passed).
 - **Status Change:** `W0` → **`VERIFIED`**. Next: `W1`.
+
+### Iteration 2 — 2026-10-26 (W1 Shared Text Dispatch: LIVE_PENDING_HUMAN)
+- **Target:** W1 Shared text dispatch service (Phone / LID / JID resolution & rejection)
+- **Root Cause (CONFIRMED):**
+  1. Multi-device contacts with 14-15 digit LIDs were failing with `No LID for user (502)` because `resolveDestinationChatId` defaulted to `${digits}@c.us` when contact metadata was not found. WhatsApp Web has no `@c.us` user mapping for LID numbers.
+  2. Unregistered 12-digit Indian numbers (`+91...`) and dummy/zero numbers (`+910000000000`) were falling through to `@c.us` and causing upstream crashes instead of clean 400 validation rejections.
+- **Files Changed:**
+  - [`src/services/whatsapp-client.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/whatsapp-client.js): Added zero-number pattern validation throwing `INVALID_RECIPIENT` (400), clean `RECIPIENT_NOT_ON_WHATSAPP` (400) for unregistered 12-digit numbers, defaulted 14-15 digit IDs to `@lid`, and added bidirectional `@c.us` <-> `@lid` retry in `sendTextMessage()`.
+  - [`tests/live/live_manual_text.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_manual_text.js): Live verification script verifying negative rejection of dummy numbers, test harness lockout, 12-digit registration check, and LID resolution.
+- **Verification:**
+  - `tests/live/live_manual_text.js` executed: all 4 automated steps passed.
+  - `tests/bugfixes-verification.test.js` executed: 6/6 passed.
+- **Status Change:** `W1` → **`LIVE_PENDING_HUMAN`** (Automated checks complete; live send awaiting §0 allowlist input from operator). Next: `W2`.
