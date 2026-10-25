@@ -1,23 +1,25 @@
 # WORKPILOT AUTONOMOUS LOOP — CURRENT HANDOFF
 
-**Current Cycle:** Iteration 4  
-**Active Item:** `W3` — Shared media service ("id property ... got undefined") across manual attach, brochure drop, property dashboard, chatbot media, campaign image/PDF, scheduled attachments  
-**Previous Item:** `W2` — Text-only campaign (LIVE_PENDING_HUMAN — Automated checks & Jest suites PASS)  
-**Timestamp:** 2026-10-26T02:17:00+05:30  
+**Current Cycle:** Iteration 5  
+**Active Item:** `W4` — Campaign media end-to-end + counters (Depends on: W2, W3)  
+**Previous Item:** `W3` — Shared media service (LIVE_PENDING_HUMAN — Automated patch, postinstall, signature tests & Jest suites PASS)  
+**Timestamp:** 2026-10-26T02:21:00+05:30  
 
 ### What Was Just Done
-1. Completed **W2 (Text-only campaign)** automated verification:
-   - Enhanced `renderTemplate` in [`src/services/outreach.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/outreach.js): trims whitespace, handles null/empty contact names safely with fallback, derives `first_name`, and supports `phone`.
-   - Built and ran [`tests/live/live_campaign_text.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_campaign_text.js) (passed all 4 automated checks).
-   - Ran `npx jest tests/campaigns-unit.test.js` (11/11 passed).
+1. Completed **W3 (Shared media service)** automated verification:
+   - Root cause confirmed: `mediaOptions.toJSON()` had `id: undefined` that overwrote `message.id = newMsgKey`.
+   - Created reproducible postinstall script [`scripts/patch-wwebjs.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/scripts/patch-wwebjs.js) and configured `"postinstall": "node scripts/patch-wwebjs.js"` in [`package.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/package.json).
+   - Created and committed [`patches/whatsapp-web.js+1.34.7.patch`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/patches/whatsapp-web.js+1.34.7.patch).
+   - Built and ran [`tests/live/live_media_matrix.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_media_matrix.js) (passed all 4 automated checks).
+   - Ran `npx jest tests/outreach-media-unit.test.js` (13/13 passed).
    - Set status to `LIVE_PENDING_HUMAN`.
 
 ### What Is Next
-1. Investigate and verify **W3 (Shared media service)**:
-   - Trace the exact error: `"Data passed to get must include an id property ... but got undefined"`.
-   - Verify `MessageMedia` construction across `src/services/whatsapp-client.js`, `src/services/messaging.js`, `src/services/brochure-drop.js`.
-   - Ensure the `whatsapp-web.js` injected code fix (`if (!message.id) message.id = newMsgKey;`) is guaranteed reproducible across clean checkouts/installs.
-   - Build `tests/live/live_media_matrix.js` and verify.
+1. Investigate and verify **W4 (Campaign media end-to-end + counters)**:
+   - Verify campaign creation with media asset ID.
+   - Verify `tests/live/live_campaign_media.js` with image and PDF fixtures.
+   - Verify campaign counter updates (`sent`, `failed`, `skipped`).
+   - Proceed to **W5 (Gemini/AI tools & thought_signature)**.
 
 ### Open Questions / Human Input Needed
 - As required by §0, please provide your test device numbers to populate the live allowlist:

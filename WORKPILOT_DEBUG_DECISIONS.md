@@ -31,8 +31,8 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
 | **W0** | Bootstrap & Test Harness & Un-truncate Errors | **VERIFIED** | — | Fixed: allowlist safety harness, un-truncated error propagation in backend & frontend |
 | **W1** | Shared text dispatch service (LID/@c.us/502) | **LIVE_PENDING_HUMAN** | W0 | Phone normalization, `@c.us` vs `@lid` fallback, real message ID capture (Automated checks PASS, awaiting live device send) |
 | **W2** | Text-only campaign | **LIVE_PENDING_HUMAN** | W1 | Pacing, isolation, name template fallback, counters (Automated checks PASS, awaiting live device send) |
-| **W3** | Shared media service ("id property... undefined") | **INVESTIGATING** | W1 | `MessageMedia` construction, `newMsgKey` preserve in injected utils |
-| **W4** | Campaign media end-to-end | **OPEN** | W2, W3 | Media campaign dispatch + counters |
+| **W3** | Shared media service ("id property... undefined") | **LIVE_PENDING_HUMAN** | W1 | `MessageMedia` construction, `newMsgKey` preserve in injected utils (Automated checks PASS, awaiting live device send) |
+| **W4** | Campaign media end-to-end | **INVESTIGATING** | W2, W3 | Media campaign dispatch + counters |
 | **W5** | Gemini/AI tools & `thought_signature` | **OPEN** | W0 | Gemini 2.5/3.x thought signature preservation on multi-turn function calls |
 | **W6** | Brochure/property intent | **OPEN** | W3, W5 | Intent matching, PDF asset lookup, honest failure response |
 | **W7** | Appointment booking flow | **OPEN** | W1, W5 | Intent to real slot query, booking persistence, double-booking rejection |
@@ -82,3 +82,17 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
   - `tests/live/live_campaign_text.js` executed: all 4 automated steps passed.
   - `tests/campaigns-unit.test.js` executed: 11/11 passed.
 - **Status Change:** `W2` → **`LIVE_PENDING_HUMAN`** (Automated checks complete; live campaign dispatch awaiting §0 allowlist input from operator). Next: `W3`.
+
+### Iteration 4 — 2026-10-26 (W3 Shared Media Service: LIVE_PENDING_HUMAN)
+- **Target:** W3 Shared media service ("id property ... got undefined" in WhatsApp Web injected Utils.js)
+- **Root Cause (CONFIRMED):** Spreading `mediaOptions.toJSON()` after `id: newMsgKey` in `whatsapp-web.js` injected `Utils.js` overwrote `message.id` with `undefined`. When WhatsApp Web's memoized collection getter `Msg.get(message.id)` ran, it threw `Data passed to getter must include an id property ... but got undefined`.
+- **Files Changed:**
+  - [`scripts/patch-wwebjs.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/scripts/patch-wwebjs.js): Created automated, reproducible postinstall patch script.
+  - [`package.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/package.json): Added `"postinstall": "node scripts/patch-wwebjs.js"` hook.
+  - [`patches/whatsapp-web.js+1.34.7.patch`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/patches/whatsapp-web.js+1.34.7.patch): Committed reproducible patch.
+  - [`tests/live/live_media_matrix.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_media_matrix.js): Live script verifying injected patch presence, postinstall hook, magic-byte media validation, and tampered signature rejection.
+- **Verification:**
+  - `npm run postinstall` ran: confirmed patch applied.
+  - `tests/live/live_media_matrix.js` executed: all 4 automated steps passed.
+  - `npx jest tests/outreach-media-unit.test.js` executed: 13/13 passed.
+- **Status Change:** `W3` → **`LIVE_PENDING_HUMAN`** (Automated checks complete; live media dispatch awaiting §0 allowlist input from operator). Next: `W4`.

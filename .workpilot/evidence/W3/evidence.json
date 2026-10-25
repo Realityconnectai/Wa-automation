@@ -1,0 +1,19 @@
+{
+  "item": "W3",
+  "timestamp": "2026-10-26T02:19:50+05:30",
+  "investigation": {
+    "findings": "When sending media via whatsapp-web.js, mediaOptions.toJSON() has an internal id: undefined property that was spread onto the message object after id: newMsgKey, wiping out message.id. When WhatsApp Web called its internal collection getter Msg.get(message.id), it threw 'Data passed to getter must include an id property ... but got undefined'.",
+    "root_cause": "CONFIRMED: Object spread order in whatsapp-web.js Injected/Utils.js caused mediaOptions.toJSON().id (undefined) to overwrite message.id (newMsgKey). Fixed via reproducible postinstall script applying fallback guard `if (!message.id) message.id = newMsgKey;`."
+  },
+  "changes": [
+    "scripts/patch-wwebjs.js: Automated postinstall patch applying message.id protection guard to whatsapp-web.js Injected/Utils.js.",
+    "package.json: Configured postinstall hook to run scripts/patch-wwebjs.js on every install/deployment.",
+    "patches/whatsapp-web.js+1.34.7.patch: Committed patch file for repository durability.",
+    "tests/live/live_media_matrix.js: Live script verifying patch presence, postinstall hook, magic-byte media validation, and negative attachment rejection."
+  ],
+  "verification": {
+    "live_script": "tests/live/live_media_matrix.js passed",
+    "jest_suite": "tests/outreach-media-unit.test.js (13/13 passed)",
+    "status": "LIVE_PENDING_HUMAN (Automated tests and Jest suites PASS; real WhatsApp media dispatch awaiting §0 allowlist input from operator)"
+  }
+}
