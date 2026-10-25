@@ -893,22 +893,34 @@ function renderCrmCharts(a) {
 let isCrmOverdueActive = false;
 
 function getSlaBadge(deal) {
-    if (!deal.sla_status) return '';
+    if (!deal) return '';
+    // If first response was recorded:
     if (deal.first_response_at) {
+        if (deal.sla_status === 'sla_breached') {
+            return `<span class="lead-badge sla-badge sla-breached">${Icon('alert-triangle', 'icon-inline')}Responded Late</span>`;
+        }
         return `<span class="lead-badge sla-badge sla-on-time">${Icon('check-circle', 'icon-inline')}Responded</span>`;
     }
-    switch (deal.sla_status) {
-        case 'sla_on_time':
-            return `<span class="lead-badge sla-badge sla-on-time">${Icon('clock', 'icon-inline')}SLA OK</span>`;
-        case 'sla_approaching':
-            return `<span class="lead-badge sla-badge sla-approaching">${Icon('alert-circle', 'icon-inline')}SLA Due Soon</span>`;
-        case 'sla_breached':
-            return `<span class="lead-badge sla-badge sla-breached">${Icon('alert-triangle', 'icon-inline')}SLA Breached</span>`;
-        case 'escalated':
-            return `<span class="lead-badge sla-badge sla-escalated">${Icon('shield-alert', 'icon-inline')}Escalated</span>`;
-        default:
-            return '';
+
+    // Dynamic checks for unresponded deals
+    const now = Date.now();
+    const dueTime = deal.sla_response_due_at ? new Date(deal.sla_response_due_at).getTime() : null;
+    const isOverdue = dueTime && now > dueTime && !['won', 'lost'].includes(deal.stage);
+
+    if (deal.sla_status === 'escalated') {
+        return `<span class="lead-badge sla-badge sla-escalated">${Icon('shield-alert', 'icon-inline')}Escalated</span>`;
     }
+    if (deal.sla_status === 'sla_breached' || isOverdue) {
+        return `<span class="lead-badge sla-badge sla-breached">${Icon('alert-triangle', 'icon-inline')}SLA Breached</span>`;
+    }
+    const isApproaching = dueTime && (dueTime - now <= 15 * 60 * 1000) && (dueTime > now);
+    if (deal.sla_status === 'approaching_sla' || deal.sla_status === 'sla_approaching' || isApproaching) {
+        return `<span class="lead-badge sla-badge sla-approaching">${Icon('alert-circle', 'icon-inline')}SLA Due Soon</span>`;
+    }
+    if (deal.sla_status === 'on_time' || deal.sla_status === 'sla_on_time') {
+        return `<span class="lead-badge sla-badge sla-on-time">${Icon('clock', 'icon-inline')}SLA OK</span>`;
+    }
+    return '';
 }
 
 async function loadCrm() {

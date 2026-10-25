@@ -391,13 +391,13 @@ async function assignLead(userId, dealId, optionsOrAgentId = {}, maybeReason = n
         const prevAgentId = deal.assigned_agent_id;
         const dueAt = await calculateSlaDueAt(userId);
 
-        // Update deal with assignment and initial SLA deadline
+        // Update deal with assignment and initial SLA deadline (preserving state if already responded)
         const updateRes = await tx.query(
             `UPDATE crm_deals SET
                 assigned_agent_id = $1,
                 assigned_at = CURRENT_TIMESTAMP,
-                sla_status = 'on_time',
-                sla_response_due_at = COALESCE(first_response_at, $2),
+                sla_status = CASE WHEN first_response_at IS NOT NULL THEN sla_status ELSE 'on_time' END,
+                sla_response_due_at = CASE WHEN first_response_at IS NOT NULL THEN sla_response_due_at ELSE $2 END,
                 updated_at = CURRENT_TIMESTAMP
              WHERE user_id = $3 AND id = $4
              RETURNING *`,
@@ -494,6 +494,20 @@ async function recordFirstResponse(userId, phone) {
  * Periodic / on-demand sweep to check and escalate overdue SLAs across open deals.
  */
 async function checkAndEscalateOverdueSlas(userId) {
+    // Proactively transition deals nearing their deadline to 'approaching_sla' (within 15 minutes)
+    await runSql(
+        `UPDATE crm_deals SET
+            sla_status = 'approaching_sla',
+            updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = $1
+           AND first_response_at IS NULL
+           AND stage NOT IN ('won', 'lost')
+           AND sla_status = 'on_time'
+           AND sla_response_due_at > NOW()
+           AND sla_response_due_at <= NOW() + INTERVAL '15 minutes'`,
+        [userId]
+    );
+
     const overdueDeals = await queryAll(
         `SELECT cd.*, a.name AS agent_name, a.role AS agent_role
          FROM crm_deals cd

@@ -192,6 +192,34 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
   - `npx jest tests/lead-assignment-sla.test.js` executed: 17/17 tests passed.
 - **Status Change:** `W9` → **`VERIFIED`**. Next: `W10`.
 
+### Iteration 11 — 2026-10-26 (W10 SLA Breached Badges & Tracking: VERIFIED)
+- **Target:** W10 SLA breached badges (verify rules/timestamps first — breaches may be legitimate; fix only if calculation, first-response tracking, reassignment handling, sweep, or UI mapping is wrong)
+- **Root Cause (CONFIRMED):**
+  1. **Enum String Mismatch Across Stack:**
+     - Database migration 022 and `src/routes/api.js` enforced `['on_time', 'approaching_sla', 'sla_breached', 'escalated']`.
+     - `public/index.html` dropdown filter and `public/js/app.js` `getSlaBadge()` checked `'sla_on_time'` and `'sla_approaching'`.
+     - As a result, deals on time rendered no badge at all, and selecting "On Time" or "Approaching" in the CRM filter resulted in an HTTP 400 validation error.
+  2. **First-Response Tracking Guard Defect:**
+     - In [`src/services/database.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/database.js), `logMessage()` checked `isHuman` using `typeof arg2 === 'object'`. Shorthand calls `logMessage(userId, phone, 'outgoing', text)` were treated as non-human, completely skipping `recordFirstResponse`.
+     - Furthermore, `recordFirstResponse` was executed as an unawaited floating promise (`.catch(() => {})`), introducing race conditions with subsequent database reads.
+  3. **Reassignment Corruption:**
+     - [`src/services/lead-assignment.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/lead-assignment.js) `assignLead` unconditionally set `sla_status = 'on_time'` and `sla_response_due_at = first_response_at`, corrupting already responded deals.
+  4. **Approaching SLA Sweep Omission:**
+     - `checkAndEscalateOverdueSlas()` only swept overdue deals, never transitioning leads within the 15-minute warning window to `'approaching_sla'`.
+- **Files Changed:**
+  - [`src/routes/api.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/routes/api.js): Added legacy/canonical normalization for `sla_status` query parameter.
+  - [`public/index.html`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/public/index.html): Fixed `crmSlaFilter` options to canonical values (`on_time`, `approaching_sla`).
+  - [`public/js/app.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/public/js/app.js): Updated `getSlaBadge()` to support canonical values, distinguish on-time ("Responded") vs late response ("Responded Late"), and dynamic overdue/approaching calculation.
+  - [`src/services/database.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/database.js): Updated `isHuman` logic and awaited `recordFirstResponse`.
+  - [`src/services/lead-assignment.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/lead-assignment.js): Preserved responded deal state in `assignLead`, and added approaching SLA proactive transition in `checkAndEscalateOverdueSlas`.
+  - [`tests/live/live_sla.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_sla.js): Live verification testing on-time response, escalation sweep, late response, reassignment preservation, approaching SLA transition, and API filtering.
+- **Verification:**
+  - `tests/live/live_sla.js` executed: all 6 steps passed.
+  - `node --test tests/bugfixes-verification.test.js` executed: 6/6 tests passed.
+  - `npx jest tests/lead-assignment-sla.test.js` executed: 17/17 tests passed.
+- **Status Change:** `W10` → **`VERIFIED`**. Next: `W11`.
+
+
 
 
 

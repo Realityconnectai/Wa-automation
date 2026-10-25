@@ -1,0 +1,51 @@
+{
+  "id": "W10",
+  "title": "SLA breached badges: verify rules/timestamps first — breaches may be legitimate; fix only if calculation, first-response tracking, reassignment handling, sweep, or UI mapping is wrong",
+  "status": "VERIFIED",
+  "timestamp": "2026-10-26T03:09:55+05:30",
+  "evidence": {
+    "live_script": "tests/live/live_sla.js",
+    "regression_suites": [
+      "tests/bugfixes-verification.test.js",
+      "tests/lead-assignment-sla.test.js"
+    ],
+    "verification_results": {
+      "on_time_response": {
+        "first_response_at_set": true,
+        "sla_status": "on_time",
+        "ui_badge": "Responded"
+      },
+      "overdue_escalation_sweep": {
+        "sweep_escalated": true,
+        "sla_status": "escalated",
+        "ui_badge": "Escalated"
+      },
+      "late_response": {
+        "first_response_at_set": true,
+        "sla_status": "sla_breached",
+        "ui_badge": "Responded Late"
+      },
+      "reassignment_handling": {
+        "preserves_responded_state": true,
+        "preserves_due_at_and_status": true
+      },
+      "approaching_sla": {
+        "sweep_transitions_due_soon": true,
+        "sla_status": "approaching_sla",
+        "ui_badge": "SLA Due Soon"
+      },
+      "api_filtering": {
+        "filter_on_time_status": 200,
+        "filter_breached_status": 200,
+        "filter_escalated_status": 200,
+        "filter_legacy_sla_on_time_status": 200
+      }
+    },
+    "root_cause_analysis": {
+      "enum_mismatch": "index.html and app.js used 'sla_on_time' and 'sla_approaching' while database migration 022 and api.js required 'on_time' and 'approaching_sla'. Unresponded on-time deals rendered no badge, and filtering by 'On Time' or 'Approaching' resulted in HTTP 400 rejection.",
+      "first_response_tracking": "database.js logMessage checked isHuman via typeof arg2 === 'object', failing for shorthand logMessage(userId, phone, 'outgoing', text) calls and never recording first_response_at, while also running recordFirstResponse unawaited.",
+      "reassignment_corruption": "lead-assignment.js assignLead unconditionally reset sla_status to 'on_time' and sla_response_due_at to first_response_at on deals that had already been responded to.",
+      "sweep_transition": "checkAndEscalateOverdueSlas only processed overdue leads, omitting proactive transition of leads nearing their deadline (within 15 minutes) to 'approaching_sla'."
+    }
+  }
+}

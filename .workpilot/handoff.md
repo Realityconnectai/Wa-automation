@@ -1,27 +1,29 @@
 # WORKPILOT AUTONOMOUS LOOP — CURRENT HANDOFF
 
-**Current Cycle:** Iteration 11  
-**Active Item:** `W10` — SLA breached badges (verify rules/timestamps first — breaches may be legitimate; fix only if calculation, first-response tracking, reassignment handling, sweep, or UI mapping is wrong)  
-**Previous Item:** `W9` — Agent availability (VERIFIED — `PUT /crm/agents/:id` payload whitelist fixed to include `routing_status`, button double-submit disabled, agent self-toggle authorized, live script + 17 unit tests verified)  
-**Timestamp:** 2026-10-26T03:05:00+05:30  
+**Current Cycle:** Iteration 12  
+**Active Item:** `W11` — CORS / CSP / login (ngrok origin): config-driven allowed origins, preflight, credentials, headers on error responses, identify CSP script source (app vs. browser extension); no `unsafe-inline` shortcut  
+**Previous Item:** `W10` — SLA breached badges (VERIFIED — Canonical enum synchronization across backend/HTML/JS, `isHuman` and `recordFirstResponse` awaiting in `logMessage`, reassignment preservation, approaching SLA transitions, live script + 17 unit tests verified)  
+**Timestamp:** 2026-10-26T03:11:00+05:30  
 
 ### What Was Just Done
-1. Completed **W9 (Agent availability)**:
-   - Diagnosed root cause: `PUT /crm/agents/:id` in [`src/routes/api.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/routes/api.js) omitted `routing_status`, `weight`, and `max_concurrent_leads`, resulting in empty field updates to `updateAgent()`, no database persistence, and repeated clicks on frontend button.
-   - Added support for `routing_status`, `weight`, and `max_concurrent_leads` in `PUT /crm/agents/:id` and `POST /crm/agents`.
-   - Authorized agents with role `agent` to update their own `routing_status`/`status`.
-   - Updated [`public/js/app.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/public/js/app.js) to disable button during toggle request, await server response, and reload verified state.
-   - Fixed missing `dotenv` loading in `tests/bugfixes-verification.test.js`.
-   - Built and ran [`tests/live/live_agent_status.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_agent_status.js): Set Busy -> PostgreSQL `status = 'paused'` -> Workload returns `busy` -> Lead routing skips busy agent -> Set Available -> PostgreSQL `status = 'active'` -> Cross-tenant 404 isolation.
+1. Completed **W10 (SLA breached badges)**:
+   - Root cause identified: enum mismatch (`sla_on_time`/`sla_approaching` in UI vs `on_time`/`approaching_sla` in SQL/backend) caused on-time leads to render no badge and 400 errors on filtering; `logMessage` ignored shorthand calls for `isHuman` and ran unawaited; `assignLead` corrupted SLA on responded deals.
+   - Normalized `sla_status` query handling in [`src/routes/api.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/routes/api.js).
+   - Updated [`public/index.html`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/public/index.html) dropdown options to canonical values.
+   - Updated `getSlaBadge()` in [`public/js/app.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/public/js/app.js) with accurate badge rendering (including "Responded" vs "Responded Late" and dynamic overdue/due soon).
+   - Fixed `isHuman` detection and awaited `recordFirstResponse` in [`src/services/database.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/database.js).
+   - Preserved responded deal state on reassignment and added proactive transition for leads due in <= 15 minutes in [`src/services/lead-assignment.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/lead-assignment.js).
+   - Built and ran [`tests/live/live_sla.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_sla.js): all 6 steps passed.
    - Ran `node --test tests/bugfixes-verification.test.js`: 6/6 passed.
    - Ran `npx jest tests/lead-assignment-sla.test.js`: 17/17 passed.
-   - Saved system evidence in `.workpilot/evidence/W9/evidence.json`.
+   - Saved system evidence in `.workpilot/evidence/W10/evidence.json`.
    - Set status to **`VERIFIED`**.
 
 ### What Is Next
-1. Investigate and verify **W10 (SLA breached badges)**:
-   - Verify rules/timestamps: calculation of `sla_response_due_at`, first-response tracking (`first_response_at`), reassignment handling, sweep process (`checkSlaBreaches`), and UI badge mapping in CRM kanban/deals.
-   - Build `tests/live/live_sla.js` covering on-time response, breach detection, sweep escalation, reassignment reset/preservation, and UI mapping.
+1. Investigate and verify **W11 (CORS / CSP / login)**:
+   - Verify config-driven allowed origins (`ALLOWED_ORIGINS` / `FRONTEND_ORIGIN`), preflight OPTIONS handling, credentials (`Access-Control-Allow-Credentials: true`), and CORS headers on error responses.
+   - Audit CSP directives: ensure strict CSP with no `unsafe-inline` or wildcard sources, support ngrok / dev environments.
+   - Build `tests/live/live_auth_cors.js` testing allowed origin, non-allowlisted origin rejection, preflight, credentialed calls, and CSP headers.
 
 ### Open Questions / Human Input Needed
 - As required by §0, please provide your test device numbers to populate the live allowlist:

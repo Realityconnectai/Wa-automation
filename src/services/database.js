@@ -947,11 +947,13 @@ async function logMessage(userId, arg2, maybeDirection, maybeBody) {
          RETURNING *`,
         [userId, waMessageId || null, phone, contactName || '', direction, messageType || 'text', body || '', status || 'sent', templateName || null]
     );
-    const isHuman = (typeof arg2 === 'object' && arg2 !== null && (arg2.isHuman === true || arg2.source === 'human'));
+    const isHuman = (typeof arg2 === 'object' && arg2 !== null)
+        ? (arg2.isHuman === true || arg2.source === 'human' || (arg2.isHuman === undefined && arg2.source !== 'bot' && arg2.source !== 'ai' && arg2.source !== 'campaign' && arg2.source !== 'reminder' && !arg2.templateName))
+        : true;
     if (direction === 'outgoing' && phone && isHuman && status !== 'failed' && status !== 'pending') {
         try {
             const { recordFirstResponse } = require('./lead-assignment');
-            recordFirstResponse(userId, phone).catch(() => {});
+            await recordFirstResponse(userId, phone);
         } catch (_) {}
     }
     return res.rows[0];

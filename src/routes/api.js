@@ -1020,7 +1020,10 @@ router.get('/crm/deals', asyncHandler(async (req, res) => {
     const uid = req.user.id;
     const stage = optionalEnum(req.query.stage, CRM_STAGES, 'stage');
     const leadTemp = optionalEnum(req.query.temperature, ['HOT', 'WARM', 'COLD'], 'temperature');
-    const slaStatus = optionalEnum(req.query.sla_status, ['on_time', 'approaching_sla', 'sla_breached', 'escalated'], 'sla_status');
+    let rawSla = req.query.sla_status;
+    if (rawSla === 'sla_on_time') rawSla = 'on_time';
+    if (rawSla === 'sla_approaching') rawSla = 'approaching_sla';
+    const slaStatus = optionalEnum(rawSla, ['on_time', 'approaching_sla', 'sla_breached', 'escalated'], 'sla_status');
     // Agent role: only see own leads
     let agentId = req.query.agent_id ? requireId(req.query.agent_id, 'agent_id') : null;
     if (req.user.role === 'agent' && req.user.agent_id) {

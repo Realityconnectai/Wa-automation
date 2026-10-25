@@ -152,12 +152,17 @@
   {
     "id": "W10",
     "title": "SLA breached badges: calculation, first-response tracking, reassignment handling",
-    "status": "OPEN",
-    "attempts": 0,
-    "hypotheses": [],
+    "status": "VERIFIED",
+    "attempts": 1,
+    "hypotheses": [
+      {
+        "text": "Enum mismatch (sla_on_time vs on_time) prevented badges from rendering on time leads, logMessage isHuman check prevented recording first response, and reassignment corrupted responded deal SLA state",
+        "result": "CONFIRMED"
+      }
+    ],
     "last_error_signature": null,
-    "next_action": "Awaiting W0 verification",
-    "evidence": [".workpilot/evidence/W10/"]
+    "next_action": "None (W10 Verified)",
+    "evidence": [".workpilot/evidence/W10/evidence.json"]
   },
   {
     "id": "W11",
