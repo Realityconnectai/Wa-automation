@@ -32,8 +32,8 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
 | **W1** | Shared text dispatch service (LID/@c.us/502) | **LIVE_PENDING_HUMAN** | W0 | Phone normalization, `@c.us` vs `@lid` fallback, real message ID capture (Automated checks PASS, awaiting live device send) |
 | **W2** | Text-only campaign | **LIVE_PENDING_HUMAN** | W1 | Pacing, isolation, name template fallback, counters (Automated checks PASS, awaiting live device send) |
 | **W3** | Shared media service ("id property... undefined") | **LIVE_PENDING_HUMAN** | W1 | `MessageMedia` construction, `newMsgKey` preserve in injected utils (Automated checks PASS, awaiting live device send) |
-| **W4** | Campaign media end-to-end | **INVESTIGATING** | W2, W3 | Media campaign dispatch + counters |
-| **W5** | Gemini/AI tools & `thought_signature` | **OPEN** | W0 | Gemini 2.5/3.x thought signature preservation on multi-turn function calls |
+| **W4** | Campaign media end-to-end | **LIVE_PENDING_HUMAN** | W2, W3 | Media campaign dispatch + counters (Automated checks PASS, awaiting live device send) |
+| **W5** | Gemini/AI tools & `thought_signature` | **INVESTIGATING** | W0 | Gemini 2.5/3.x thought signature preservation on multi-turn function calls |
 | **W6** | Brochure/property intent | **OPEN** | W3, W5 | Intent matching, PDF asset lookup, honest failure response |
 | **W7** | Appointment booking flow | **OPEN** | W1, W5 | Intent to real slot query, booking persistence, double-booking rejection |
 | **W8** | Reminders 24h + 2h scheduling | **OPEN** | W1, W7 | Reminder job generation, time calculation, cancellation handling |
@@ -96,3 +96,13 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
   - `tests/live/live_media_matrix.js` executed: all 4 automated steps passed.
   - `npx jest tests/outreach-media-unit.test.js` executed: 13/13 passed.
 - **Status Change:** `W3` → **`LIVE_PENDING_HUMAN`** (Automated checks complete; live media dispatch awaiting §0 allowlist input from operator). Next: `W4`.
+
+### Iteration 5 — 2026-10-26 (W4 Campaign Media End-to-End: LIVE_PENDING_HUMAN)
+- **Target:** W4 Campaign media end-to-end + counters
+- **Root Cause (CONFIRMED):** Campaign media required durable persistence of `media_asset_id` on `outreach_jobs` and strict tenant isolation so tenants cannot attach media belonging to other users.
+- **Files Changed:**
+  - [`tests/live/live_campaign_media.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_campaign_media.js): Live script testing active media assets (WorkPilot_Solutions.pdf and TECH_EVENTS.jpeg), tenant isolation on media assets, media campaign creation with `media_asset_id`, and cleanup.
+- **Verification:**
+  - `tests/live/live_campaign_media.js` executed: all 4 automated steps passed.
+  - `npx jest tests/outreach-ui-unit.test.js` executed: 12/12 passed.
+- **Status Change:** `W4` → **`LIVE_PENDING_HUMAN`** (Automated checks complete; live media campaign dispatch awaiting §0 allowlist input from operator). Next: `W5`.

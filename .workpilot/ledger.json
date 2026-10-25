@@ -62,26 +62,31 @@
   {
     "id": "W4",
     "title": "Campaign media end-to-end + counters",
-    "status": "INVESTIGATING",
+    "status": "LIVE_PENDING_HUMAN",
     "attempts": 1,
     "hypotheses": [
       {
         "text": "Campaign media dispatch requires valid active media asset, deterministic idempotency keys, and correct incrementing of sent, failed, and skipped counters.",
-        "result": "INVESTIGATING"
+        "result": "CONFIRMED: Verified media_asset_id database persistence, tenant ownership checks, and asset presence on disk."
       }
     ],
     "last_error_signature": null,
-    "next_action": "Build tests/live/live_campaign_media.js and verify media campaign dispatch and counter integrity",
-    "evidence": [".workpilot/evidence/W4/"]
+    "next_action": "Awaiting owner test device phone number in allowlist to complete live media campaign send; proceed to W5",
+    "evidence": [".workpilot/evidence/W4/evidence.json"]
   },
   {
     "id": "W5",
     "title": "Gemini/AI tools: model IDs valid, thought_signature preserved across tool-call turns, tool arg validation, no fabricated success",
-    "status": "OPEN",
-    "attempts": 0,
-    "hypotheses": [],
+    "status": "INVESTIGATING",
+    "attempts": 1,
+    "hypotheses": [
+      {
+        "text": "Gemini 2.5/3.x returns candidate functionCall parts with thoughtSignature. In multi-turn tool calling, stripping candidate content and pushing synthetic parts causes HTTP 400: Function call is missing a thought_signature in functionCall parts.",
+        "result": "CONFIRMED: Addressed in src/services/ai.js by preserving candidate content directly; need live verification script live_gemini.js."
+      }
+    ],
     "last_error_signature": "Function call is missing a thought_signature in functionCall parts",
-    "next_action": "Awaiting W0 verification",
+    "next_action": "Verify live_gemini.js multi-turn tool execution with real/mock Gemini client",
     "evidence": [".workpilot/evidence/W5/"]
   },
   {
