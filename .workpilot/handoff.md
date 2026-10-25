@@ -1,34 +1,30 @@
 # WORKPILOT AUTONOMOUS LOOP — CURRENT HANDOFF
 
-**Current Cycle:** Iteration 9  
-**Active Item:** `W8` — Reminders 24h + 2h: job creation, timezone/UTC math, scheduler running, due-query, locking (no duplicates), bounded retries, reschedule/cancel invalidates jobs, short-notice policy, never mark sent before dispatch success  
-**Previous Item:** `W7` — Appointment booking (VERIFIED — Intent detection, real slot booking, concurrency-safe persistence, double-booking rejection with `SLOT_TAKEN`, full reschedule/cancel tool support verified)  
-**Timestamp:** 2026-10-26T02:50:00+05:30  
+**Current Cycle:** Iteration 10  
+**Active Item:** `W9` — Agent availability (Set Busy toast but card stays `available`, repeated toasts, wrong ID, DB write, stale state, polling overwrite, double submit)  
+**Previous Item:** `W8` — Reminders 24h + 2h (VERIFIED — Advance policies, PostgreSQL row status updates, idempotency, server restart recovery, cancellation suppression, invalid phone bounds)  
+**Timestamp:** 2026-10-26T02:56:00+05:30  
 
 ### What Was Just Done
-1. Completed **W7 (Appointment booking)**:
-   - Added `updateAppointment` (with advisory locks and conflict checks) and `getLatestAppointmentForPhone` in [`src/services/database.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/database.js).
-   - Added `rescheduleAppointment` in [`src/services/availability.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/availability.js) with slot re-validation and reminder rescheduling.
-   - Added `reschedule_appointment` and `cancel_appointment` tool definitions and execution handlers in [`src/services/ai.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/ai.js).
-   - Added `PATCH /api/appointments/:id` endpoint for rescheduling in [`src/routes/appointments.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/routes/appointments.js).
-   - Built and executed [`tests/live/live_appointment.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_appointment.js):
-     - Step 1: AI detected "I want to do an appointment" intent, called `check_availability`, and returned natural open slots.
-     - Step 2: Slot booked and durably persisted in PostgreSQL `appointments` table; reminders scheduled in `scheduled_messages`.
-     - Step 3: Double booking on same slot rejected with `SLOT_TAKEN`.
-     - Step 4: Rescheduled appointment; old reminders cancelled (1 cancelled), new reminders scheduled (1 new pending).
-     - Step 5: Cancelled appointment; all pending reminders cleanly cancelled (0 pending remaining).
-   - Ran `node --test tests/bugfixes-verification.test.js`: all 6 passed.
-   - Ran `npx jest tests/appointment-reminders.test.js`: all 12 passed.
-   - Saved system evidence in `.workpilot/evidence/W7/evidence.json`.
+1. Completed **W8 (Reminders 24h + 2h)**:
+   - Validated PostgreSQL `scheduled_messages` schema (`appointment_id`, `reminder_type`, `error_message`).
+   - Built and ran [`tests/live/live_reminders.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_reminders.js):
+     - Step 1: Verified short-notice scheduling policies (>24h schedules 2, 10h schedules 1, 1h schedules 0).
+     - Step 2: Verified scheduler execution claims due rows, dispatches, and updates status to `sent`.
+     - Step 3: Verified idempotency (subsequent tick claims 0).
+     - Step 4: Verified worker restart / crash recovery (`reclaimStuckScheduledMessages`) marks interrupted rows as `failed` with diagnostic reason.
+     - Step 5: Verified cancellation suppression marks pending reminders as `cancelled`.
+     - Step 6: Verified invalid recipient fails boundedly with status `failed`.
+   - Ran `npx jest tests/appointment-reminders.test.js`: 12/12 passed.
+   - Saved system evidence in `.workpilot/evidence/W8/evidence.json`.
    - Set status to **`VERIFIED`**.
 
 ### What Is Next
-1. Investigate and verify **W8 (Reminders 24h + 2h)**:
-   - Audit `src/services/appointment-reminders.js` and `src/services/scheduler.js`.
-   - Verify job creation timing: 24h offset, 2h offset, short-notice policies (>24h schedules both, 2h–24h schedules only 2h, <2h schedules none).
-   - Verify scheduler running loop, due query `status = 'pending' AND scheduled_at <= NOW()`, and advisory locking (prevent duplicate processing).
-   - Verify worker restart / mid-run kill does not duplicate sends.
-   - Build `tests/live/live_reminders.js` and verify.
+1. Investigate and verify **W9 (Agent availability)**:
+   - Investigate why user observed: "Set Busy toast but card stays `available`, repeated toasts: wrong ID? DB write? stale state? polling overwrite? double submit? toast before confirmation? Verify routing honors status".
+   - Inspect backend endpoints for agent status toggle (`src/routes/` and `src/services/database.js`).
+   - Inspect frontend UI (`public/` JS scripts, agent cards, status buttons, polling intervals).
+   - Formulate falsifiable hypothesis, fix root cause, write automated regression test, build and execute `tests/live/live_agent_status.js`.
 
 ### Open Questions / Human Input Needed
 - As required by §0, please provide your test device numbers to populate the live allowlist:

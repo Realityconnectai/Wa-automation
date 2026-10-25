@@ -122,12 +122,17 @@
   {
     "id": "W8",
     "title": "Reminders 24h + 2h: job creation, timezone/UTC math, scheduler running, due-query, locking",
-    "status": "OPEN",
-    "attempts": 0,
-    "hypotheses": [],
+    "status": "VERIFIED",
+    "attempts": 1,
+    "hypotheses": [
+      {
+        "text": "Scheduled reminders table schema uses appointment_id, reminder_type, and error_message; scheduler properly claims, sends, enforces short-notice rules, handles server restart reclamation and invalidates upon cancellation",
+        "result": "CONFIRMED"
+      }
+    ],
     "last_error_signature": null,
-    "next_action": "Awaiting W1, W7",
-    "evidence": [".workpilot/evidence/W8/"]
+    "next_action": "None (W8 Verified)",
+    "evidence": [".workpilot/evidence/W8/evidence.json"]
   },
   {
     "id": "W9",

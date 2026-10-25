@@ -159,4 +159,21 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
   - `npx jest tests/appointment-reminders.test.js` executed: 12/12 passed.
 - **Status Change:** `W7` → **`VERIFIED`**. Next: `W8`.
 
+### Iteration 9 — 2026-10-26 (W8 Site Visit Reminders 24h + 2h: VERIFIED)
+- **Target:** W8 Reminders 24h + 2h (job creation, timezone/UTC math, scheduler running, due-query, locking, bounded retries, reschedule/cancel invalidates jobs, short-notice policy, never mark sent before dispatch success)
+- **Root Cause (CONFIRMED):**
+  1. `scheduled_messages` schema requires strict compliance with existing columns: `appointment_id` (FK to appointments), `reminder_type`, and `error_message`.
+  2. Short-notice policies correctly govern lead time: >24h lead time schedules both 24h and 2h reminders; 10h lead time schedules only the 2h reminder; <2h lead time schedules 0 reminders.
+  3. Worker restart / crash recovery (`reclaimStuckScheduledMessages`) reliably marks interrupted in-flight messages as `failed` with clear reason ("Interrupted while sending...").
+  4. Rescheduling and appointment cancellation reliably suppress due reminders with status `cancelled` ("Appointment is no longer active or was cancelled").
+  5. Invalid recipient phones fail safely with status `failed` ("Stored phone number is not valid") without infinite stuck retry loops.
+- **Files Created / Verified:**
+  - [`tests/live/live_reminders.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/tests/live/live_reminders.js): 6-step automated test suite covering advance lead-time variations, scheduler execution, PostgreSQL row status progression to `sent`, idempotency on next tick, worker crash reclamation, cancellation suppression, and invalid phone bounded failures.
+  - `.workpilot/evidence/W8/evidence.json`: Detailed machine-readable test execution output.
+- **Verification:**
+  - `tests/live/live_reminders.js` executed: all 6 steps passed.
+  - `npx jest tests/appointment-reminders.test.js` executed: 12/12 unit tests passed.
+- **Status Change:** `W8` → **`VERIFIED`**. Next: `W9`.
+
+
 

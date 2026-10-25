@@ -1,0 +1,41 @@
+{
+  "id": "W8",
+  "title": "Reminders 24h + 2h",
+  "status": "VERIFIED",
+  "timestamp": "2026-10-26T02:54:11+05:30",
+  "evidence": {
+    "live_script": "tests/live/live_reminders.js",
+    "unit_suite": "tests/appointment-reminders.test.js",
+    "short_notice_policies": {
+      "case_a_gt_24h": { "lead_hours": 30, "reminders_scheduled": 2, "expected": 2, "passed": true },
+      "case_b_10h": { "lead_hours": 10, "reminders_scheduled": 1, "expected": 1, "passed": true },
+      "case_c_1h": { "lead_hours": 1, "reminders_scheduled": 0, "expected": 0, "passed": true }
+    },
+    "scheduler_execution": {
+      "claimed": 1,
+      "sent": 1,
+      "failed": 0,
+      "lost": 0,
+      "post_status": "sent"
+    },
+    "idempotency": {
+      "claimed": 0,
+      "sent": 0
+    },
+    "worker_restart_reclamation": {
+      "reclaimed": 1,
+      "reclaimed_status": "failed",
+      "reason": "Interrupted while sending (server restarted). Delivery is unconfirmed — check WhatsApp before resending."
+    },
+    "lifecycle_cancellation_suppression": {
+      "status": "cancelled",
+      "reason": "Appointment is no longer active or was cancelled"
+    },
+    "invalid_recipient_bounded_failure": {
+      "status": "failed",
+      "reason": "Stored phone number is not valid"
+    },
+    "unit_tests_passed": 12,
+    "unit_tests_total": 12
+  }
+}
