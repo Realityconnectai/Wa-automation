@@ -50,8 +50,9 @@ async function checkAuth() {
         const adminNav = document.getElementById('nav-admin');
         const label = CURRENT_USER.business_name || CURRENT_USER.owner_name || CURRENT_USER.email;
         if (nameEl)   nameEl.textContent = label;
-        if (avatarEl) avatarEl.textContent = label.slice(0, 2).toUpperCase();
-        if (adminNav) adminNav.style.display = CURRENT_USER.role === 'admin' ? '' : 'none';
+        if (adminNav) {
+            adminNav.hidden = CURRENT_USER.role !== 'admin';
+        }
 
         return true;
     } catch (err) {
