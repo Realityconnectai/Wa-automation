@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Admin — WA Automation</title>
-<meta name="theme-color" content="#0A3325">
-<link rel="stylesheet" href="css/landing.css?v=20260919_5">
+<meta name="theme-color" content="#0F172A">
+<link rel="stylesheet" href="css/admin.css?v=20261026_1">
 </head>
 <body>
 
@@ -17,9 +17,12 @@
             <span class="admin-badge"><span data-icon="crown" aria-hidden="true"></span> Admin</span>
         </span>
         <div class="admin-topbar-actions">
-            <span id="adminWhoami"></span>
-            <a href="/app" class="btn btn-ghost"><span data-icon="layout-dashboard" aria-hidden="true"></span> <span class="topbar-btn-text">Dashboard</span></a>
-            <button class="btn btn-ghost" id="logoutBtn"><span data-icon="log-out" aria-hidden="true"></span> <span class="topbar-btn-text">Log Out</span></button>
+            <div class="admin-user-chip">
+                <span class="admin-avatar" id="adminAvatar">A</span>
+                <span id="adminWhoami">Admin</span>
+            </div>
+            <a href="/app" class="btn-topbar"><span data-icon="layout-dashboard" aria-hidden="true"></span> <span>Dashboard</span></a>
+            <button class="btn-topbar" id="logoutBtn" type="button"><span data-icon="log-out" aria-hidden="true"></span> <span>Log Out</span></button>
         </div>
     </header>
 
@@ -29,7 +32,13 @@
         </div>
 
         <div class="admin-panel" id="diagnosticsPanel">
-            <div class="admin-panel-head"><h2><span data-icon="activity" aria-hidden="true"></span> System Diagnostics</h2><button class="btn btn-tiny" id="refreshDiagnosticsBtn" type="button">Refresh</button></div>
+            <div class="admin-panel-head">
+                <div class="admin-panel-title-group">
+                    <h2><span data-icon="activity" aria-hidden="true"></span> System Diagnostics &amp; Telemetry</h2>
+                    <div class="live-status-pill" id="systemLivePill"><span class="pulse-dot"></span> <span>Systems Operational</span></div>
+                </div>
+                <button class="btn btn-tiny" id="refreshDiagnosticsBtn" type="button"><span data-icon="refresh-cw" aria-hidden="true"></span> Refresh</button>
+            </div>
             <div id="diagnosticsContent" class="admin-empty">Loading diagnostics…</div>
         </div>
 

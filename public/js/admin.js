@@ -74,15 +74,182 @@ function initFilterBar() {
 
 async function loadDiagnostics() {
     const target = document.getElementById('diagnosticsContent');
-    target.textContent = 'Loading diagnostics…';
+    const livePill = document.getElementById('systemLivePill');
+    target.innerHTML = '<div class="admin-empty">Loading diagnostics telemetry…</div>';
     try {
         const data = await api('/api/admin/diagnostics');
-        const m = data.metrics;
-        const sessionRows = data.sessions.length ? data.sessions.map(s => `<tr><td>${escapeHtml(s.account)}</td><td>${s.connected ? 'Connected' : s.initializing ? 'Starting' : s.hibernated ? 'Hibernated' : 'Offline'}${s.hasError ? ' · needs attention' : ''}</td></tr>`).join('') : '<tr><td colspan="2">No accounts</td></tr>';
-        const jobs = data.outreach.length ? data.outreach.map(row => `${escapeHtml(row.status)}: ${row.count}`).join(' · ') : 'No outreach jobs';
-        const calendars = data.calendar.length ? data.calendar.map(row => `${escapeHtml(row.business_name || row.email)}: ${row.last_sync_at ? formatDate(row.last_sync_at) : 'never synced'}`).join('<br>') : 'No connected calendars';
-        target.innerHTML = `<div class="admin-stats-grid"><div class="admin-stat-card"><span><span class="num">${data.failedMedia}</span><span class="lbl">Failed media sends</span></span></div><div class="admin-stat-card"><span><span class="num">${m.ai.failures}</span><span class="lbl">Gemini failures since boot</span></span></div><div class="admin-stat-card"><span><span class="num">${m.scheduler.failed}</span><span class="lbl">Scheduler failures since boot</span></span></div><div class="admin-stat-card"><span><span class="num">${m.eventLoopLagMs}ms</span><span class="lbl">Event-loop lag</span></span></div></div><div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>WhatsApp tenant</th><th>Session health</th></tr></thead><tbody>${sessionRows}</tbody></table></div><p><strong>Outreach / recovery:</strong> ${jobs}</p><p><strong>Calendar sync:</strong><br>${calendars}</p>`;
-    } catch (err) { target.innerHTML = `<div class="admin-empty">Could not load diagnostics: ${escapeHtml(err.message)}</div>`; }
+        const m = data.metrics || { ai: {}, scheduler: {} };
+        const aiFails = Number(m.ai?.failures || 0);
+        const schedFails = Number(m.scheduler?.failed || 0);
+        const lagMs = Number(m.eventLoopLagMs || 0);
+        const failedMedia = Number(data.failedMedia || 0);
+
+        // Update Live Status Pill
+        const hasIssue = failedMedia > 0 || aiFails > 0 || schedFails > 0 || lagMs > 50;
+        if (livePill) {
+            if (hasIssue) {
+                livePill.className = 'live-status-pill attention';
+                livePill.innerHTML = '<span class="pulse-dot amber"></span> <span>Attention Required</span>';
+            } else {
+                livePill.className = 'live-status-pill';
+                livePill.innerHTML = '<span class="pulse-dot"></span> <span>Systems Operational</span>';
+            }
+        }
+
+        // 1. Session Rows
+        const sessionRows = (data.sessions && data.sessions.length)
+            ? data.sessions.map(s => {
+                let badgeClass = 'pill-user';
+                let dotClass = '';
+                let label = 'Offline';
+                if (s.connected) {
+                    badgeClass = 'pill-active';
+                    dotClass = 'connected';
+                    label = 'Connected';
+                } else if (s.initializing) {
+                    badgeClass = 'pill-pending';
+                    dotClass = 'initializing';
+                    label = 'Initializing…';
+                } else if (s.hibernated) {
+                    badgeClass = 'pill-pending';
+                    dotClass = 'hibernated';
+                    label = 'Hibernated';
+                }
+                const errorNotice = s.hasError ? ' <small class="text-danger">(Needs attention)</small>' : '';
+                return `
+                    <tr>
+                        <td>
+                            <div class="user-cell">
+                                <span class="biz">${escapeHtml(s.account)}</span>
+                            </div>
+                        </td>
+                        <td>
+                            <span class="pill ${badgeClass}">
+                                <span class="wa-dot ${dotClass}"></span>
+                                ${label}${errorNotice}
+                            </span>
+                        </td>
+                    </tr>
+                `;
+            }).join('')
+            : '<tr><td colspan="2" class="text-secondary text-sm">No active WhatsApp tenant accounts</td></tr>';
+
+        // 2. Outreach Chips
+        const outreachChips = (data.outreach && data.outreach.length)
+            ? data.outreach.map(row => {
+                const statusKey = String(row.status || '').toLowerCase();
+                const cleanLabel = statusKey.replace(/_/g, ' ');
+                return `
+                    <div class="outreach-chip ${statusKey}">
+                        <span>${escapeHtml(cleanLabel)}</span>
+                        <span class="outreach-chip-num">${row.count}</span>
+                    </div>
+                `;
+            }).join('')
+            : '<span class="text-secondary text-sm">No outreach campaigns recorded</span>';
+
+        // 3. Calendar rows
+        const calendarItems = (data.calendar && data.calendar.length)
+            ? data.calendar.map(row => `
+                <div class="outreach-chip">
+                    <span>${escapeHtml(row.business_name || row.email)}</span>
+                    <span class="text-secondary text-sm">${row.last_sync_at ? formatDate(row.last_sync_at) : 'Never synced'}</span>
+                </div>
+            `).join('')
+            : '<span class="text-secondary text-sm">No connected Google Calendars</span>';
+
+        target.className = 'diagnostics-body';
+        target.innerHTML = `
+            <div class="diag-metrics-grid">
+                <div class="diag-metric-card">
+                    <div class="diag-metric-content">
+                        <span class="diag-metric-label">Failed Media Dispatches</span>
+                        <span class="diag-metric-val">${failedMedia}</span>
+                    </div>
+                    <span class="diag-metric-badge ${failedMedia > 0 ? 'warn' : 'nominal'}">
+                        ${failedMedia > 0 ? 'Retrying' : 'Clear'}
+                    </span>
+                </div>
+                <div class="diag-metric-card">
+                    <div class="diag-metric-content">
+                        <span class="diag-metric-label">Gemini AI Engine</span>
+                        <span class="diag-metric-val">${aiFails} <small class="diag-metric-unit">errs</small></span>
+                    </div>
+                    <span class="diag-metric-badge ${aiFails > 0 ? 'warn' : 'nominal'}">
+                        ${aiFails > 0 ? 'Degraded' : 'Active'}
+                    </span>
+                </div>
+                <div class="diag-metric-card">
+                    <div class="diag-metric-content">
+                        <span class="diag-metric-label">Task Scheduler</span>
+                        <span class="diag-metric-val">${schedFails} <small class="diag-metric-unit">fails</small></span>
+                    </div>
+                    <span class="diag-metric-badge ${schedFails > 0 ? 'warn' : 'nominal'}">
+                        ${schedFails > 0 ? 'Warning' : '1m Cadence'}
+                    </span>
+                </div>
+                <div class="diag-metric-card">
+                    <div class="diag-metric-content">
+                        <span class="diag-metric-label">Event-Loop Latency</span>
+                        <span class="diag-metric-val">${lagMs}ms</span>
+                    </div>
+                    <span class="diag-metric-badge ${lagMs > 50 ? 'warn' : 'nominal'}">
+                        ${lagMs > 50 ? 'High' : 'Optimal'}
+                    </span>
+                </div>
+            </div>
+
+            <div class="diag-telemetry-split">
+                <div class="diag-subcard">
+                    <div class="diag-subcard-head">
+                        <h4>${Icon('smartphone')} WhatsApp Multi-Tenant Gateway</h4>
+                        <span class="filter-badge">${data.sessions?.length || 0}</span>
+                    </div>
+                    <div class="diag-subcard-body admin-table-wrap">
+                        <table class="admin-table">
+                            <thead>
+                                <tr>
+                                    <th>Tenant Account</th>
+                                    <th>Session Health</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${sessionRows}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="diag-subcard">
+                    <div class="diag-subcard-head">
+                        <h4>${Icon('activity')} Subsystems &amp; Sync Health</h4>
+                    </div>
+                    <div class="diag-subcard-body diag-subcard-stack">
+                        <div>
+                            <div class="diag-subheading">
+                                Outreach &amp; Campaign Recovery Status
+                            </div>
+                            <div class="outreach-chip-grid">
+                                ${outreachChips}
+                            </div>
+                        </div>
+                        <div class="diag-divider-top">
+                            <div class="diag-subheading">
+                                Google Calendar Synchronization
+                            </div>
+                            <div class="outreach-chip-grid">
+                                ${calendarItems}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        if (typeof hydrateIcons === 'function') hydrateIcons(target);
+    } catch (err) { 
+        target.className = 'admin-empty';
+        target.innerHTML = `<div>Could not load diagnostics: ${escapeHtml(err.message)}</div>`; 
+    }
 }
 
 function setFilter(filter) {
@@ -121,11 +288,11 @@ function updateFilterBadges() {
     const pendingFilterBtn = document.querySelector('.filter-btn-pending');
 
     if (pending > 0) {
-        if (banner) { banner.hidden = false; banner.style.display = 'flex'; }
+        if (banner) banner.hidden = false;
         if (alertCount) alertCount.textContent = pending;
         if (pendingFilterBtn) pendingFilterBtn.classList.add('has-pending');
     } else {
-        if (banner) { banner.hidden = true; banner.style.display = 'none'; }
+        if (banner) banner.hidden = true;
         if (pendingFilterBtn) pendingFilterBtn.classList.remove('has-pending');
     }
 }
@@ -147,7 +314,11 @@ async function checkAdminAuth() {
         const json = await res.json();
         CURRENT_ADMIN = json.data;
         if (CURRENT_ADMIN.role !== 'admin') { window.location.href = '/app'; return false; }
-        document.getElementById('adminWhoami').textContent = CURRENT_ADMIN.business_name || CURRENT_ADMIN.email;
+        const name = CURRENT_ADMIN.business_name || CURRENT_ADMIN.owner_name || CURRENT_ADMIN.email;
+        const whoEl = document.getElementById('adminWhoami');
+        const avEl = document.getElementById('adminAvatar');
+        if (whoEl) whoEl.textContent = name;
+        if (avEl) avEl.textContent = (name || 'A').slice(0, 1).toUpperCase();
         return true;
     } catch (e) {
         window.location.href = '/login';
@@ -240,11 +411,9 @@ function renderUsers() {
     if (filtered.length === 0) {
         tbody.innerHTML = '';
         empty.hidden = false;
-        empty.style.display = 'block';
         return;
     }
     empty.hidden = true;
-    empty.style.display = 'none';
 
     tbody.innerHTML = filtered.map(u => {
         const initials = (u.business_name || u.email).slice(0, 2).toUpperCase();
