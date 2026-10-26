@@ -67,23 +67,59 @@ describe('Campaign UX, Buffer (1–15 min), and Pending Status Pipeline', () => 
         });
     });
 
-    describe('2. Error serializer and "t: t" root cause prevention', () => {
-        test('maps single-letter minified "t" and "t: t" errors to RECIPIENT_UNRESOLVABLE', () => {
+    describe('2. Error serializer and reliable error classification', () => {
+        test('classifies unresolvable recipient when in resolution context or with LID/WID markers', () => {
             const err1 = new Error('t');
             err1.name = 't';
-            const s1 = serializeSendError(err1, '105957396857003');
+            const s1 = serializeSendError(err1, '105957396857003', 'recipient_resolution');
             expect(s1.code).toBe('RECIPIENT_UNRESOLVABLE');
+            expect(s1.transient).toBe(false);
             expect(s1.reason).toContain('Recipient identifier could not be resolved on WhatsApp');
 
-            const err2 = new Error('t: t');
-            const s2 = serializeSendError(err2, '105957396857003');
-            expect(s2.code).toBe('RECIPIENT_UNRESOLVABLE');
-            expect(s2.reason).toContain('Recipient identifier could not be resolved on WhatsApp');
+            const errLid = new Error('wid error: No LID for user 105957396857003');
+            const sLid = serializeSendError(errLid, '105957396857003');
+            expect(sLid.code).toBe('RECIPIENT_UNRESOLVABLE');
+            expect(sLid.transient).toBe(false);
+        });
 
-            const err3 = new Error('Evaluation failed: t: t');
-            const s3 = serializeSendError(err3, '105957396857003');
-            expect(s3.code).toBe('RECIPIENT_UNRESOLVABLE');
-            expect(s3.reason).toContain('Recipient identifier could not be resolved on WhatsApp');
+        test('does NOT label unrelated one-letter errors as RECIPIENT_UNRESOLVABLE in general context', () => {
+            // General minified runtime "t"
+            const errT = new Error('t');
+            const sT = serializeSendError(errT, '919876543210', 'dispatch');
+            expect(sT.code).toBe('MINIFIED_RUNTIME_ERROR');
+            expect(sT.transient).toBe(true);
+            expect(sT.code).not.toBe('RECIPIENT_UNRESOLVABLE');
+
+            // Arbitrary single-letter error "e" or "x"
+            const errE = new Error('e');
+            const sE = serializeSendError(errE, '919876543210');
+            expect(sE.code).toBe('MINIFIED_RUNTIME_ERROR');
+            expect(sE.code).not.toBe('RECIPIENT_UNRESOLVABLE');
+        });
+
+        test('regression: handles string, one-character, and minified-library error shapes cleanly', () => {
+            // String error
+            const sStr = serializeSendError('Database socket closed', '919876543210');
+            expect(sStr.code).toBe('UNKNOWN_SEND_ERROR');
+            expect(sStr.message).toBe('Database socket closed');
+
+            // One-character string error
+            const sChar = serializeSendError('t', '919876543210');
+            expect(sChar.code).toBe('MINIFIED_RUNTIME_ERROR');
+
+            // Minified library error object
+            const minifiedObj = {
+                message: 't',
+                name: 't',
+                stack: 't: t\n    at anonymous (<anonymous>:1:234)'
+            };
+            const sObj = serializeSendError(minifiedObj, '919876543210');
+            expect(sObj.code).toBe('MINIFIED_RUNTIME_ERROR');
+            expect(sObj.reason).toContain('MINIFIED_RUNTIME_ERROR');
+
+            // Evaluation failed string
+            const sEval = serializeSendError(new Error('Evaluation failed: t: t'), '919876543210');
+            expect(sEval.code).toBe('MINIFIED_RUNTIME_ERROR');
         });
 
         test('maps session disconnected errors to SESSION_NOT_CONNECTED', () => {
@@ -91,6 +127,7 @@ describe('Campaign UX, Buffer (1–15 min), and Pending Status Pipeline', () => 
             const s = serializeSendError(err, '919876543210');
             expect(s.code).toBe('SESSION_NOT_CONNECTED');
             expect(s.reason).toContain('disconnected');
+            expect(s.transient).toBe(true);
         });
 
         test('maps timeout errors to SEND_TIMEOUT', () => {
@@ -98,6 +135,7 @@ describe('Campaign UX, Buffer (1–15 min), and Pending Status Pipeline', () => 
             const s = serializeSendError(err, '919876543210');
             expect(s.code).toBe('SEND_TIMEOUT');
             expect(s.reason).toContain('timed out');
+            expect(s.transient).toBe(true);
         });
 
         test('preserves full meaningful message on other errors', () => {

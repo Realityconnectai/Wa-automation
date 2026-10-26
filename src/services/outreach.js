@@ -48,6 +48,11 @@ function setSleepImplementation(fn) {
     _sleep = fn || ((ms) => new Promise(resolve => setTimeout(resolve, ms)));
 }
 
+let _sendMessage = sendTextMessage;
+function setSendMessageImplementation(fn) {
+    _sendMessage = fn || sendTextMessage;
+}
+
 function randomDelay() {
     return MIN_DELAY_MS + Math.floor(Math.random() * (MAX_DELAY_MS - MIN_DELAY_MS));
 }
@@ -71,11 +76,22 @@ function calculateNextDelay(bufferMinutes, bufferJitter = true) {
     return Math.max(30000, Math.min(900000, jitteredMs));
 }
 
-function serializeSendError(err, phone = '') {
-    const rawMsg = String(err?.message || '').trim();
-    const rawName = String(err?.name || '').trim();
-    const rawCode = String(err?.code || '').trim();
-    const rawStack = String(err?.stack || '').trim();
+function serializeSendError(err, phone = '', context = 'dispatch') {
+    let rawMsg = '';
+    let rawName = '';
+    let rawCode = '';
+    let rawStack = '';
+
+    if (typeof err === 'string') {
+        rawMsg = err.trim();
+    } else if (err && typeof err === 'object') {
+        rawMsg = String(err.message || '').trim();
+        rawName = String(err.name || '').trim();
+        rawCode = String(err.code || '').trim();
+        rawStack = String(err.stack || '').trim();
+    } else if (err !== null && err !== undefined) {
+        rawMsg = String(err).trim();
+    }
 
     // 1. Session disconnection
     const isDisconnect = /not connected|disconnected|destroyed|session closed/i.test(rawMsg) ||
@@ -125,12 +141,17 @@ function serializeSendError(err, phone = '') {
         };
     }
 
-    // 5. Minified WhatsApp Web "t" or "t: t" or unresolvable identifier
-    const isMinifiedOrLidError = /^(evaluation failed:\s*)?t(\s*:\s*t)?$/i.test(rawMsg) ||
-                                rawMsg === 't' ||
-                                rawName === 't' ||
-                                /No LID for user|chat not found|wid error|invalid wid/i.test(rawMsg);
-    if (isMinifiedOrLidError) {
+    // 5. Genuine unresolvable recipient:
+    // Only classify as RECIPIENT_UNRESOLVABLE if:
+    //  a) The code explicitly says so (RECIPIENT_UNRESOLVABLE, INVALID_RECIPIENT)
+    //  b) Explicit WID / LID / contact resolution failure markers in message
+    //  c) Or error occurred specifically in recipient resolution context ('recipient_resolution')
+    const hasExplicitResolutionMarkers = /No LID for user|chat not found|wid error|invalid wid|recipient.*not found|unresolvable recipient/i.test(rawMsg) ||
+                                         rawCode === 'RECIPIENT_UNRESOLVABLE' ||
+                                         rawCode === 'INVALID_RECIPIENT';
+    const isResolutionContext = context === 'recipient_resolution' || context === 'resolution';
+
+    if (hasExplicitResolutionMarkers || (isResolutionContext && (/^(evaluation failed:\s*)?t(\s*:\s*t)?$/i.test(rawMsg) || rawMsg === 't'))) {
         const reason = 'Recipient identifier could not be resolved on WhatsApp (RECIPIENT_UNRESOLVABLE)';
         return {
             code: 'RECIPIENT_UNRESOLVABLE',
@@ -140,20 +161,37 @@ function serializeSendError(err, phone = '') {
         };
     }
 
-    // 6. Generic meaningful fallback
+    // 6. Minified library runtime error (e.g. "t", "t: t", "evaluation failed: t: t") in general context
+    // DO NOT label unrelated one-letter errors as RECIPIENT_UNRESOLVABLE!
+    const isMinifiedError = /^(evaluation failed:\s*)?t(\s*:\s*t)?$/i.test(rawMsg) ||
+                            rawMsg === 't' ||
+                            rawName === 't' ||
+                            (rawMsg.length === 1 && /^[a-z]$/i.test(rawMsg));
+    if (isMinifiedError) {
+        const code = 'MINIFIED_RUNTIME_ERROR';
+        const reason = `WhatsApp Web minified runtime rejection (${rawMsg || 't'}) (MINIFIED_RUNTIME_ERROR)`;
+        return {
+            code,
+            reason,
+            message: reason,
+            transient: true
+        };
+    }
+
+    // 7. Generic meaningful fallback
     let meaningfulMsg = rawMsg;
-    if (!meaningfulMsg || meaningfulMsg === 't' || meaningfulMsg === 't: t' || meaningfulMsg.length <= 1) {
+    if (!meaningfulMsg || meaningfulMsg.length <= 1) {
         const firstLine = rawStack.split('\n')[0].replace(/^Error:\s*/, '').trim();
-        if (firstLine && firstLine !== 't' && firstLine !== 't: t') {
+        if (firstLine && firstLine.length > 1) {
             meaningfulMsg = firstLine;
-        } else if (rawName && rawName !== 't' && rawName !== 'Error') {
+        } else if (rawName && rawName !== 'Error' && rawName.length > 1) {
             meaningfulMsg = rawName;
         } else {
             meaningfulMsg = 'WhatsApp message dispatch rejected by client';
         }
     }
 
-    const code = rawCode && rawCode !== 't' ? rawCode : 'UNKNOWN_SEND_ERROR';
+    const code = rawCode && rawCode.length > 1 ? rawCode : 'UNKNOWN_SEND_ERROR';
     const refId = randomUUID().slice(0, 8);
     const reason = `[${code}] ${meaningfulMsg} (ref: ${refId})`.slice(0, 200);
     return {
@@ -194,7 +232,7 @@ async function interruptibleDelay(delayMs, userId, jobId, nextRecipientId) {
     while (elapsed < delayMs) {
         const step = Math.min(checkIntervalMs, delayMs - elapsed);
         await _sleep(step);
-        elapsed = Date.now() - start;
+        elapsed += step;
 
         const fresh = await getStoredOutreachJob(userId, jobId);
         if (!fresh || fresh.status === 'cancel_requested') {
@@ -279,19 +317,42 @@ async function runJob(jobOrId, maybeUser = null) {
     const bufferMinutes = Number(job.buffer_minutes || 0);
     const bufferJitter = job.buffer_jitter !== false;
 
-    const recipients = await queryAll("SELECT * FROM outreach_recipients WHERE job_id=$1 AND user_id=$2 AND status='pending' ORDER BY id", [job.id, user.id]);
-    for (let i = 0; i < recipients.length; i++) {
-        const recipient = recipients[i];
-        const nextRecipient = i + 1 < recipients.length ? recipients[i + 1] : null;
-
+    while (true) {
         const freshJob = await getStoredOutreachJob(user.id, job.id);
         if (!freshJob || freshJob.status === 'cancel_requested') {
             await runSql("UPDATE outreach_recipients SET status='cancelled', reason='Cancelled before sending', next_send_at=NULL WHERE job_id=$1 AND user_id=$2 AND status IN ('pending', 'sending')", [job.id, user.id]);
             await runSql("UPDATE outreach_jobs SET status='cancelled', finished_at=CURRENT_TIMESTAMP, next_send_at=NULL WHERE id=$1 AND user_id=$2", [job.id, user.id]);
             return;
         }
+
+        // Atomically claim next pending recipient with row-level locking (FOR UPDATE SKIP LOCKED)
+        const claimRes = await runSql(`
+            UPDATE outreach_recipients
+            SET status='sending', next_send_at=NULL
+            WHERE id = (
+                SELECT id FROM outreach_recipients
+                WHERE job_id=$1 AND user_id=$2 AND status='pending'
+                ORDER BY id ASC
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING id, job_id, user_id, contact_id, phone, contact_name, status
+        `, [job.id, user.id]);
+
+        const recipient = claimRes.rows?.[0];
+        if (!recipient) {
+            // No more pending recipients available to claim
+            break;
+        }
+
+        // Lookahead to check if another recipient will be sent after this one
+        const nextPendingRes = await queryAll(
+            "SELECT id FROM outreach_recipients WHERE job_id=$1 AND user_id=$2 AND status='pending' AND id != $3 ORDER BY id ASC LIMIT 1",
+            [job.id, user.id, recipient.id]
+        );
+        const nextRecipient = nextPendingRes?.[0] || null;
+
         const contact = { id: recipient.contact_id, phone: recipient.phone, name: recipient.contact_name };
-        await runSql("UPDATE outreach_recipients SET status='sending', next_send_at=NULL WHERE id=$1 AND user_id=$2 AND status='pending'", [recipient.id, user.id]);
 
         // Re-read the account each iteration.
         const fresh = await getUserById(user.id);
@@ -363,9 +424,7 @@ async function runJob(jobOrId, maybeUser = null) {
                     mediaAssetId: mediaAsset.id
                 });
             } else {
-                const whatsappClient = require('./whatsapp-client');
-                const sender = whatsappClient.sendText || whatsappClient.sendTextMessage || sendTextMessage;
-                const result = await sender(fresh.id, phone, personalized);
+                const result = await _sendMessage(fresh.id, phone, personalized);
                 await logMessage(fresh.id, {
                     waMessageId: result?.id?._serialized || result?.messageId || null,
                     phone,
@@ -411,10 +470,23 @@ async function runJob(jobOrId, maybeUser = null) {
         }
     }
 
-    // Honest status derivation invariant
+    // Guard: only the worker that finishes the last recipient finalizes the job status.
+    // If another concurrent worker is still processing a recipient in 'sending' or 'pending', do not complete yet.
+    const inFlight = await queryAll(
+        "SELECT COUNT(*)::int AS count FROM outreach_recipients WHERE job_id = $1 AND user_id = $2 AND status IN ('pending', 'sending')",
+        [job.id, user.id]
+    );
+    if ((inFlight[0]?.count || 0) > 0) {
+        return;
+    }
+
+    await finalizeOutreachJobStatus(user.id, job.id);
+}
+
+async function finalizeOutreachJobStatus(userId, jobId) {
     const counts = await queryAll(
         "SELECT status, COUNT(*)::int AS count FROM outreach_recipients WHERE job_id = $1 AND user_id = $2 GROUP BY status",
-        [job.id, user.id]
+        [jobId, userId]
     );
     const summary = counts.reduce((acc, row) => { acc[row.status] = Number(row.count); return acc; }, {});
     const sentCount = summary.sent || 0;
@@ -434,7 +506,7 @@ async function runJob(jobOrId, maybeUser = null) {
                   SET status=CASE WHEN status='cancel_requested' THEN 'cancelled' ELSE $1 END,
                       finished_at=CURRENT_TIMESTAMP,
                       next_send_at=NULL
-                  WHERE id=$2 AND user_id=$3 AND status IN ('running','cancel_requested')`, [finalStatus, job.id, user.id]);
+                  WHERE id=$2 AND user_id=$3 AND status IN ('running','cancel_requested')`, [finalStatus, jobId, userId]);
 }
 
 /**
@@ -520,17 +592,40 @@ async function retryFailedOutreachRecipients(userId, jobId) {
 }
 
 async function reclaimInterruptedOutreachJobs() {
+    // 1. Mark in-flight recipients that died mid-send as failed (delivery unconfirmed, safe against duplicate sends)
     const reclaimedRecipients = await runSql(
-        "UPDATE outreach_recipients SET status = 'pending', next_send_at = NULL WHERE status = 'sending'",
+        "UPDATE outreach_recipients SET status = 'failed', reason = 'Interrupted by server restart mid-send', next_send_at = NULL WHERE status = 'sending'",
         []
     );
-    const interruptedJobs = await runSql(
-        "UPDATE outreach_jobs SET status = 'interrupted', finished_at = CURRENT_TIMESTAMP, next_send_at = NULL WHERE status IN ('running', 'cancel_requested')",
+
+    // 2. Find jobs that were in 'running' state when process restarted
+    const runningJobs = await queryAll(
+        "SELECT id, user_id FROM outreach_jobs WHERE status = 'running'",
         []
     );
+
+    let resumedCount = 0;
+    for (const j of runningJobs) {
+        const pending = await queryAll(
+            "SELECT COUNT(*)::int AS count FROM outreach_recipients WHERE job_id = $1 AND status = 'pending'",
+            [j.id]
+        );
+        if ((pending[0]?.count || 0) > 0) {
+            const user = await getUserById(j.user_id);
+            if (user && user.status === 'active') {
+                runJob(j.id, user).catch(err => {
+                    console.error(`❌ Error resuming outreach job ${j.id}:`, err.message);
+                });
+                resumedCount++;
+            }
+        } else {
+            await finalizeOutreachJobStatus(j.user_id, j.id);
+        }
+    }
+
     return {
-        reclaimedRecipients: reclaimedRecipients.changes || 0,
-        interruptedJobs: interruptedJobs.changes || 0
+        reclaimedRecipients: reclaimedRecipients.rowCount || reclaimedRecipients.changes || 0,
+        resumedJobs: resumedCount
     };
 }
 
@@ -549,6 +644,7 @@ module.exports = {
     calculateNextDelay,
     serializeSendError,
     setSleepImplementation,
+    setSendMessageImplementation,
     MAX_RECIPIENTS_PER_JOB,
     MIN_DELAY_MS,
     MAX_DELAY_MS

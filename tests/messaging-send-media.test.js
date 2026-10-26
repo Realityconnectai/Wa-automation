@@ -145,6 +145,9 @@ describe('sendMedia via mocked WA session (DB)', () => {
         wwjs.__reset();
         const fakeClient = new wwjs.Client();
         fakeClient.becomeReady('919999999999');
+        const session = wa.getSession(userId);
+        session.client = fakeClient;
+        session.isConnected = true;
         jest.spyOn(wa, 'sendMediaMessage').mockImplementation(async (uid, phone, { base64Data, mimeType, fileName, caption }) => {
             const { MessageMedia } = require('whatsapp-web.js');
             const media = new MessageMedia(mimeType, base64Data, fileName);

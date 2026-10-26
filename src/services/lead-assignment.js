@@ -412,12 +412,21 @@ async function assignLead(userId, dealId, optionsOrAgentId = {}, maybeReason = n
             [userId, dealId, prevAgentId, selectedAgent.id, assignedByUserId, reason]
         );
 
+        const humanReason = {
+            auto_inbound: 'auto-inbound',
+            manual_reassign: 'manual reassignment',
+            manual_reassignment: 'manual reassignment',
+            manual_at_creation: 'assigned at creation',
+            sla_escalation: 'SLA escalation',
+            workload_rebalance: 'workload rebalance'
+        }[reason] || (reason ? reason.replace(/_/g, ' ') : 'automatic');
+
         // Log to CRM activities
         await addCrmActivity(
             userId,
             deal.phone,
             'assignment',
-            `Lead assigned to ${selectedAgent.name} (${reason})`
+            `Lead assigned to ${selectedAgent.name} (${humanReason})`
         );
 
         return updatedDeal;

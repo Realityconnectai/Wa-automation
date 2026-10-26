@@ -60,7 +60,17 @@ async function initScheduler() {
             console.warn(`⚠️ Scheduler: ${stuck.length} scheduled message(s) were interrupted mid-send and marked failed (delivery unconfirmed).`);
         }
     } catch (e) {
-        console.error('❌ Scheduler: could not reclaim interrupted jobs:', e.message);
+        console.error('❌ Scheduler: could not reclaim interrupted scheduled messages:', e.message);
+    }
+
+    try {
+        const { reclaimInterruptedOutreachJobs } = require('./outreach');
+        const outreachRes = await reclaimInterruptedOutreachJobs();
+        if (outreachRes.resumedJobs > 0 || outreachRes.reclaimedRecipients > 0) {
+            console.log(`⏰ Scheduler: reclaimed ${outreachRes.reclaimedRecipients} in-flight outreach recipient(s), resumed ${outreachRes.resumedJobs} campaign job(s).`);
+        }
+    } catch (e) {
+        console.error('❌ Scheduler: could not resume interrupted outreach jobs:', e.message);
     }
 
     // Run every minute — the outer try/catch ensures a cron error never crashes the process

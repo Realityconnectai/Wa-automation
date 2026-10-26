@@ -1877,6 +1877,15 @@ h1, h2, h3, h4 { font-family: var(--font-display); letter-spacing: -0.015em; }
     border-radius: 4px;
     flex-shrink: 0;
 }
+.chart-legend-swatch.swatch-stage-0 { background-color: #79BF94; }
+.chart-legend-swatch.swatch-stage-1 { background-color: #50AC76; }
+.chart-legend-swatch.swatch-stage-2 { background-color: #2F8F58; }
+.chart-legend-swatch.swatch-stage-3 { background-color: #1B7144; }
+.chart-legend-swatch.swatch-stage-4 { background-color: #0D5231; }
+.chart-legend-swatch.swatch-interest-interested { background-color: #1B9457; }
+.chart-legend-swatch.swatch-interest-unclear { background-color: #C99B2E; }
+.chart-legend-swatch.swatch-interest-not_interested { background-color: #C4553D; }
+.chart-legend-swatch.swatch-interest-neutral { background-color: #5E7FBF; }
 
 .chart-legend-label {
     color: var(--color-text-primary);

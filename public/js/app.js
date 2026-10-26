@@ -185,7 +185,8 @@ function showToast(message, type = 'info') {
 function showErrorBanner(containerId, message, retryFn) {
     const el = document.getElementById(containerId);
     if (!el) return;
-    el.style.display = 'flex';
+    el.hidden = false;
+    el.removeAttribute('style');
     el.innerHTML = `
         <div class="error-banner" role="alert">
             <span aria-hidden="true">${Icon('triangle-alert')}</span>
@@ -203,18 +204,18 @@ function showErrorBanner(containerId, message, retryFn) {
 
 function clearErrorBanner(containerId) {
     const el = document.getElementById(containerId);
-    if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+    if (el) { el.hidden = true; el.removeAttribute('style'); el.innerHTML = ''; }
 }
 
 // ─── Skeleton Helpers ─────────────────────────────────────────
 function showSkeleton(id) {
     const el = document.getElementById(id);
-    if (el) el.style.display = '';
+    if (el) { el.hidden = false; el.removeAttribute('style'); }
 }
 
 function hideSkeleton(id) {
     const el = document.getElementById(id);
-    if (el) el.style.display = 'none';
+    if (el) { el.hidden = true; el.removeAttribute('style'); }
 }
 
 // ─── Navigation ─────────────────────────────────────────────
@@ -303,12 +304,15 @@ async function loadDashboard() {
         // Update demo mode indicator
         const indicator = document.getElementById('modeIndicator');
         if (indicator) {
+            indicator.removeAttribute('style');
             if (stats.demoMode) {
                 indicator.innerHTML = `${Icon('flask-conical', 'icon-inline')}Demo Mode`;
-                indicator.style.color = '#E3C15C';
+                indicator.classList.add('text-warning');
+                indicator.classList.remove('text-success');
             } else {
                 indicator.innerHTML = `<span class="live-dot"></span>Live`;
-                indicator.style.color = '#4ADE80';
+                indicator.classList.add('text-success');
+                indicator.classList.remove('text-warning');
             }
         }
 
@@ -344,13 +348,17 @@ async function loadDashboard() {
 
         const waEl = document.getElementById('valWaStatus');
         if (waEl) {
+            waEl.removeAttribute('style');
             waEl.textContent = stats.waConnected ? 'Connected' : 'Offline';
-            waEl.style.color = stats.waConnected ? 'var(--color-success)' : 'var(--color-error)';
+            waEl.classList.toggle('text-success', Boolean(stats.waConnected));
+            waEl.classList.toggle('text-danger', !stats.waConnected);
         }
         const aiEl = document.getElementById('valAiStatus');
         if (aiEl) {
+            aiEl.removeAttribute('style');
             aiEl.textContent = stats.aiConfigured ? 'Active' : 'Setup needed';
-            aiEl.style.color = stats.aiConfigured ? 'var(--color-success)' : 'var(--color-warning)';
+            aiEl.classList.toggle('text-success', Boolean(stats.aiConfigured));
+            aiEl.classList.toggle('text-warning', !stats.aiConfigured);
         }
     } catch (err) {
         showErrorBanner('dashboardError', 'Failed to load dashboard data.', loadDashboard);
@@ -706,20 +714,17 @@ function renderHtmlLegend(containerId, items) {
     const total = items.reduce((s, i) => s + i.value, 0) || 1;
     el.innerHTML = items.map((i, idx) => `
         <div class="chart-legend-row">
-            <span class="chart-legend-swatch" data-legend-idx="${idx}"></span>
+            <span class="chart-legend-swatch ${escapeHtml(i.cls || '')}" data-legend-idx="${idx}"></span>
             <span class="chart-legend-label">${escapeHtml(i.label)}</span>
             <span class="chart-legend-value">${i.formatted !== undefined ? i.formatted : i.value} · ${Math.round(i.value / total * 100)}%</span>
         </div>`).join('');
-    el.querySelectorAll('.chart-legend-swatch').forEach((swatch, idx) => {
-        if (items[idx]?.color) swatch.style.backgroundColor = items[idx].color;
-    });
 }
 
 function renderCrmCharts(a) {
     const grid = document.getElementById('crmChartsGrid');
     if (!grid) return;
-    if (typeof Chart === 'undefined') { grid.style.display = 'none'; return; } // CDN unavailable — charts skipped
-    grid.style.display = '';
+    if (typeof Chart === 'undefined') { grid.hidden = true; return; } // CDN unavailable — charts skipped
+    grid.hidden = false;
     destroyCrmCharts();
 
     Chart.defaults.font.family = "'Inter', -apple-system, sans-serif";
@@ -738,10 +743,10 @@ function renderCrmCharts(a) {
     const legendDealsEl = document.getElementById('legendStageDeals');
     if (donutEl) {
         if (stageCounts.every(c => c === 0)) {
-            donutEl.style.display = 'none';
+            donutEl.hidden = true;
             if (legendDealsEl) legendDealsEl.innerHTML = '<p class="chart-empty">No open deals yet — analyzed sales chats will appear here.</p>';
         } else {
-            donutEl.style.display = '';
+            donutEl.hidden = false;
             crmCharts.stageDeals = new Chart(donutEl, {
                 type: 'doughnut',
                 data: {
@@ -764,7 +769,7 @@ function renderCrmCharts(a) {
                 }
             });
             renderHtmlLegend('legendStageDeals', stageLabels.map((l, i) => ({
-                label: l, value: stageCounts[i], color: STAGE_RAMP[i]
+                label: l, value: stageCounts[i], color: STAGE_RAMP[i], cls: `swatch-stage-${i}`
             })).filter(i => i.value > 0));
         }
     }
@@ -813,10 +818,10 @@ function renderCrmCharts(a) {
         (a.interestMix || []).forEach(r => { mixMap[r.interest_status] = r.count; });
         const items = INTEREST_ORDER.map(i => ({ ...i, value: mixMap[i.key] || 0 }));
         if (items.every(i => i.value === 0)) {
-            intEl.style.display = 'none';
+            intEl.hidden = true;
             if (legendIntEl) legendIntEl.innerHTML = '<p class="chart-empty">No lead analyses yet — run "Analyze All Chats" in the Lead Analysis tab.</p>';
         } else {
-            intEl.style.display = '';
+            intEl.hidden = false;
             crmCharts.interest = new Chart(intEl, {
                 type: 'doughnut',
                 data: {
@@ -835,7 +840,7 @@ function renderCrmCharts(a) {
                     plugins: { legend: { display: false }, tooltip: chartTooltipStyle() }
                 }
             });
-            renderHtmlLegend('legendInterest', items.filter(i => i.value > 0));
+            renderHtmlLegend('legendInterest', items.map(i => ({ ...i, cls: `swatch-interest-${i.key}` })).filter(i => i.value > 0));
         }
     }
 
@@ -968,7 +973,7 @@ async function loadCrm() {
         animateValue('valCrmFollowups', stats.followupsDue);
 
         if (analytics) renderCrmCharts(analytics);
-        else document.getElementById('crmChartsGrid')?.style.setProperty('display', 'none');
+        else { const g = document.getElementById('crmChartsGrid'); if (g) g.hidden = true; }
 
         const board = document.getElementById('kanbanBoard');
 
@@ -1043,7 +1048,6 @@ async function openDealModal(phone) {
 
     if (backdrop) {
         backdrop.hidden = false;
-        backdrop.style.display = 'flex';
     }
     body.innerHTML = '<div class="empty-state">Loading deal…</div>';
 
@@ -1053,7 +1057,8 @@ async function openDealModal(phone) {
             api('/api/inventory/projects'),
             api('/api/crm/agents').catch(() => [])
         ]);
-        const assignments = await api(`/api/crm/deals/${deal.id}/assignments`).catch(() => []);
+        const assignmentsRes = await api(`/api/crm/deals/${deal.id}/assignments`).catch(() => []);
+        const assignments = Array.isArray(assignmentsRes) ? assignmentsRes : (assignmentsRes?.history || assignmentsRes?.data || []);
         title.textContent = deal.contact_name || deal.phone;
 
         const followupVal = deal.next_followup_at ? deal.next_followup_at.replace(' ', 'T').slice(0, 16) : '';
@@ -1076,6 +1081,9 @@ async function openDealModal(phone) {
                 sla_escalation: 'SLA escalation',
                 auto_inbound: 'Auto-assigned (new inbound)',
                 manual: 'Manual reassignment',
+                manual_reassign: 'Manual reassignment',
+                manual_reassignment: 'Manual reassignment',
+                manual_at_creation: 'Assigned at creation',
                 workload_rebalance: 'Workload rebalance'
             };
             return map[code] || code.replace(/_/g, ' ');
@@ -1241,13 +1249,30 @@ async function openDealModal(phone) {
     }
 }
 
+function humanizeActivityText(text) {
+    if (!text || typeof text !== 'string') return '';
+    const map = {
+        sla_escalation: 'SLA escalation',
+        auto_inbound: 'auto-inbound',
+        manual_reassign: 'manual reassignment',
+        manual_reassignment: 'manual reassignment',
+        manual_at_creation: 'assigned at creation',
+        workload_rebalance: 'workload rebalance',
+        first_touch: 'first touch',
+        response_due: 'response due',
+        auto_rule: 'rule-based',
+        round_robin: 'round robin'
+    };
+    return text.replace(/\b(sla_escalation|auto_inbound|manual_reassign(?:ment)?|manual_at_creation|workload_rebalance|first_touch|response_due|auto_rule|round_robin)\b/g, m => map[m] || m.replace(/_/g, ' '));
+}
+
 function renderActivity(act) {
     const icons = { note: 'sticky-note', ai: 'brain', stage: 'shuffle', system: 'settings' };
     return `
         <div class="activity-entry">
             <span class="activity-entry-icon">${Icon(icons[act.type] || 'sticky-note')}</span>
             <div class="activity-entry-body">
-                <div>${escapeHtml(act.content)}</div>
+                <div>${escapeHtml(humanizeActivityText(act.content))}</div>
                 <small>${formatDate(act.created_at)}</small>
             </div>
         </div>`;
@@ -1257,7 +1282,6 @@ function closeDealModal() {
     const backdrop = document.getElementById('dealModalBackdrop');
     if (backdrop) {
         backdrop.hidden = true;
-        backdrop.style.display = 'none';
     }
     currentDealPhone = null;
 }
@@ -3508,12 +3532,18 @@ function renderCompactReminders(reminders) {
 
     const formatChip = (r, label) => {
         if (!r) return `${label} —`;
-        if (r.status === 'sent') return `<span class="text-success font-bold" title="${label} sent">✓ ${label}</span>`;
+        // Strictly tick ONLY after a confirmed send with a message ID
+        if (r.status === 'sent' && r.wa_message_id) {
+            return `<span class="text-success font-bold" title="${label} sent (confirmed dispatched with message ID: ${escapeHtml(r.wa_message_id)}; sent, not read receipt)">✓ ${label}</span>`;
+        }
+        if (r.status === 'sent') {
+            return `<span class="text-warning font-bold" title="${label} dispatched (awaiting server message ID)">… ${label}</span>`;
+        }
         if (r.status === 'scheduled') return `<span class="text-primary font-bold" title="${label} scheduled">⏱ ${label}</span>`;
         if (r.status === 'sending') return `<span class="text-warning font-bold" title="${label} sending">… ${label}</span>`;
         if (r.status === 'failed') return `<span class="text-danger font-bold" title="${label} failed: ${escapeHtml(r.error_message || '')}">⚠ ${label}</span>`;
         if (r.status === 'skipped') return `<span class="text-secondary" title="${label} skipped: ${escapeHtml(r.error_message || 'Notice period')}">⊘ ${label}</span>`;
-        return `<span class="text-secondary">✕ ${label}</span>`;
+        return `<span class="text-secondary" title="${label} cancelled: ${escapeHtml(r.error_message || 'Cancelled')}">✕ ${label}</span>`;
     };
 
     return `<span class="reminder-compact-indicator font-mono">${formatChip(r24, '24h')} · ${formatChip(r2, '2h')}</span>`;
@@ -3615,8 +3645,10 @@ async function openAppointmentDetailModal(appointmentId) {
             const cls = statusClassMap[r.status] || 'reminder-chip-skipped';
             let statusBadge = `<span class="reminder-chip ${cls}">${r.status.toUpperCase()}</span>`;
 
-            if (r.status === 'sent') {
+            if (r.status === 'sent' && r.wa_message_id) {
                 statusBadge = `<span class="reminder-chip reminder-chip-sent">${Icon('check-circle', 'icon-inline')}✓ Sent · ${formatDate(r.sent_at)}</span>`;
+            } else if (r.status === 'sent') {
+                statusBadge = `<span class="reminder-chip reminder-chip-sending">${Icon('loader', 'icon-inline')}Dispatched (Awaiting ID)</span>`;
             } else if (r.status === 'scheduled') {
                 const targetTime = new Date(r.scheduled_at + (r.scheduled_at.includes('Z') || r.scheduled_at.includes('+') ? '' : 'Z')).getTime();
                 const dueInMins = Math.round((targetTime - Date.now()) / 60000);
@@ -3677,7 +3709,7 @@ async function openAppointmentDetailModal(appointmentId) {
 
                 <div class="modal-section mt-16">
                     <h3>${Icon('bell', 'icon-inline')}Appointment Reminders (24h & 2h)</h3>
-                    <p class="text-secondary-sm">Automated WhatsApp reminders scheduled to ensure client attendance. The green tick appears only when WhatsApp confirms delivery.</p>
+                    <p class="text-secondary-sm">Automated WhatsApp reminders scheduled to ensure client attendance. <strong>✓ Sent</strong> indicates confirmed dispatch to WhatsApp with a valid message ID by the server (sent, not read receipt).</p>
                     <div class="reminder-cards-grid">
                         ${renderReminderCard('24 Hours Before Reminder', r24)}
                         ${renderReminderCard('2 Hours Before Reminder', r2)}
@@ -3685,6 +3717,30 @@ async function openAppointmentDetailModal(appointmentId) {
                 </div>
             `;
         }
+
+        // Live refresh of the tick while modal is actively open
+        if (window._appointmentDetailPollTimer) clearInterval(window._appointmentDetailPollTimer);
+        window._appointmentDetailPollTimer = setInterval(async () => {
+            const modalEl = document.getElementById('appointmentDetailModalBackdrop');
+            if (!modalEl || modalEl.hidden || modalEl.style.display === 'none') {
+                clearInterval(window._appointmentDetailPollTimer);
+                window._appointmentDetailPollTimer = null;
+                return;
+            }
+            try {
+                const freshAppt = await api(`/api/appointments/${appointmentId}`);
+                const freshReminders = freshAppt.reminders || [];
+                const fr24 = freshReminders.find(r => r.type === '24h');
+                const fr2 = freshReminders.find(r => r.type === '2h');
+                const grid = document.querySelector('#appointmentDetailModalBody .reminder-cards-grid');
+                if (grid) {
+                    grid.innerHTML = `
+                        ${renderReminderCard('24 Hours Before Reminder', fr24)}
+                        ${renderReminderCard('2 Hours Before Reminder', fr2)}
+                    `;
+                }
+            } catch (_) {}
+        }, 3500);
     } catch (err) {
         if (bodyEl) {
             bodyEl.innerHTML = `<div class="empty-state text-danger">Failed to load appointment details: ${escapeHtml(err.message)}</div>`;
@@ -3693,6 +3749,10 @@ async function openAppointmentDetailModal(appointmentId) {
 }
 
 function closeAppointmentDetailModal() {
+    if (window._appointmentDetailPollTimer) {
+        clearInterval(window._appointmentDetailPollTimer);
+        window._appointmentDetailPollTimer = null;
+    }
     const modal = document.getElementById('appointmentDetailModalBackdrop');
     if (modal) {
         modal.hidden = true;
@@ -4140,8 +4200,8 @@ function applyConnectionState(data) {
     const statusText  = document.querySelector('#connectionStatus .status-text');
     const connInfo    = document.getElementById('connectionInfo');
 
-    const show = (el) => { if (el) el.style.display = ''; };
-    const hide = (el) => { if (el) el.style.display = 'none'; };
+    const show = (el) => { if (el) { el.hidden = false; el.removeAttribute('style'); } };
+    const hide = (el) => { if (el) { el.hidden = true; el.removeAttribute('style'); } };
 
     // Remove any previous reconnect button if present
     const oldReconnect = document.getElementById('qrReconnectBtnContainer');
@@ -4149,8 +4209,8 @@ function applyConnectionState(data) {
 
     if (data.type === 'qr') {
         show(qrLoading); hide(qrImage); hide(qrSuccess);
-        if (qrImage) { qrImage.src = data.data; qrImage.style.display = 'block'; }
-        if (qrLoading) qrLoading.style.display = 'none';
+        if (qrImage) { qrImage.src = data.data; qrImage.hidden = false; qrImage.removeAttribute('style'); }
+        if (qrLoading) { qrLoading.hidden = true; qrLoading.removeAttribute('style'); }
         if (statusDot)  statusDot.className  = 'status-dot error';
         if (statusText) statusText.textContent = 'Scan QR Code';
         if (connInfo)   connInfo.innerHTML   = `<p class="text-warning">${Icon('triangle-alert', 'icon-inline')}Waiting for QR Code scan. Go to Settings → WhatsApp QR.</p>`;
@@ -4172,8 +4232,7 @@ function applyConnectionState(data) {
         if (qrContainer && !document.getElementById('qrReconnectBtnContainer')) {
             const reconnectDiv = document.createElement('div');
             reconnectDiv.id = 'qrReconnectBtnContainer';
-            reconnectDiv.style.textAlign = 'center';
-            reconnectDiv.style.padding = '24px 16px';
+            reconnectDiv.className = 'text-center p-24';
 
             // Only show connect button if admin has granted WA access to this user
             const waAllowed = CURRENT_USER && (CURRENT_USER.role === 'admin' || CURRENT_USER.wa_enabled);
