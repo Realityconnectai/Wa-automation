@@ -419,6 +419,57 @@ Tested on live WhatsApp Web session across all 7 cases:
   - `npm run lint`: 137/137 files passed syntax validation.
   - Live Browser Subagent: Visual check of deal modal, appointments reminders panel, and campaign delay buffer completed cleanly with screenshots captured.
 
+### Iteration 15 — 2026-10-26 (WhatsApp Session Persistence & Reconnection Lifecycle: VERIFIED)
+- **Target:** Fix WhatsApp connection lifecycle so sessions remain connected across server restarts, recover automatically from temporary disconnects, and never get stuck indefinitely on "Initializing…" / "Loading WhatsApp Client…".
+- **Root Cause (CONFIRMED & EVIDENCE-BASED):**
+  1. **Shutdown Wipes Auth Data (Critical Bug):** In `src/services/whatsapp-client.js:836`, `destroyAllClients()` called `destroyClientForUser(id)`. Inside `destroyClientForUser()`, lines 818–830 unconditionally called `s.client.logout()` and `fs.rmSync(authDir, { recursive: true, force: true })`! Every time the server shut down or restarted, all saved credentials and session files on disk were permanently wiped.
+  2. **Aggressive Keep-Alive Destroys Healthy Sessions:** In `src/services/whatsapp-client.js:602`, `keepAliveTimer` checked `client.getState() !== 'CONNECTED'` every 30s. If WhatsApp Web was briefly navigating, re-syncing, or evaluating across frames (`Attempted to use detached Frame '84EC761578E7A18AEB1598566E67E21E'`), the error was treated as fatal and immediately tore down the client and restarted.
+  3. **Leaked Orphan Chrome Processes & Windows Lock Contention:** `safeDestroyClient()` called `c.destroy()` with an 8s timeout but had zero OS process termination fallback (`taskkill /F /T /PID`). On Windows, child Chrome processes remained alive in the background holding file locks on `.wwebjs_auth/user_<id>/session` (`DevToolsActivePort`, `lockfile`, `LOCK`). Subsequent launches opened duplicate tabs in the existing Chrome instance, triggering WhatsApp Web's "open in another window" screen, which never emitted state transitions.
+  4. **Unbounded `client.initialize()` & Deadlocked Queue:** `processInitQueue()` ran `await client.initialize()` with no timeout. When Chrome hung or stalled, `client.initialize()` hung forever, leaving `isInitializingAnyClient = true` and `s.isInitializing = true`, deadlocking all further connection attempts.
+  5. **Broken `clean-chrome-locks.js` on Windows 11:** `scripts/clean-chrome-locks.js` used deprecated `wmic`, silently failing to terminate orphan processes on Windows 11.
+  6. **Frontend State & Missing QR State Transition:** In `client.on('qr')`, `s.isInitializing` was not set to `false`, causing `getStatus()` to return `initializing: true`. In `public/js/app.js`, when `loading` was received, the reconnect UI was removed and replaced with static "Loading WhatsApp Client…" with no timeout or retry fallback.
+- **Files Changed:**
+  - [`src/services/whatsapp-client.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/services/whatsapp-client.js):
+    - Added `{ wipeAuth = false } = {}` option to `destroyClientForUser`. `logout()` and `rmSync(authDir)` only run when `wipeAuth === true`.
+    - Updated `destroyAllClients()` to pass `wipeAuth: false`, preserving saved session credentials on server restart/shutdown.
+    - Added `forceKillProcessTree(pid)` and tracked `s.browserPid` to force-kill leaked Chrome trees on teardown.
+    - Expanded `clearStaleLocks` to include `lockfile` and `LOCK`.
+    - Added 90s timeout (`Promise.race`) to `processInitQueue()` with safe client destruction, lock cleanup, and exponential backoff retry.
+    - Added `initWatchdog` (95s) in `initWhatsAppClient` to prevent stuck initializing states.
+    - Updated `attachHandlers`: set `s.isInitializing = false` on `qr` and `authenticated`; broadcast `change_state` and `loading_screen`; differentiated `LOGOUT` from transient disconnects (preserve session, retry with backoff).
+    - Hardened `keepAliveTimer`: requires 3 consecutive non-CONNECTED checks (90s); treats detached frame, evaluation context, protocol errors as transient.
+    - Updated `getStatus(userId)` to return structured `state` (`connecting`, `qr_ready`, `connected`, `reconnecting`, `logged_out`, `disconnected`, `error`).
+  - [`src/routes/api.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/src/routes/api.js):
+    - Updated `/whatsapp/disconnect` to accept explicit `wipeAuth: true` or `logout: true`, preserving session credentials by default.
+  - [`scripts/clean-chrome-locks.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/scripts/clean-chrome-locks.js):
+    - Replaced deprecated WMIC with PowerShell `Get-Process | Where-Object Path -like '*puppeteer*'` termination.
+    - Added cleanup of `LOCK`, `lockfile`, `DevToolsActivePort`, `SingletonLock`.
+  - [`server.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/server.js):
+    - Imported and executed `cleanAuthLocks()` and `killOrphanPuppeteerProcesses()` on server startup in `start()`.
+    - Graceful shutdown preserves auth directory.
+  - [`public/js/app.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/public/js/app.js):
+    - Updated `startStatusPolling` and `applyConnectionState`: accurate multi-state UI (`Connecting`, `QR Ready`, `Connected`, `Reconnecting`, `Logged Out`, `Connection Error`).
+    - Added 35s loading watchdog displaying an inline "Retry Connection" button so the UI never stays stuck on "Initializing…".
+    - Handled `loading_screen` progress percent and immediate delivery of real QR codes to `#qrImage`.
+  - [`scripts/patch-wwebjs.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/scripts/patch-wwebjs.js) & [`node_modules/whatsapp-web.js/src/Client.js`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/node_modules/whatsapp-web.js/src/Client.js):
+    - **CRITICAL UPSTREAM BUG & FIX:** Fixed upstream `whatsapp-web.js` issue where resuming pre-authenticated sessions that already have `Socket.hasSynced === true` never fired `Socket.on('change:hasSynced')`. Patched `Client.js` to immediately evaluate `if (window.require('WAWebSocketModel').Socket.hasSynced) { window.onAppStateHasSyncedEvent(); }` with a `this._hasSyncedHandled` idempotency guard. Integrated patch into automated `npm run postinstall`.
+- **Verification & End-to-End Test Results:**
+  1. *Server Restart & Session Persistence:* Server stopped and restarted cleanly (`npm start`). Stale locks were safely cleared, orphan puppeteer processes were pruned, and saved session was found: `🔁 Resuming 1 saved WhatsApp session(s)`. Client loaded `.wwebjs_auth/user_1/session`, authenticated immediately (`✅ [user 1] WhatsApp Authenticated!`) without prompting for QR scan, and reached `✅ [user 1] WhatsApp Client is READY!`.
+  2. *Live UI Verification:* Browser subagent logged in as `aryan@gmail.com` at `http://localhost:3000/app`:
+     - Top navigation bar status badge immediately displays `Connected` with green pulse indicator.
+     - Settings -> WhatsApp QR tab displays `Connected to WhatsApp`, `Phone: 918950153750`, and `✓ WhatsApp is Connected!`.
+     - Zero instances of UI stuck indefinitely on "Initializing…" or "Loading WhatsApp Client…".
+  3. *Long-term Stability (15–20 minutes):* Background server log (`task-711`) observed continuously. Client remained connected, responsive, and steady with zero detached-frame crashes, zero keep-alive reconnect storms, and zero session corruption.
+  4. *Regression & Safety Test Suites:*
+     - `npm run lint`: 149/149 files passed syntax and structure validation.
+     - `npm run test:unit`: 188/188 passed (`tests/validation.test.js`, `tests/auth.security.test.js`).
+     - `npx jest tests/whatsapp-guard.test.js tests/whatsapp-test-guard.test.js`: 4/4 passed.
+     - `npx jest tests/campaigns-unit.test.js tests/outreach-media-unit.test.js tests/appointment-reminders.test.js`: 36/36 passed.
+     - `node tests/live/live_manual_text.js`: Passed (negative rejection, harness allowlist lockout guard active, LID resolution verified).
+- **Status:** **VERIFIED & CLOSED** — Session persistence, lifecycle recovery, and truthful UI state indicators fully confirmed.
+
+
+
 
 
 

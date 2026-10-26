@@ -2,50 +2,56 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-console.log('--- Cleaning Chrome Locks & Puppeteer processes ---');
-
-try {
-    const out = execSync('wmic process where "name=\'chrome.exe\'" get processid,executablepath', { encoding: 'utf8' });
-    const lines = out.split('\n');
-    for (const line of lines) {
-        if (line.toLowerCase().includes('puppeteer')) {
-            const match = line.trim().match(/\d+$/);
-            if (match) {
-                const pid = match[0];
-                console.log('Terminating orphan Puppeteer Chrome PID:', pid);
-                try {
-                    execSync(`taskkill /F /PID ${pid}`);
-                } catch (_) {}
-            }
+function killOrphanPuppeteerProcesses() {
+    if (process.platform === 'win32') {
+        try {
+            const scriptPath = path.resolve(__dirname, 'kill-puppeteer-chrome.ps1');
+            const { execFileSync } = require('child_process');
+            execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], { encoding: 'utf8', stdio: 'inherit' });
+        } catch (e) {
+            // Non-fatal
         }
+    } else {
+        try {
+            execSync("pkill -f 'puppeteer.*chrome' || true", { stdio: 'ignore' });
+        } catch (_) {}
     }
-} catch (e) {
-    console.log('WMIC query note:', e.message);
 }
 
-const authDir = path.resolve('.wwebjs_auth');
-if (fs.existsSync(authDir)) {
-    console.log('Scanning auth directory for stale lock files:', authDir);
+function cleanAuthLocks(targetDir) {
+    const authDir = targetDir || path.resolve('.wwebjs_auth');
+    if (!fs.existsSync(authDir)) return;
+
+    const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'DevToolsActivePort', 'lockfile', 'LOCK'];
+
     function cleanDir(d) {
         try {
             for (const item of fs.readdirSync(d)) {
                 const p = path.join(d, item);
-                if (['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'DevToolsActivePort'].includes(item)) {
-                    try {
+                try {
+                    const st = fs.lstatSync(p);
+                    if (lockFiles.includes(item)) {
                         fs.rmSync(p, { force: true });
                         console.log('Removed lock:', p);
-                    } catch (err) {
-                        console.log('Could not remove lock:', p, err.message);
+                    } else if (st.isDirectory()) {
+                        cleanDir(p);
                     }
-                } else {
-                    try {
-                        if (fs.statSync(p).isDirectory()) cleanDir(p);
-                    } catch (_) {}
-                }
+                } catch (_) {}
             }
         } catch (_) {}
     }
+
     cleanDir(authDir);
 }
 
-console.log('✅ Cleanup complete.');
+if (require.main === module) {
+    console.log('--- Cleaning Chrome Locks & Puppeteer processes ---');
+    killOrphanPuppeteerProcesses();
+    cleanAuthLocks();
+    console.log('✅ Cleanup complete.');
+}
+
+module.exports = {
+    killOrphanPuppeteerProcesses,
+    cleanAuthLocks
+};

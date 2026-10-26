@@ -192,7 +192,8 @@ router.post('/whatsapp/connect', waConnectLimiter, asyncHandler(async (req, res)
 }));
 
 router.post('/whatsapp/disconnect', waConnectLimiter, asyncHandler(async (req, res) => {
-    await destroyClientForUser(req.user.id);
+    const wipeAuth = req.body?.wipeAuth === true || req.body?.logout === true;
+    await destroyClientForUser(req.user.id, { wipeAuth });
     res.json({ success: true });
 }));
 

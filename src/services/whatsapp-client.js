@@ -89,6 +89,7 @@ function newSessionState() {
         keepAliveTimer: null,
         watchdogTimer: null,
         hibernationTimer: null,
+        initWatchdog: null,
         isInitializing: false,
         restartTimer: null,
         crashCount: 0,
@@ -97,6 +98,9 @@ function newSessionState() {
         startedAt: null,
         destroyed: false,
         userDisconnected: false,
+        browserPid: null,
+        transientKeepAliveFailures: 0,
+        nonConnectedCount: 0,
         // Hibernation: tracks last message activity to decide when to free Chrome.
         lastActivityAt: Date.now(),
         isHibernated: false,
@@ -111,11 +115,25 @@ function getSession(userId, createIfMissing = true) {
     return sessions.get(userId);
 }
 
+function forceKillProcessTree(pid) {
+    if (!pid || typeof pid !== 'number') return;
+    try {
+        if (process.platform === 'win32') {
+            const { execSync } = require('child_process');
+            execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
+        } else {
+            process.kill(-pid, 'SIGKILL');
+        }
+    } catch (_) {
+        // Process may already be dead
+    }
+}
+
 // ─── Stale lock-file cleanup ──────────────────────────────────
-// If Chrome crashes it leaves a SingletonLock file that blocks the next launch.
+// If Chrome crashes it leaves lock files that block the next launch.
 function clearStaleLocks(userId) {
     const authDir = authDataPath(userId);
-    const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'DevToolsActivePort'];
+    const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'DevToolsActivePort', 'lockfile', 'LOCK'];
     try {
         if (!fs.existsSync(authDir)) return;
         const cleanRecursive = (dir) => {
@@ -123,11 +141,11 @@ function clearStaleLocks(userId) {
                 for (const item of fs.readdirSync(dir)) {
                     const p = path.join(dir, item);
                     try {
+                        const st = fs.lstatSync(p);
                         if (lockFiles.includes(item)) {
                             fs.rmSync(p, { force: true });
-                        } else {
-                            const st = fs.lstatSync(p);
-                            if (st.isDirectory()) cleanRecursive(p);
+                        } else if (st.isDirectory()) {
+                            cleanRecursive(p);
                         }
                     } catch (_) {}
                 }
@@ -181,6 +199,7 @@ function clearTimers(s) {
     if (s.watchdogTimer)    { clearInterval(s.watchdogTimer);   s.watchdogTimer    = null; }
     if (s.restartTimer)     { clearTimeout(s.restartTimer);     s.restartTimer     = null; }
     if (s.hibernationTimer) { clearTimeout(s.hibernationTimer); s.hibernationTimer = null; }
+    if (s.initWatchdog)     { clearTimeout(s.initWatchdog);     s.initWatchdog     = null; }
     if (s.qrTimeout)        { clearTimeout(s.qrTimeout);        s.qrTimeout        = null; }
 }
 
@@ -223,19 +242,29 @@ function armHibernationTimer(userId) {
 // ─── Safe client destroy ──────────────────────────────────────
 async function safeDestroyClient(s) {
     s.isInitializing = false;
+    if (s.initWatchdog) { clearTimeout(s.initWatchdog); s.initWatchdog = null; }
     if (!s.client) return;
     const c = s.client;
     s.client = null;
-    // Detach listeners before destroying. whatsapp-web.js can emit
-    // 'disconnected' during teardown, which would otherwise schedule a
-    // restart for a session we are deliberately shutting down — the loop that
-    // makes a suspended account reconnect itself.
+
+    let pid = s.browserPid;
+    try {
+        if (!pid && c.pupBrowser?.process) {
+            pid = c.pupBrowser.process()?.pid;
+        }
+    } catch (_) {}
+    s.browserPid = null;
+
+    // Detach listeners before destroying to prevent teardown events from triggering restarts
     try { c.removeAllListeners(); } catch (e) { /* non-fatal */ }
+
+    let destroyedCleanly = false;
     try {
         await Promise.race([
             c.destroy(),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('destroy timeout')), 8000))
+            new Promise((_, rej) => setTimeout(() => rej(new Error('destroy timeout')), 4000))
         ]);
+        destroyedCleanly = true;
     } catch (e) {
         console.warn('⚠️ client.destroy() warning (non-fatal):', e.message?.split('\n')[0]);
         try {
@@ -243,6 +272,10 @@ async function safeDestroyClient(s) {
                 await c.pupBrowser.close().catch(() => {});
             }
         } catch (_) {}
+    }
+
+    if (pid && (!destroyedCleanly || process.platform === 'win32')) {
+        forceKillProcessTree(pid);
     }
 }
 
@@ -323,18 +356,28 @@ async function processInitQueue() {
 
     console.log(`⏳ [user ${userId}] Initializing WhatsApp Web client (from queue)...`);
     try {
-        await client.initialize();
+        await Promise.race([
+            client.initialize(),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('client.initialize timed out after 90s')), 90000))
+        ]);
+        try {
+            if (client.pupBrowser?.process()?.pid) {
+                s.browserPid = client.pupBrowser.process().pid;
+            }
+        } catch (_) {}
     } catch (err) {
         const msg = err && err.message ? err.message : String(err);
         console.error(`❌ [user ${userId}] client.initialize() error:`, msg);
         s.isInitializing = false;
         s.lastError = `WhatsApp launch error: ${msg.split('\n')[0]}`;
+        await safeDestroyClient(s);
+        clearStaleLocks(userId);
+        broadcastSSE(userId, { type: 'error', data: s.lastError });
         scheduleRestart(userId, 12000);
     } finally {
         isInitializingAnyClient = false;
-        // Wait 4 seconds before allowing the next client to initialize.
-        // This gives the CPU time to settle after the massive Puppeteer CPU spike.
-        setTimeout(processInitQueue, 4000); 
+        // Wait 3 seconds before allowing the next client to initialize.
+        setTimeout(processInitQueue, 3000); 
     }
 }
 
@@ -403,7 +446,8 @@ async function initWhatsAppClient(userId, options = {}) {
     s.userDisconnected = false;
 
     if (s.isInitializing) {
-        if (s.startedAt && Date.now() - s.startedAt > 300000) {
+        if (s.startedAt && Date.now() - s.startedAt > 90000) {
+            console.warn(`⚠️ [user ${userId}] WhatsApp initialization stalled for >90s — resetting and re-initializing.`);
             s.isInitializing = false;
             await safeDestroyClient(s);
         } else {
@@ -428,6 +472,19 @@ async function initWhatsAppClient(userId, options = {}) {
     s.lastError = null;
     s.crashCount = 0;
     clearTimers(s);
+
+    if (s.initWatchdog) clearTimeout(s.initWatchdog);
+    s.initWatchdog = setTimeout(() => {
+        s.initWatchdog = null;
+        if (s.isInitializing && !s.isConnected && !s.currentQR) {
+            console.warn(`🐕 [user ${userId}] Init watchdog: client did not reach ready/QR in 95s — clearing state.`);
+            s.isInitializing = false;
+            s.lastError = 'WhatsApp initialization timed out. Please try again.';
+            safeDestroyClient(s).catch(() => {});
+            broadcastSSE(userId, { type: 'error', data: s.lastError });
+        }
+    }, 95000);
+    s.initWatchdog.unref?.();
 
     console.log(`🔧 [user ${userId}] Starting WhatsApp Web client...`);
     broadcastSSE(userId, { type: 'loading' });
@@ -534,6 +591,8 @@ function attachHandlers(userId, s, client) {
     client.on('qr', async (qr) => {
         console.log(`📱 [user ${userId}] QR Code ready — open Settings → WhatsApp QR to scan.`);
         s.isConnected = false;
+        s.isInitializing = false;
+        if (s.initWatchdog) { clearTimeout(s.initWatchdog); s.initWatchdog = null; }
         try {
             s.currentQR = await qrcode.toDataURL(qr);
             // Tenant-scoped: only this account's listeners receive it.
@@ -561,22 +620,27 @@ function attachHandlers(userId, s, client) {
     // ── Loading Screen & State Tracking ─────────────────────
     client.on('loading_screen', (percent, message) => {
         console.log(`⏳ [user ${userId}] WhatsApp Loading: ${percent}% — ${message || 'syncing'}`);
-        broadcastSSE(userId, { type: 'loading_screen', percent, message });
+        broadcastSSE(userId, { type: 'loading_screen', percent, message: message || 'syncing' });
     });
 
     client.on('change_state', (state) => {
         console.log(`🔄 [user ${userId}] WhatsApp State: ${state}`);
+        broadcastSSE(userId, { type: 'change_state', state });
     });
 
     // ── Auth ────────────────────────────────────────────────
     client.on('authenticated', () => {
         console.log(`✅ [user ${userId}] WhatsApp Authenticated!`);
         s.currentQR = null;
+        s.isInitializing = false;
+        if (s.initWatchdog) { clearTimeout(s.initWatchdog); s.initWatchdog = null; }
         if (s.qrTimeout) { clearTimeout(s.qrTimeout); s.qrTimeout = null; }
+        broadcastSSE(userId, { type: 'authenticated' });
     });
 
     // ── Ready ───────────────────────────────────────
     client.on('ready', () => {
+        if (s.isConnected) return;
         console.log(`✅ [user ${userId}] WhatsApp Client is READY!`);
         s.isConnected    = true;
         s.isInitializing = false;
@@ -585,7 +649,16 @@ function attachHandlers(userId, s, client) {
         s.crashCount     = 0;
         s.lastError      = null;
         s.lastActivityAt = Date.now();
+        s.transientKeepAliveFailures = 0;
+        s.nonConnectedCount = 0;
+        if (s.initWatchdog) { clearTimeout(s.initWatchdog); s.initWatchdog = null; }
         if (s.qrTimeout) { clearTimeout(s.qrTimeout); s.qrTimeout = null; }
+
+        try {
+            if (client.pupBrowser?.process()?.pid) {
+                s.browserPid = client.pupBrowser.process().pid;
+            }
+        } catch (_) {}
 
         try {
             broadcastSSE(userId, { type: 'ready', phone: client.info?.wid?.user || 'unknown' });
@@ -599,22 +672,29 @@ function attachHandlers(userId, s, client) {
                     client.getState(),
                     new Promise((_, rej) => setTimeout(() => rej(new Error('getState timeout')), 5000))
                 ]);
-                if (state !== 'CONNECTED') {
-                    console.warn(`⚠️ [user ${userId}] WhatsApp state is`, state, '— scheduling reconnect.');
-                    scheduleRestart(userId, 5000);
+                if (state && state !== 'CONNECTED') {
+                    s.nonConnectedCount = (s.nonConnectedCount || 0) + 1;
+                    if (s.nonConnectedCount >= 3) {
+                        console.warn(`⚠️ [user ${userId}] WhatsApp state has been ${state} for 3 checks — scheduling reconnect.`);
+                        s.nonConnectedCount = 0;
+                        scheduleRestart(userId, 5000);
+                    }
+                } else if (state === 'CONNECTED') {
+                    s.nonConnectedCount = 0;
+                    s.transientKeepAliveFailures = 0;
                 }
             } catch (e) {
                 const msg = e.message || '';
-                const isTransient = msg.includes('Execution context') || msg.includes('Target closed') || msg.includes('timeout');
-                if (isTransient) {
-                    s.transientKeepAliveFailures = (s.transientKeepAliveFailures || 0) + 1;
-                    if (s.transientKeepAliveFailures >= 3) {
-                        s.transientKeepAliveFailures = 0;
-                        console.warn(`⚠️ [user ${userId}] Keep-alive failed 3× in a row — reconnecting.`);
-                        scheduleRestart(userId, 5000);
-                    }
-                } else {
-                    console.warn(`⚠️ [user ${userId}] Keep-alive fatal error:`, msg.split('\n')[0]);
+                const isTransient = msg.includes('Execution context') ||
+                                    msg.includes('Target closed') ||
+                                    msg.includes('timeout') ||
+                                    msg.includes('detached Frame') ||
+                                    msg.includes('Protocol error') ||
+                                    msg.includes('Session closed');
+                s.transientKeepAliveFailures = (s.transientKeepAliveFailures || 0) + 1;
+                if (s.transientKeepAliveFailures >= 3) {
+                    s.transientKeepAliveFailures = 0;
+                    console.warn(`⚠️ [user ${userId}] Keep-alive failed 3× in a row (${msg.split('\n')[0]}) — reconnecting.`);
                     scheduleRestart(userId, 5000);
                 }
             }
@@ -634,23 +714,46 @@ function attachHandlers(userId, s, client) {
     });
 
     // ── Auth failure ─────────────────────────────────────────
-    client.on('auth_failure', msg => {
+    client.on('auth_failure', async msg => {
         console.error(`❌ [user ${userId}] WhatsApp Auth failure:`, msg);
         s.isConnected    = false;
         s.isInitializing = false;
+        s.currentQR      = null;
         s.lastError = 'WhatsApp authentication failed. You may need to scan the QR code again.';
+        clearTimers(s);
+        // Stale auth credentials on disk rejected by WhatsApp — wipe auth so next attempt gets a clean QR
+        const authDir = authDataPath(userId);
+        try {
+            if (fs.existsSync(authDir)) fs.rmSync(authDir, { recursive: true, force: true });
+        } catch (_) {}
+        await safeDestroyClient(s);
         broadcastSSE(userId, { type: 'error', data: s.lastError });
-        scheduleRestart(userId, 15000);
     });
 
     // ── Disconnected ─────────────────────────────────────────
-    client.on('disconnected', (reason) => {
+    client.on('disconnected', async (reason) => {
         console.log(`❌ [user ${userId}] WhatsApp disconnected:`, reason);
         s.isConnected    = false;
         s.isInitializing = false;
         s.currentQR      = null;
-        if (s.watchdogTimer) { clearInterval(s.watchdogTimer); s.watchdogTimer = null; }
-        scheduleRestart(userId, 8000);
+        clearTimers(s);
+
+        if (reason === 'LOGOUT') {
+            s.userDisconnected = true;
+            s.lastError = 'WhatsApp was logged out from the phone.';
+            const authDir = authDataPath(userId);
+            try {
+                if (fs.existsSync(authDir)) fs.rmSync(authDir, { recursive: true, force: true });
+            } catch (_) {}
+            await safeDestroyClient(s);
+            broadcastSSE(userId, { type: 'logged_out', reason: 'LOGOUT', error: s.lastError });
+        } else {
+            // Ordinary/transient disconnect (network drop, conflict, browser crash, navigation)
+            // NEVER wipe auth!
+            s.lastError = `Disconnected (${reason || 'transient'})`;
+            broadcastSSE(userId, { type: 'reconnecting', reason, error: s.lastError });
+            scheduleRestart(userId, 8000);
+        }
     });
 
     // ── Client error (Puppeteer level) ───────────────────────
@@ -796,7 +899,7 @@ function attachHandlers(userId, s, client) {
  * exact reason a suspended account could previously reconnect itself
  * seconds after being cut off.
  */
-async function destroyClientForUser(userId) {
+async function destroyClientForUser(userId, { wipeAuth = false } = {}) {
     userId = Number(userId);
     const s = getSession(userId, false);
     if (!s) return;
@@ -812,7 +915,7 @@ async function destroyClientForUser(userId) {
 
     broadcastSSE(userId, { type: 'disconnected' });
 
-    if (s.client) {
+    if (wipeAuth && s.client) {
         try {
             await Promise.race([
                 s.client.logout(),
@@ -823,19 +926,22 @@ async function destroyClientForUser(userId) {
 
     await safeDestroyClient(s);
 
-    // Clean up saved auth directory on explicit disconnect so next connect is a clean fresh session
-    const authDir = authDataPath(userId);
-    try {
-        if (fs.existsSync(authDir)) {
-            fs.rmSync(authDir, { recursive: true, force: true });
-        }
-    } catch (e) { /* non-fatal */ }
+    // Clean up saved auth directory ONLY on explicit wipeAuth request
+    if (wipeAuth) {
+        const authDir = authDataPath(userId);
+        try {
+            if (fs.existsSync(authDir)) {
+                fs.rmSync(authDir, { recursive: true, force: true });
+            }
+        } catch (e) { /* non-fatal */ }
+    }
 }
 
 /** Tears down every session — used by graceful shutdown. */
 async function destroyAllClients() {
     const ids = [...sessions.keys()];
-    await Promise.all(ids.map(id => destroyClientForUser(id).catch(() => {})));
+    // Graceful shutdown must preserve saved auth on disk!
+    await Promise.all(ids.map(id => destroyClientForUser(id, { wipeAuth: false }).catch(() => {})));
     return ids.length;
 }
 
@@ -993,8 +1099,35 @@ function getConnectedSession(userId) {
 
 function getStatus(userId) {
     const s = getSession(Number(userId), false);
-    if (!s) return { connected: false, phone: null, started: false, error: null, qr: null, hibernated: false, disconnected: true };
+    if (!s) return {
+        state: 'disconnected',
+        connected: false,
+        phone: null,
+        started: false,
+        initializing: false,
+        hibernated: false,
+        disconnected: true,
+        error: null,
+        qr: null
+    };
+
+    let state = 'disconnected';
+    if (s.isConnected) {
+        state = 'connected';
+    } else if (s.currentQR) {
+        state = 'qr_ready';
+    } else if (s.restartTimer) {
+        state = 'reconnecting';
+    } else if (s.isInitializing) {
+        state = 'connecting';
+    } else if (s.userDisconnected) {
+        state = 'logged_out';
+    } else if (s.lastError) {
+        state = 'error';
+    }
+
     return {
+        state,
         connected: s.isConnected,
         phone: s.isConnected && s.client?.info ? s.client.info.wid.user : null,
         started: !!(s.client || s.isInitializing),

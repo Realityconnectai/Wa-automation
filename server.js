@@ -26,6 +26,7 @@ const { initWhatsAppClient, destroyAllClients } = require('./src/services/whatsa
 const { cancelAllOutreachJobs } = require('./src/services/outreach');
 const { clearPendingAutoAnalyses } = require('./src/services/lead-analyzer');
 const { verifyWiring } = require('./src/services/wiring-check');
+const { killOrphanPuppeteerProcesses, cleanAuthLocks } = require('./scripts/clean-chrome-locks');
 const fs   = require('fs');
 const path = require('path');
 
@@ -255,6 +256,11 @@ async function resumeExistingSessions() {
 // ─── Start ────────────────────────────────────────────────────
 async function start() {
     validateEnvironment();
+
+    try {
+        killOrphanPuppeteerProcesses();
+        cleanAuthLocks();
+    } catch (_) {}
 
     try {
         await initDatabase();

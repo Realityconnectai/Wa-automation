@@ -4166,6 +4166,8 @@ function stopSSE() {
     stopStatusPolling();
 }
 
+let _loadingTimeout = null;
+
 function startStatusPolling() {
     if (_statusPollTimer) return; // already polling
     _statusPollTimer = setInterval(async () => {
@@ -4179,15 +4181,19 @@ function startStatusPolling() {
                 applyConnectionState({ type: 'qr', data: s.qr });
             } else if (s.error) {
                 applyConnectionState({ type: 'error', data: s.error });
-            } else if (s.initializing) {
+            } else if (s.state === 'reconnecting') {
+                applyConnectionState({ type: 'reconnecting', error: s.error });
+            } else if (s.state === 'logged_out' || s.disconnected) {
+                applyConnectionState({ type: 'logged_out', error: s.error });
+            } else if (s.initializing || s.state === 'connecting') {
                 applyConnectionState({ type: 'loading' });
-            } else if (s.disconnected || !s.started) {
+            } else if (!s.started) {
                 applyConnectionState({ type: 'disconnected' });
             }
         } catch (e) {
             // API unreachable — keep polling silently
         }
-    }, 5000);
+    }, 4000);
 }
 
 function stopStatusPolling() {
@@ -4206,9 +4212,51 @@ function applyConnectionState(data) {
     const show = (el) => { if (el) { el.hidden = false; el.removeAttribute('style'); } };
     const hide = (el) => { if (el) { el.hidden = true; el.removeAttribute('style'); } };
 
+    // Clear any pending loading watchdog if we've transitioned out of loading/connecting
+    if (data.type !== 'loading' && data.type !== 'connecting' && _loadingTimeout) {
+        clearTimeout(_loadingTimeout);
+        _loadingTimeout = null;
+    }
+
     // Remove any previous reconnect button if present
     const oldReconnect = document.getElementById('qrReconnectBtnContainer');
     if (oldReconnect) oldReconnect.remove();
+
+    function renderReconnectBtn(message, btnText = 'Connect & Show QR Code') {
+        if (!qrContainer || document.getElementById('qrReconnectBtnContainer')) return;
+        const reconnectDiv = document.createElement('div');
+        reconnectDiv.id = 'qrReconnectBtnContainer';
+        reconnectDiv.className = 'text-center p-24';
+
+        const waAllowed = CURRENT_USER && (CURRENT_USER.role === 'admin' || CURRENT_USER.wa_enabled);
+        if (waAllowed) {
+            reconnectDiv.innerHTML = `
+                <p class="error-heading">${Icon('x-circle', 'icon-inline')} ${escapeHtml(message)}</p>
+                <button class="btn btn-primary btn-sm inline-flex-center-gap-6 mt-8" id="reconnectWaBtn" type="button">
+                    ${Icon('refresh-cw', 'icon-inline')} ${escapeHtml(btnText)}
+                </button>
+            `;
+            qrContainer.appendChild(reconnectDiv);
+            document.getElementById('reconnectWaBtn')?.addEventListener('click', async () => {
+                reconnectDiv.innerHTML = `<div class="qr-loading">${Icon('loader', 'icon-inline')} Starting WhatsApp Client…</div>`;
+                try {
+                    await api('/api/whatsapp/connect', { method: 'POST' });
+                    applyConnectionState({ type: 'loading' });
+                } catch (e) {
+                    showToast(e.message || 'Failed to start connection', 'error');
+                    applyConnectionState({ type: 'error', data: e.message });
+                }
+            });
+        } else {
+            reconnectDiv.innerHTML = `
+                <p class="error-heading">${Icon('x-circle', 'icon-inline')} ${escapeHtml(message)}</p>
+                <p class="qr-error-subtext mt-8">
+                    ${Icon('lock', 'icon-inline')} WhatsApp access has not been enabled for your account. Please contact your administrator.
+                </p>
+            `;
+            qrContainer.appendChild(reconnectDiv);
+        }
+    }
 
     if (data.type === 'qr') {
         hide(qrLoading);
@@ -4217,9 +4265,9 @@ function applyConnectionState(data) {
             qrImage.src = data.data;
             show(qrImage);
         }
-        if (statusDot)  statusDot.className  = 'status-dot error';
-        if (statusText) statusText.textContent = 'Scan QR Code';
-        if (connInfo)   connInfo.innerHTML   = `<p class="text-warning">${Icon('triangle-alert', 'icon-inline')}Waiting for QR Code scan. Go to Settings → WhatsApp QR.</p>`;
+        if (statusDot)  statusDot.className  = 'status-dot warning';
+        if (statusText) statusText.textContent = 'QR Ready';
+        if (connInfo)   connInfo.innerHTML   = `<p class="text-warning">${Icon('triangle-alert', 'icon-inline')}Scan QR Code to connect. Go to Settings → WhatsApp QR.</p>`;
 
     } else if (data.type === 'ready') {
         hide(qrLoading); hide(qrImage); show(qrSuccess);
@@ -4229,51 +4277,71 @@ function applyConnectionState(data) {
             <p class="connected-text">${Icon('check-circle', 'icon-inline')}Connected to WhatsApp</p>
             <p>Phone: ${escapeHtml(data.phone || '')}</p>`;
 
-    } else if (data.type === 'disconnected' || data.type === 'error') {
+    } else if (data.type === 'reconnecting') {
+        hide(qrImage); hide(qrSuccess); show(qrLoading);
+        if (qrLoading) qrLoading.textContent = 'Reconnecting to WhatsApp… Please wait.';
+        if (statusDot)  statusDot.className  = 'status-dot demo';
+        if (statusText) statusText.textContent = 'Reconnecting…';
+        if (connInfo)   connInfo.innerHTML   = `<p class="text-warning">${Icon('refresh-cw', 'icon-inline')} Reconnecting WhatsApp session…</p>`;
+
+    } else if (data.type === 'loading_screen') {
+        if (connInfo) {
+            connInfo.innerHTML = `<p class="text-muted">${Icon('loader', 'icon-inline')} Syncing WhatsApp data: ${data.percent || 0}% (${escapeHtml(data.message || 'syncing')})</p>`;
+        }
+
+    } else if (data.type === 'logged_out') {
+        hide(qrLoading); hide(qrImage); hide(qrSuccess);
+        if (statusDot)  statusDot.className  = 'status-dot error';
+        if (statusText) statusText.textContent = 'Logged Out';
+        if (connInfo)   connInfo.innerHTML   = `<p class="text-error">${Icon('x-circle', 'icon-inline')}WhatsApp was logged out from the mobile app.</p>`;
+        renderReconnectBtn('WhatsApp was logged out from the phone.');
+
+    } else if (data.type === 'error') {
+        hide(qrLoading); hide(qrImage); hide(qrSuccess);
+        if (statusDot)  statusDot.className  = 'status-dot error';
+        if (statusText) statusText.textContent = 'Connection Error';
+        const errMsg = data.data || data.error || 'Connection error';
+        if (connInfo)   connInfo.innerHTML   = `<p class="text-error">${Icon('alert-circle', 'icon-inline')}${escapeHtml(errMsg)}</p>`;
+        renderReconnectBtn(errMsg);
+
+    } else if (data.type === 'disconnected') {
         hide(qrLoading); hide(qrImage); hide(qrSuccess);
         if (statusDot)  statusDot.className  = 'status-dot error';
         if (statusText) statusText.textContent = 'Disconnected';
         if (connInfo)   connInfo.innerHTML   = `<p class="text-error">${Icon('x-circle', 'icon-inline')}Not connected</p>`;
+        renderReconnectBtn('WhatsApp is Disconnected');
 
-        if (qrContainer && !document.getElementById('qrReconnectBtnContainer')) {
-            const reconnectDiv = document.createElement('div');
-            reconnectDiv.id = 'qrReconnectBtnContainer';
-            reconnectDiv.className = 'text-center p-24';
-
-            // Only show connect button if admin has granted WA access to this user
-            const waAllowed = CURRENT_USER && (CURRENT_USER.role === 'admin' || CURRENT_USER.wa_enabled);
-
-            if (waAllowed) {
-                reconnectDiv.innerHTML = `
-                    <p class="error-heading">${Icon('x-circle', 'icon-inline')} WhatsApp is Disconnected</p>
-                    <button class="btn btn-primary btn-sm inline-flex-center-gap-6" id="reconnectWaBtn" type="button">${Icon('refresh-cw', 'icon-inline')} Connect &amp; Show QR Code</button>
-                `;
-                qrContainer.appendChild(reconnectDiv);
-                document.getElementById('reconnectWaBtn')?.addEventListener('click', async () => {
-                    reconnectDiv.innerHTML = `<div class="qr-loading">${Icon('loader', 'icon-inline')} Starting WhatsApp Client…</div>`;
-                    try {
-                        await api('/api/whatsapp/connect', { method: 'POST' });
-                        applyConnectionState({ type: 'loading' });
-                    } catch (e) {
-                        showToast(e.message || 'Failed to start connection', 'error');
-                    }
-                });
-            } else {
-                reconnectDiv.innerHTML = `
-                    <p class="error-heading">${Icon('x-circle', 'icon-inline')} WhatsApp is Disconnected</p>
-                    <p class="qr-error-subtext">
-                        ${Icon('lock', 'icon-inline')} WhatsApp access has not been enabled for your account. Please contact your administrator.
-                    </p>
-                `;
-                qrContainer.appendChild(reconnectDiv);
-            }
-        }
-
-    } else if (data.type === 'loading') {
+    } else if (data.type === 'loading' || data.type === 'connecting') {
         show(qrLoading); hide(qrImage); hide(qrSuccess);
+        if (qrLoading) qrLoading.textContent = 'Waiting for QR Code… (This may take up to 30 seconds)';
         if (statusDot)  statusDot.className  = 'status-dot demo';
-        if (statusText) statusText.textContent = 'Initializing…';
-        if (connInfo)   connInfo.innerHTML   = '<p>Loading WhatsApp Client…</p>';
+        if (statusText) statusText.textContent = 'Connecting…';
+        if (connInfo)   connInfo.innerHTML   = `<p>${Icon('loader', 'icon-inline')} Loading WhatsApp Client…</p>`;
+
+        if (!_loadingTimeout) {
+            _loadingTimeout = setTimeout(() => {
+                _loadingTimeout = null;
+                // If still loading after 35s, give user actionable retry
+                if (statusText && statusText.textContent === 'Connecting…') {
+                    if (qrLoading) {
+                        qrLoading.innerHTML = `
+                            <div>Starting the client is taking longer than usual.</div>
+                            <button class="btn btn-secondary btn-sm mt-12 inline-flex-center-gap-6" id="retryLoadingWaBtn" type="button">
+                                ${Icon('refresh-cw', 'icon-inline')} Retry Connection
+                            </button>
+                        `;
+                        document.getElementById('retryLoadingWaBtn')?.addEventListener('click', async () => {
+                            try {
+                                await api('/api/whatsapp/connect', { method: 'POST' });
+                                applyConnectionState({ type: 'loading' });
+                            } catch (e) {
+                                showToast(e.message || 'Retry failed', 'error');
+                            }
+                        });
+                    }
+                }
+            }, 35000);
+        }
     }
 }
 

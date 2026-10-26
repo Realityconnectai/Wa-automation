@@ -69,6 +69,46 @@ function applyPatch() {
 
     fs.writeFileSync(targetFile, content, 'utf8');
     console.log('✔ Successfully applied comprehensive patch to whatsapp-web.js Injected/Utils.js.');
+
+    // Patch 3: In Client.js, trigger onAppStateHasSyncedEvent if Socket.hasSynced is already true
+    const clientFile = path.join(__dirname, '../node_modules/whatsapp-web.js/src/Client.js');
+    if (fs.existsSync(clientFile)) {
+        let clientContent = fs.readFileSync(clientFile, 'utf8');
+        const searchPattern = "Socket.on('change:hasSynced', () => {\n                    window.onAppStateHasSyncedEvent();\n                });";
+        const searchPatternCRLF = "Socket.on('change:hasSynced', () => {\r\n                    window.onAppStateHasSyncedEvent();\r\n                });";
+        const patchReplacement = `Socket.on('change:hasSynced', () => {
+                    window.onAppStateHasSyncedEvent();
+                });
+            if (window.require('WAWebSocketModel').Socket.hasSynced) {
+                window.onAppStateHasSyncedEvent();
+            }`;
+
+        if (!clientContent.includes("Socket.hasSynced) {\n                window.onAppStateHasSyncedEvent();") &&
+            !clientContent.includes("Socket.hasSynced) {\r\n                window.onAppStateHasSyncedEvent();")) {
+            if (clientContent.includes(searchPattern)) {
+                clientContent = clientContent.replace(searchPattern, patchReplacement);
+                fs.writeFileSync(clientFile, clientContent, 'utf8');
+                console.log('✔ Successfully applied Socket.hasSynced patch to whatsapp-web.js Client.js.');
+            } else if (clientContent.includes(searchPatternCRLF)) {
+                clientContent = clientContent.replace(searchPatternCRLF, patchReplacement.replace(/\n/g, '\r\n'));
+                fs.writeFileSync(clientFile, clientContent, 'utf8');
+                console.log('✔ Successfully applied Socket.hasSynced patch to whatsapp-web.js Client.js.');
+            }
+        }
+
+        const handlerPattern = "'onAppStateHasSyncedEvent',\n            async () => {";
+        const handlerPatternCRLF = "'onAppStateHasSyncedEvent',\r\n            async () => {";
+        const handlerReplacement = "'onAppStateHasSyncedEvent',\n            async () => {\n                if (this._hasSyncedHandled) return;\n                this._hasSyncedHandled = true;";
+        if (!clientContent.includes('this._hasSyncedHandled')) {
+            if (clientContent.includes(handlerPattern)) {
+                clientContent = clientContent.replace(handlerPattern, handlerReplacement);
+                fs.writeFileSync(clientFile, clientContent, 'utf8');
+            } else if (clientContent.includes(handlerPatternCRLF)) {
+                clientContent = clientContent.replace(handlerPatternCRLF, handlerReplacement.replace(/\n/g, '\r\n'));
+                fs.writeFileSync(clientFile, clientContent, 'utf8');
+            }
+        }
+    }
 }
 
 applyPatch();
