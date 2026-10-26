@@ -993,13 +993,14 @@ function getConnectedSession(userId) {
 
 function getStatus(userId) {
     const s = getSession(Number(userId), false);
-    if (!s) return { connected: false, phone: null, started: false, error: null, qr: null, hibernated: false };
+    if (!s) return { connected: false, phone: null, started: false, error: null, qr: null, hibernated: false, disconnected: true };
     return {
         connected: s.isConnected,
         phone: s.isConnected && s.client?.info ? s.client.info.wid.user : null,
         started: !!(s.client || s.isInitializing),
         initializing: !!s.isInitializing,
         hibernated: !!s.isHibernated,
+        disconnected: !!s.userDisconnected,
         error: s.lastError || null,
         // Expose QR data URL so the frontend can fetch it via REST polling
         // when the SSE stream is blocked by a cloud load balancer / proxy.

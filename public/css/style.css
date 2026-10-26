@@ -1525,12 +1525,13 @@ h1, h2, h3, h4 { font-family: var(--font-display); letter-spacing: -0.015em; }
 }
 
 .qr-image {
-    display: none;
+    display: block;
     width: 240px;
     height: 240px;
     border-radius: var(--radius-lg);
     border: 6px solid #FFFFFF;
     box-shadow: var(--shadow-md);
+    margin: 0 auto;
 }
 
 .qr-success {

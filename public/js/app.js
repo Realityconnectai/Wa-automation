@@ -4181,6 +4181,8 @@ function startStatusPolling() {
                 applyConnectionState({ type: 'error', data: s.error });
             } else if (s.initializing) {
                 applyConnectionState({ type: 'loading' });
+            } else if (s.disconnected || !s.started) {
+                applyConnectionState({ type: 'disconnected' });
             }
         } catch (e) {
             // API unreachable — keep polling silently
@@ -4209,9 +4211,12 @@ function applyConnectionState(data) {
     if (oldReconnect) oldReconnect.remove();
 
     if (data.type === 'qr') {
-        show(qrLoading); hide(qrImage); hide(qrSuccess);
-        if (qrImage) { qrImage.src = data.data; qrImage.hidden = false; qrImage.removeAttribute('style'); }
-        if (qrLoading) { qrLoading.hidden = true; qrLoading.removeAttribute('style'); }
+        hide(qrLoading);
+        hide(qrSuccess);
+        if (qrImage) {
+            qrImage.src = data.data;
+            show(qrImage);
+        }
         if (statusDot)  statusDot.className  = 'status-dot error';
         if (statusText) statusText.textContent = 'Scan QR Code';
         if (connInfo)   connInfo.innerHTML   = `<p class="text-warning">${Icon('triangle-alert', 'icon-inline')}Waiting for QR Code scan. Go to Settings → WhatsApp QR.</p>`;
@@ -4241,7 +4246,7 @@ function applyConnectionState(data) {
             if (waAllowed) {
                 reconnectDiv.innerHTML = `
                     <p class="error-heading">${Icon('x-circle', 'icon-inline')} WhatsApp is Disconnected</p>
-                    <button class="btn btn-primary btn-sm" id="reconnectWaBtn" type="button" class="btn btn-primary btn-sm inline-flex-center-gap-6">${Icon('refresh-cw', 'icon-inline')} Connect &amp; Show QR Code</button>
+                    <button class="btn btn-primary btn-sm inline-flex-center-gap-6" id="reconnectWaBtn" type="button">${Icon('refresh-cw', 'icon-inline')} Connect &amp; Show QR Code</button>
                 `;
                 qrContainer.appendChild(reconnectDiv);
                 document.getElementById('reconnectWaBtn')?.addEventListener('click', async () => {
