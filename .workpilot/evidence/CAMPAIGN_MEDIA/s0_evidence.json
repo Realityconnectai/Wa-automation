@@ -1,0 +1,35 @@
+{
+  "timestamp": "2026-10-26T15:47:00+05:30",
+  "campaign_id": "21b127d7-0e96-44cc-b238-bea99f19fe45",
+  "template": "Hii {{name}}",
+  "media_asset_id": 3,
+  "media_asset": {
+    "id": 3,
+    "file_name": "3_1792263742638_2.jpeg",
+    "mime_type": "image/jpeg",
+    "asset_type": "photo",
+    "size_bytes": 159096,
+    "sha256": "11ad5689a916f43d0c249d02c862b4f1666309d08ab7bd43ee71a70997c917aa"
+  },
+  "recipients": [
+    {
+      "id": 15,
+      "contact_id": 1,
+      "contact_name": "WorkPilot",
+      "phone": "249344947167452",
+      "status": "failed",
+      "reason": "Send failed: getSession is not a function"
+    }
+  ],
+  "job_status_in_db": "completed",
+  "exact_failing_file": "src/services/media-dispatch.js",
+  "exact_failing_line": 88,
+  "failing_expression": "const s = getSession(uid, false);",
+  "caller_stack": [
+    "runJob (src/services/outreach.js:179)",
+    "sendMedia (src/services/messaging.js:187)",
+    "dispatchMedia (src/services/media-dispatch.js:88)"
+  ],
+  "root_cause": "whatsapp-client.js does not export getSession in module.exports. media-dispatch.js destructures { getSession } from require('./whatsapp-client'), evaluating getSession as undefined at call time.",
+  "secondary_defect": "outreach.js line 233 sets status=CASE WHEN status='cancel_requested' THEN 'cancelled' ELSE 'completed' END unconditionally. outreach_jobs_status_check constraint also lacked 'failed' and 'completed_with_errors' enums."
+}

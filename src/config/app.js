@@ -37,8 +37,10 @@ const { addSSEClient, getSessionMetrics } = require('../services/whatsapp-client
 const { getPersistHealth, getSchemaVersion, countUsers } = require('../services/database');
 const { requestMetrics, snapshot } = require('../utils/metrics');
 const { SESSION_SECRET_SOURCE } = require('./auth');
+const { verifyWiring } = require('../services/wiring-check');
 
 function createApp() {
+    verifyWiring();
     const app = express();
 
     app.disable('x-powered-by');

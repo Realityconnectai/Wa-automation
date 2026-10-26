@@ -25,6 +25,7 @@ const { initCalendarSync, stopCalendarSync } = require('./src/services/calendar-
 const { initWhatsAppClient, destroyAllClients } = require('./src/services/whatsapp-client');
 const { cancelAllOutreachJobs } = require('./src/services/outreach');
 const { clearPendingAutoAnalyses } = require('./src/services/lead-analyzer');
+const { verifyWiring } = require('./src/services/wiring-check');
 const fs   = require('fs');
 const path = require('path');
 
@@ -48,6 +49,7 @@ const { assertPersistRootWritable } = require('./src/config/paths');
  */
 function validateEnvironment() {
     assertPersistRootWritable();
+    verifyWiring();
     const problems = [];
     const warnings = [];
     const isProd = process.env.NODE_ENV === 'production';

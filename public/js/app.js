@@ -2971,6 +2971,8 @@ function renderCampaignsTable(jobs) {
             running: '<span class="pill pill-running">Running</span>',
             cancel_requested: '<span class="pill badge-cancel-requested">Cancelling…</span>',
             completed: '<span class="pill pill-active">Completed</span>',
+            completed_with_errors: '<span class="pill pill-pending">Partial Failures</span>',
+            failed: '<span class="pill pill-error">Failed</span>',
             cancelled: '<span class="pill pill-neutral">Cancelled</span>',
             interrupted: '<span class="pill badge-interrupted">Interrupted</span>'
         };
@@ -3092,11 +3094,18 @@ async function viewCampaignDetails(jobId) {
     try {
         const job = await api(`/api/contacts/outreach/${encodeURIComponent(jobId)}`);
 
-        // Update cancel button visibility
+        // Update cancel & retry buttons visibility
         const isCancellable = job.cancellable || ['running', 'cancel_requested'].includes(job.status);
         if (cancelBtn) {
             cancelBtn.hidden = !isCancellable;
             cancelBtn.dataset.jobId = job.id;
+        }
+
+        const retryBtn = document.getElementById('campaignDetailRetryBtn');
+        const canRetry = (job.failed > 0) && !isCancellable;
+        if (retryBtn) {
+            retryBtn.hidden = !canRetry;
+            retryBtn.dataset.jobId = job.id;
         }
 
         // Summary chips
@@ -3104,6 +3113,8 @@ async function viewCampaignDetails(jobId) {
             running: '<span class="pill pill-running">Running</span>',
             cancel_requested: '<span class="pill badge-cancel-requested">Cancelling…</span>',
             completed: '<span class="pill pill-active">Completed</span>',
+            completed_with_errors: '<span class="pill pill-pending">Partial Failures</span>',
+            failed: '<span class="pill pill-error">Failed</span>',
             cancelled: '<span class="pill pill-neutral">Cancelled</span>',
             interrupted: '<span class="pill badge-interrupted">Interrupted</span>'
         };
@@ -4214,6 +4225,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('campaignDetailCancelBtn')?.addEventListener('click', (e) => {
         const jobId = e.currentTarget.dataset.jobId;
         if (jobId) cancelCampaign(jobId);
+    });
+    document.getElementById('campaignDetailRetryBtn')?.addEventListener('click', async (e) => {
+        const jobId = e.currentTarget.dataset.jobId;
+        if (!jobId) return;
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        try {
+            const res = await api(`/api/contacts/outreach/${encodeURIComponent(jobId)}/retry-failed`, { method: 'POST' });
+            showToast(`Retrying ${res.data?.retried || 'failed'} recipient(s)...`, 'info');
+            await viewCampaignDetails(jobId);
+            if (currentSection === 'campaigns') {
+                await loadCampaigns(campaignsCurrentOffset);
+            }
+        } catch (err) {
+            showToast(err.message || 'Failed to retry recipients', 'error');
+        } finally {
+            btn.disabled = false;
+        }
     });
     document.getElementById('campaignDetailModalBackdrop')?.addEventListener('click', (e) => {
         if (e.target.id === 'campaignDetailModalBackdrop') closeCampaignDetailModal();

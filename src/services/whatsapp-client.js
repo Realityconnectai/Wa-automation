@@ -444,6 +444,7 @@ async function initWhatsAppClient(userId, options = {}) {
             restartOnAuthFail: true,
             takeoverOnConflict: true,
             takeoverTimeoutMs: 0,
+            userAgent: process.env.WHATSAPP_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
             // A local cache (bundled with whatsapp-web.js, tested against the
             // exact library version installed) instead of a hardcoded remote
             // fetch: the previous config pinned an old WhatsApp Web build
@@ -555,6 +556,16 @@ function attachHandlers(userId, s, client) {
             }, 180000);
             s.qrTimeout.unref?.();
         }
+    });
+
+    // ── Loading Screen & State Tracking ─────────────────────
+    client.on('loading_screen', (percent, message) => {
+        console.log(`⏳ [user ${userId}] WhatsApp Loading: ${percent}% — ${message || 'syncing'}`);
+        broadcastSSE(userId, { type: 'loading_screen', percent, message });
+    });
+
+    client.on('change_state', (state) => {
+        console.log(`🔄 [user ${userId}] WhatsApp State: ${state}`);
     });
 
     // ── Auth ────────────────────────────────────────────────
@@ -957,6 +968,29 @@ function getClient(userId) {
     return s ? s.client : null;
 }
 
+/**
+ * Single session provider contract returning the verified active session or throwing
+ * typed SESSION_NOT_CONNECTED error (with WA_NOT_CONNECTED compatibility).
+ */
+function getConnectedSession(userId) {
+    const uid = Number(userId);
+    if (!Number.isSafeInteger(uid) || uid <= 0) {
+        const err = new Error('Valid userId is required');
+        err.code = 'INVALID_USER_ID';
+        err.status = 400;
+        throw err;
+    }
+    const s = getSession(uid, false);
+    if (!s || !s.isConnected || !s.client) {
+        const err = new Error('WhatsApp client is not connected');
+        err.code = 'SESSION_NOT_CONNECTED';
+        err.subCode = 'WA_NOT_CONNECTED';
+        err.status = 409;
+        throw err;
+    }
+    return s;
+}
+
 function getStatus(userId) {
     const s = getSession(Number(userId), false);
     if (!s) return { connected: false, phone: null, started: false, error: null, qr: null, hibernated: false };
@@ -1195,6 +1229,8 @@ module.exports = {
     destroyClientForUser,
     destroyAllClients,
     addSSEClient,
+    getSession,
+    getConnectedSession,
     getClient,
     getStatus,
     getSessionMetrics,

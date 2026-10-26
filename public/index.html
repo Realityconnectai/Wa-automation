@@ -782,6 +782,8 @@
                         <option value="running">Running</option>
                         <option value="cancel_requested">Cancel Requested</option>
                         <option value="completed">Completed</option>
+                        <option value="completed_with_errors">Partial Failures</option>
+                        <option value="failed">Failed</option>
                         <option value="cancelled">Cancelled</option>
                         <option value="interrupted">Interrupted</option>
                     </select>
@@ -1883,9 +1885,12 @@
             </div>
 
             <div class="modal-actions mt-md flex-between">
-                <div>
+                <div class="flex-center-gap-8">
                     <button type="button" class="btn btn-danger btn-sm" id="campaignDetailCancelBtn" hidden>
                         <span data-icon="circle-x" aria-hidden="true"></span> Cancel Send
+                    </button>
+                    <button type="button" class="btn btn-primary btn-sm" id="campaignDetailRetryBtn" hidden>
+                        <span data-icon="refresh-cw" aria-hidden="true"></span> Retry Failed
                     </button>
                 </div>
                 <div>

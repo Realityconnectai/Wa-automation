@@ -23,7 +23,7 @@ const fs = require('fs');
 const path = require('path');
 const { MessageMedia } = require('whatsapp-web.js');
 
-const { getClient, getSession, resolveDestinationChatId } = require('./whatsapp-client');
+const { getClient, getSession, getConnectedSession, resolveDestinationChatId } = require('./whatsapp-client');
 const { loadMediaAsset } = require('./media-storage');
 const { validateMediaFile, ALLOWED_TYPES } = require('./messaging');
 const { logMessage, logOutgoingMessageIdempotent } = require('./database');
@@ -84,14 +84,8 @@ async function dispatchMedia({
         throw err;
     }
 
-    // 1. Verify WhatsApp client connection
-    const s = getSession(uid, false);
-    if (!s || !s.isConnected || !s.client) {
-        const err = new Error('WhatsApp client is not connected');
-        err.code = 'WA_NOT_CONNECTED';
-        err.status = 409;
-        throw err;
-    }
+    // 1. Verify WhatsApp client connection via unified contract
+    const s = getConnectedSession(uid);
 
     // 2. Load media bytes & validate
     let payloadBuffer;

@@ -353,6 +353,27 @@ Tested on live WhatsApp Web session across all 7 cases:
 - **Integration Suite:** `npm run test:integration` (45/45 passed).
 - **Status:** Automated logic, DB storage, shared dispatch service, and regressions are **100% COMPLETE**. Live sends to allowlisted real devices are pending owner device authorization.
 
+---
+
+### Iteration 7 — 2026-10-26 (Campaign Media Wiring Fix & Honest Status Invariants: S0–S6 COMPLETE)
+- **Problem Investigated:** Campaign `21b127d7-0e96-44cc-b238-bea99f19fe45` failed with `Send failed: getSession is not a function`, and campaign badge showed green "Completed" despite 0 sent and 1 failed.
+- **Root Cause (CONFIRMED):**
+  1. `src/services/whatsapp-client.js` defined `getSession` internally at line 107 but never exported it in `module.exports`. When `media-dispatch.js` was extracted into an independent service, it imported `{ getSession } from './whatsapp-client'`, leaving `getSession` undefined in `media-dispatch.js`.
+  2. `outreach_jobs` database table had a check constraint `outreach_jobs_status_check` allowing only `('running','cancel_requested','completed','cancelled','interrupted')`. It lacked `'failed'` and `'completed_with_errors'`. In addition, `src/services/outreach.js` had an unconditional SQL update: `status = CASE WHEN status = 'cancel_requested' THEN 'cancelled' ELSE 'completed' END`, forcing every finished campaign to mark itself "completed" even if all recipients failed.
+- **Fixes Applied:**
+  1. **Unified Session Contract:** `whatsapp-client.js` now exports both `getSession` and `getConnectedSession(userId)`. `media-dispatch.js` imports `getConnectedSession`, throwing clean structured error `SESSION_NOT_CONNECTED` (`WA_NOT_CONNECTED`) if disconnected, never a runtime TypeError.
+  2. **Database Migration 026:** Created and applied `026_outreach_jobs_honest_status.sql` in PostgreSQL 17. Expanded constraint to allow `('running','cancel_requested','completed','completed_with_errors','failed','cancelled','interrupted')` and repaired historical jobs so `21b127d7-0e96-44cc-b238-bea99f19fe45` accurately displays `status = 'failed'`.
+  3. **Honest Campaign Status Invariants:** Updated `src/services/outreach.js` to derive status from recipient rows:
+     - `sent === 0 && failed > 0` => `'failed'` (never shows green "Completed" when 0 sent)
+     - `sent > 0 && failed > 0` => `'completed_with_errors'`
+     - `sent > 0 && failed === 0` => `'completed'`
+     - `sent === 0 && skipped > 0` => `'cancelled'`
+  4. **Retry Failed Recipients:** Implemented `retryFailedOutreachRecipients(userId, jobId)` in `outreach.js`, exposed via `POST /api/contacts/outreach/:jobId/retry-failed`, and added "Retry Failed" button in the frontend campaign detail modal.
+  5. **API & UI Alignment:** Updated query param status validation in `src/routes/api.js` to allow `failed` and `completed_with_errors`. Updated badge styling and status filter options in `public/index.html` and `public/js/app.js`.
+  6. **Startup Wiring Invariant & Integration Test:** Created `src/services/wiring-check.js` asserting inter-service function contracts at boot in `server.js` and `src/config/app.js`. Added `tests/campaign-media-wiring.test.js` (8/8 passed). Ran `npm run lint` (134/134 passed) and unit suites (188/188 passed).
+- **Status Change:** Campaign media wiring & honest status invariants are **VERIFIED** via automated tests. Historical broken campaign repaired to `failed`. Awaiting owner device authorization for live end-to-end send.
+
+
 
 
 

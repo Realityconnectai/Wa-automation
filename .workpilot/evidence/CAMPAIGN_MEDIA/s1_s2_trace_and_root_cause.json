@@ -1,0 +1,32 @@
+{
+  "timestamp": "2026-10-26T15:47:30+05:30",
+  "call_path_campaign_media": [
+    "POST /api/contacts/outreach (src/routes/api.js)",
+    "startOutreachJob (src/services/outreach.js:66)",
+    "runJob (src/services/outreach.js:95)",
+    "sendMedia (src/services/messaging.js:185)",
+    "dispatchMedia (src/services/media-dispatch.js:62)",
+    "const s = getSession(uid, false) (src/services/media-dispatch.js:88)"
+  ],
+  "call_path_text_campaign": [
+    "POST /api/contacts/outreach (src/routes/api.js)",
+    "startOutreachJob (src/services/outreach.js:66)",
+    "runJob (src/services/outreach.js:95)",
+    "whatsappClient.sendText (src/services/outreach.js:190)",
+    "sendTextMessage (src/services/whatsapp-client.js:1127)"
+  ],
+  "call_path_manual_text": [
+    "POST /api/messages/send (src/routes/api.js)",
+    "sendText (src/services/messaging.js:160)",
+    "sendTextMessage (src/services/whatsapp-client.js:1127)"
+  ],
+  "divergence_point": "Text campaign and manual text call sendTextMessage directly inside whatsapp-client.js, which has access to the internal private function getSession() via lexical scope. Media dispatch was extracted to src/services/media-dispatch.js in commit 8c633b8 and imported getSession from whatsapp-client.js, but whatsapp-client.js never exported getSession.",
+  "hypotheses_evaluation": {
+    "H1_renamed_or_removed_getSession": "CONFIRMED: getSession existed in whatsapp-client.js internally but was omitted from module.exports.",
+    "H2_circular_require": "RULED OUT: scripts/diag/wiring-probe.js confirmed 0 circular requires in src/.",
+    "H3_getSession_called_on_wrong_object": "CONFIRMED: media-dispatch.js called getSession as a standalone destructured function from require('./whatsapp-client'), which was undefined.",
+    "H4_uninitialized_worker_context": "RULED OUT: worker runs in the same Node.js process.",
+    "H5_stale_process": "RULED OUT: current files on disk contain the exact unexported getSession bug."
+  },
+  "status_bug_root_cause": "outreach.js:233 hardcoded status=CASE WHEN status='cancel_requested' THEN 'cancelled' ELSE 'completed' END, and database migration 018 lacked 'completed_with_errors' and 'failed' in outreach_jobs_status_check."
+}

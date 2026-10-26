@@ -26,7 +26,7 @@ const { testMessage } = require('../services/chatbot');
 const { analyzeConversation, analyzeAllConversations } = require('../services/lead-analyzer');
 const { analyzeBusinessProfile, getBusinessInfo } = require('../services/business');
 const { parseCSV, mapContactRow, serializeCSV } = require('../services/csv');
-const { startOutreachJob, getOutreachJob, cancelOutreachJob, MAX_RECIPIENTS_PER_JOB } = require('../services/outreach');
+const { startOutreachJob, getOutreachJob, cancelOutreachJob, retryFailedOutreachRecipients, MAX_RECIPIENTS_PER_JOB } = require('../services/outreach');
 const { getApiKey, testApiKey, ALL_GEMINI_MODELS, resetCircuits } = require('../services/gemini-client');
 const { asyncHandler } = require('../utils/errors');
 const { perUser, concurrencyGate } = require('../middleware/rateLimit');
@@ -376,7 +376,7 @@ router.post('/contacts/outreach', sendLimiter, requireDurableWrite, asyncHandler
 }));
 
 router.get('/contacts/outreach', asyncHandler(async (req, res) => {
-    const status = optionalEnum(req.query.status, ['running', 'cancel_requested', 'completed', 'cancelled', 'interrupted'], 'status');
+    const status = optionalEnum(req.query.status, ['running', 'cancel_requested', 'completed', 'completed_with_errors', 'failed', 'cancelled', 'interrupted'], 'status');
     const limit = clampInt(req.query.limit, { min: 1, max: 100, fallback: 20 });
     const offset = clampInt(req.query.offset, { min: 0, max: LIMITS.MAX_OFFSET, fallback: 0 });
 
@@ -413,6 +413,11 @@ router.post('/contacts/outreach/:jobId/cancel', asyncHandler(async (req, res) =>
     const ok = await cancelOutreachJob(String(req.params.jobId).slice(0, 40), req.user.id);
     if (!ok) return res.status(404).json({ success: false, error: 'Job not found or already finished' });
     res.json({ success: true });
+}));
+
+router.post('/contacts/outreach/:jobId/retry-failed', asyncHandler(async (req, res) => {
+    const result = await retryFailedOutreachRecipients(req.user.id, String(req.params.jobId).slice(0, 40));
+    res.json({ success: true, data: result });
 }));
 
 router.get('/contacts/:id', asyncHandler(async (req, res) => {

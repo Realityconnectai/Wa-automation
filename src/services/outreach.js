@@ -204,7 +204,7 @@ async function runJob(jobOrId, maybeUser = null) {
             await runSql("UPDATE outreach_recipients SET status='sent', sent_at=CURRENT_TIMESTAMP WHERE id=$1 AND user_id=$2", [recipient.id,user.id]);
             logOutreachEvent(fresh.id, { phone, name: contact.name, message: personalized }).catch?.(() => {});
         } catch (err) {
-            const isDisconnect = /not connected/i.test(err?.message || '') || err?.code === 'WA_NOT_CONNECTED';
+            const isDisconnect = /not connected/i.test(err?.message || '') || err?.code === 'WA_NOT_CONNECTED' || err?.code === 'SESSION_NOT_CONNECTED';
             let detail = err?.message;
             if (!detail || detail === 't' || detail.length <= 1) {
                 if (err?.code) {
@@ -216,10 +216,13 @@ async function runJob(jobOrId, maybeUser = null) {
                     detail = String(err || 'Unknown dispatch error');
                 }
             }
-            const failReason = isDisconnect ? 'WhatsApp disconnected' : `Send failed: ${detail}`.slice(0, 200);
+            const errorCode = isDisconnect ? 'SESSION_NOT_CONNECTED' : (err?.code || 'SEND_ERROR');
+            const failReason = isDisconnect
+                ? 'WhatsApp disconnected (SESSION_NOT_CONNECTED)'
+                : (err?.code ? `[${err.code}] Send failed: ${detail}` : `Send failed: ${detail}`).slice(0, 200);
             await runSql("UPDATE outreach_recipients SET status='failed', reason=$1 WHERE id=$2 AND user_id=$3", [failReason, recipient.id, user.id]);
             if (isDisconnect) {
-                await runSql("UPDATE outreach_recipients SET status='skipped', reason='Stopped: WhatsApp is disconnected' WHERE job_id=$1 AND user_id=$2 AND status IN ('pending','sending')", [job.id, user.id]);
+                await runSql("UPDATE outreach_recipients SET status='skipped', reason='Stopped: WhatsApp is disconnected (SESSION_NOT_CONNECTED)' WHERE job_id=$1 AND user_id=$2 AND status IN ('pending','sending')", [job.id, user.id]);
                 break;
             }
         }
@@ -229,10 +232,34 @@ async function runJob(jobOrId, maybeUser = null) {
             await new Promise(resolve => setTimeout(resolve, randomDelay()));
         }
     }
+
+    // Honest status derivation invariant:
+    // sent === 0 && failed > 0 -> 'failed' (Never show green Completed when sent = 0)
+    // sent > 0 && failed > 0   -> 'completed_with_errors'
+    // sent > 0 && failed === 0 -> 'completed'
+    // sent === 0 && all skipped/cancelled -> 'cancelled'
+    const counts = await queryAll(
+        "SELECT status, COUNT(*)::int AS count FROM outreach_recipients WHERE job_id = $1 AND user_id = $2 GROUP BY status",
+        [job.id, user.id]
+    );
+    const summary = counts.reduce((acc, row) => { acc[row.status] = Number(row.count); return acc; }, {});
+    const sentCount = summary.sent || 0;
+    const failedCount = summary.failed || 0;
+    const skippedCount = (summary.skipped || 0) + (summary.unknown || 0);
+
+    let finalStatus = 'completed';
+    if (sentCount === 0 && failedCount > 0) {
+        finalStatus = 'failed';
+    } else if (failedCount > 0) {
+        finalStatus = 'completed_with_errors';
+    } else if (sentCount === 0 && skippedCount > 0) {
+        finalStatus = 'cancelled';
+    }
+
     await runSql(`UPDATE outreach_jobs
-                  SET status=CASE WHEN status='cancel_requested' THEN 'cancelled' ELSE 'completed' END,
+                  SET status=CASE WHEN status='cancel_requested' THEN 'cancelled' ELSE $1 END,
                       finished_at=CURRENT_TIMESTAMP
-                  WHERE id=$1 AND user_id=$2 AND status IN ('running','cancel_requested')`, [job.id,user.id]);
+                  WHERE id=$2 AND user_id=$3 AND status IN ('running','cancel_requested')`, [finalStatus, job.id, user.id]);
 }
 
 /**
@@ -284,6 +311,41 @@ async function getOutreachJobs(userId, opts = {}) {
     return dbGetOutreachJobs(userId, opts);
 }
 
+async function retryFailedOutreachRecipients(userId, jobId) {
+    const uid = Number(userId);
+    const jid = String(jobId);
+    const job = await getStoredOutreachJob(uid, jid);
+    if (!job) {
+        const err = new Error('Campaign not found');
+        err.status = 404;
+        throw err;
+    }
+    const failedRecipients = await queryAll(
+        "SELECT id, phone, contact_id, contact_name FROM outreach_recipients WHERE job_id = $1 AND user_id = $2 AND status = 'failed' ORDER BY id ASC",
+        [jid, uid]
+    );
+    if (failedRecipients.length === 0) {
+        return { retried: 0, message: 'No failed recipients to retry', total: job.total };
+    }
+
+    await runSql(
+        "UPDATE outreach_recipients SET status = 'pending', reason = '' WHERE job_id = $1 AND user_id = $2 AND status = 'failed'",
+        [jid, uid]
+    );
+    await runSql(
+        "UPDATE outreach_jobs SET status = 'running', finished_at = NULL, error = '' WHERE id = $1 AND user_id = $2",
+        [jid, uid]
+    );
+
+    const user = await getUserById(uid);
+    runJob(job, user).catch(async err => {
+        await runSql("UPDATE outreach_jobs SET status='interrupted', finished_at=CURRENT_TIMESTAMP, error=$1 WHERE id=$2 AND user_id=$3", ['The retry send stopped unexpectedly.', jid, uid]).catch(() => {});
+        console.error(`❌ Retry outreach job ${jid} crashed:`, err.message);
+    });
+
+    return { retried: failedRecipients.length, jobId: jid, total: job.total };
+}
+
 module.exports = {
     startOutreachJob,
     createOutreachJob: createOutreachJobService,
@@ -291,6 +353,7 @@ module.exports = {
     getOutreachJob,
     getOutreachJobs,
     getOutreachRecipients,
+    retryFailedOutreachRecipients,
     cancelOutreachJob,
     cancelAllOutreachJobs,
     renderTemplate,
