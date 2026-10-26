@@ -1,54 +1,74 @@
-# WORKPILOT AUTONOMOUS LOOP — CAMPAIGN MEDIA WIRING & HONEST STATUS HANDOFF
+# WORKPILOT AUTONOMOUS LOOP — CAMPAIGN UX, BUFFER, DEAL MODAL POLISH & APPOINTMENT REMINDERS HANDOFF
 
-**Current Status:** Stages S0–S6 and S9 are **`COMPLETE & VERIFIED`**. Stage S7/S8 (live delivery to real devices) is marked **`LIVE_PENDING_HUMAN`** awaiting owner-approved allowlist numbers.
-**Timestamp:** 2026-10-26T16:05:00+05:30  
+**Current Status:** Stages S0–S6 and S9 are **`COMPLETE & VERIFIED`**. Stage S7/S8 (live delivery to real devices) is marked **`LIVE_PENDING_HUMAN`** awaiting owner-approved allowlist numbers.  
+**Timestamp:** 2026-10-26T18:25:00+05:30  
 **Environment:** Windows, Node.js v24.11.1, PostgreSQL 17 on Docker (`wa-postgres`:5432)  
-**PostgreSQL Schema Version:** 26 (Migrations 001–026 applied)  
+**PostgreSQL Schema Version:** 27 (Migrations 001–027 applied)  
 
 ---
 
-### 1. Root Cause Confirmed & Fixed (S0–S3)
-1. **The Error:** `Send failed: getSession is not a function` during campaign `21b127d7-0e96-44cc-b238-bea99f19fe45`.
-   - **Mechanism:** `whatsapp-client.js` defined `getSession` as a module-internal function but omitted it from `module.exports`. When `media-dispatch.js` was modularized, it attempted to import `getSession`, receiving `undefined`.
-   - **Resolution:** `whatsapp-client.js` now exports `getSession` and `getConnectedSession(userId)`. `media-dispatch.js` imports `getConnectedSession`, throwing structured `SESSION_NOT_CONNECTED` (`WA_NOT_CONNECTED`) if disconnected, never throwing a runtime `TypeError`.
-2. **Misleading "Completed" Status Badge:**
-   - **Mechanism:** `outreach.js` unconditionally set `status = 'completed'` at loop completion, ignoring failed counts. Furthermore, database check constraint `outreach_jobs_status_check` did not permit `'failed'` or `'completed_with_errors'`.
-   - **Resolution:**
-     - Created and applied Migration 026 (`026_outreach_jobs_honest_status.sql`), updating check constraint to allow `('running','cancel_requested','completed','completed_with_errors','failed','cancelled','interrupted')`.
-     - Repaired historical jobs so `21b127d7-0e96-44cc-b238-bea99f19fe45` correctly shows `failed`.
-     - Updated `outreach.js` with honest status derivation invariant:
-       - `sent === 0 && failed > 0` => `'failed'` (never shows green "Completed" when 0 sent)
-       - `sent > 0 && failed > 0` => `'completed_with_errors'`
-       - `sent > 0 && failed === 0` => `'completed'`
-       - `sent === 0 && skipped > 0` => `'cancelled'`
+### 1. Root Causes Confirmed & Fixed
+
+1. **S0 Premature "Failed" Status on Launch:**
+   - **Root Cause:** `public/js/app.js:2827` used a two-state ternary `${r.status === 'sent' ? 'ok' : 'fail'}`. For new pending recipients, `status === 'sent'` evaluated to `false`, assigning `.fail` (red) and printing `"failed"` because `r.reason` was empty string `""`.
+   - **Resolution:** Replaced with multi-state badge and styling mapping supporting `pending`, `sending`, `sent`, `failed`, `skipped`, and `cancelled`. Recipients now show neutral amber "Pending" immediately upon launch.
+2. **`Send failed: t: t` (Aaryan, 105957396857003):**
+   - **Root Cause:** Minified WhatsApp Web throws exception objects with `name: 't'` and `message: 't'`. In Node/V8, `err.toString()` is `"t: t"`. In `outreach.js:209`, the check `if (!detail || detail === 't' || detail.length <= 1)` evaluated to `false` on `"t: t"`, setting `failReason = "Send failed: t: t"`.
+   - **Resolution:** Implemented `serializeSendError(err, phone)` catching all regex matches of `/^(evaluation failed:\s*)?t(\s*:\s*t)?$/i` and unresolvable LIDs, mapping them to `RECIPIENT_UNRESOLVABLE` with clear error reasons.
+3. **Escalation Truthfulness in CRM Deal Modal:**
+   - **Root Cause:** In `src/services/lead-assignment.js`, `checkAndEscalateOverdueSlas` sets `sla_status = 'escalated'` and `escalated_to_agent_id = managerAgent.id`, but intentionally does NOT reassign the lead (`assigned_agent_id` remains Rahul Sharma; manager is notified). History rendered a misleading arrow `Rahul Sharma -> Escalation Manager`.
+   - **Resolution:** Rendered truthfully as `"Escalated to Escalation Manager (notified)"`.
 
 ---
 
-### 2. Solutions Implemented (S4–S6)
-1. **Startup Wiring Invariant (`src/services/wiring-check.js`):**
-   - Asserts function contracts for `whatsappClient.getSession`, `getConnectedSession`, `mediaDispatch.dispatchMedia`, `messaging.sendMedia`, `outreach.retryFailedOutreachRecipients`, etc.
-   - Enforced at boot in `server.js` (`validateEnvironment()`) and `src/config/app.js` (`createApp()`).
-2. **Retry Failed Recipients:**
-   - Backend: `retryFailedOutreachRecipients(userId, jobId)` in `src/services/outreach.js`.
-   - API: `POST /api/contacts/outreach/:jobId/retry-failed` in `src/routes/api.js`.
-   - Frontend: "Retry Failed" button added to Campaign Details modal in `public/index.html` and `public/js/app.js`.
-3. **Frontend UI & API Filter Alignment:**
-   - Status badges added for `failed` (pill-error) and `completed_with_errors` (pill-pending).
-   - `#campaignStatusFilter` options and API query parameter validation updated to accept `failed` and `completed_with_errors`.
+### 2. Solutions Implemented
+
+1. **Database Migration 027 (`src/migrations/027_campaign_buffer_and_reminder_tracking.sql`):**
+   - Added `buffer_minutes`, `buffer_jitter`, `next_send_at` to `outreach_jobs`.
+   - Added `next_send_at` to `outreach_recipients` and expanded status check to include `'cancelled'`.
+   - Added `wa_message_id`, `attempts` to `scheduled_messages` and expanded status check to include `'skipped'`.
+2. **Selectable Message Buffer (1–15 min):**
+   - Server-side validation enforcing 0–15 min.
+   - Pacing calculation with bounds clamping (30s to 15m) and ±20% jitter.
+   - Durable `interruptibleDelay` polling DB every 1s for early cancellation. First message sends immediately; subsequent sends wait buffer delay. Skips do not wait; failed sends wait.
+   - Startup crash recovery: `reclaimInterruptedOutreachJobs()` reclaims stuck `sending` rows to `pending`.
+   - Frontend UI: "Delay Between Messages" card with select (0–15 min), quick-pick buttons (`Default`, `1 min`, `2 min`, `3 min`, `5 min`, `10 min`, `15 min`), dynamic finish time estimate, and countdown badge (`"Next message in 2m 30s"`).
+3. **CRM Deal Modal Polish (S5A):**
+   - Styled form controls for Reassign form (`select` and `input` equal 38px height, matching focus rings, non-truncated placeholder "Reason (optional)").
+   - Vertically centered labels and pills for "Assigned Agent:" and "SLA Status:" (`.deal-assignment-header-item`).
+   - Dynamic relative overdue indicator (`"(overdue by 1h 12m)"`) for breached/escalated SLAs.
+   - Assignment history formatted into a structured scrollable list with humanized text.
+   - 14-16 digit internal IDs labeled as "WhatsApp ID:" with source badge.
+   - Action buttons unified (Save Changes without oversized glow, Human Takeover, and Delete Deal separated to the right with confirmation dialog). Double-click protection enabled.
+   - Aligned Qualification Temperature badge (`COLD`) and rule explanation row.
+4. **Appointment Reminders (24h & 2h) Tracking (S5B):**
+   - **Audit Map:** Documented in `WORKPILOT_DEBUG_DECISIONS.md`. Notice >24h creates both reminders; notice 2h–24h skips 24h; notice <2h skips both. Short-notice cases saved as `status = 'skipped'` with reason.
+   - **Appointments Table:** Added "Reminders" column showing compact indicator `24h ✓ · 2h ⏱`.
+   - **Appointment Details Modal:** Added "Appointment Reminders (24h & 2h)" panel with 24 Hours Before and 2 Hours Before cards displaying exact scheduled time in IST, status chip, and green tick ONLY on confirmed WhatsApp delivery.
 
 ---
 
-### 3. Automated Verification & Test Results (S9)
-- `tests/campaign-media-wiring.test.js`: **8/8 PASS** (Real wiring without mocks, dispatches session check, honest status invariants).
-- `tests/campaigns-unit.test.js`: **11/11 PASS** (Status filters, pagination, recipient masking).
-- `tests/outreach-media-unit.test.js`: **13/13 PASS** (Media selection, tenant isolation, magic bytes, opt-out suppression).
-- `tests/validation.test.js` & `tests/auth.security.test.js`: **188/188 PASS**.
-- `npm run lint`: **134/134 JS files passed syntax validation**.
+### 3. Automated Verification & Test Results (S6)
+
+- `npx jest tests/campaign-buffer-pending.test.js`: **10/10 PASS** (Buffer calculation, jitter, bounds, error un-truncation, status invariants).
+- `npx jest tests/appointment-reminders.test.js`: **12/12 PASS** (24h & 2h generation, short-notice skip, cancellation, reschedule, timezone formatting).
+- `npx jest tests/campaigns-unit.test.js`: **11/11 PASS**.
+- `npx jest tests/csp-inline-styles.test.js`: **2/2 PASS** (0 CSP violations).
+- `npm run lint`: **137/137 JS files passed syntax validation**.
+- `scripts/diag/wiring-probe.js`: **PASS** (Zero circular imports, session exports intact).
+- Browser Subagent: Visual check of deal modal, appointment reminders panel, and campaign delay buffer completed cleanly with screenshots captured.
 
 ---
 
 ### 4. Next Step: Live Verification (S7/S8)
-To perform live end-to-end verification of brochure & photo campaigns:
-1. Provide owner-approved test recipient numbers (Primary & Secondary).
-2. Scan QR code in Settings if session is disconnected.
-3. Trigger test campaign with photo (`2.jpeg`) and PDF (`WorkPilot_Solutions.pdf`) to verify live delivery.
+
+To execute live sends with owner-approved allowlisted devices:
+1. Provide owner test recipient numbers in `WORKPILOT_DEBUG_DECISIONS.md`:
+   ```yaml
+   TEST_RECIPIENTS:
+     PRIMARY: "+91__________"
+     SECONDARY: "+91__________"
+     INVALID: "+910000000000"
+   ```
+2. Scan WhatsApp QR code in Settings if session is disconnected.
+3. Trigger test campaign with 1 min buffer and disposable appointment to observe live WhatsApp message delivery on the device.

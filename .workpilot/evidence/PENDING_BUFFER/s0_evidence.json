@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-10-26T17:25:00+05:30",
+  "stage": "S0",
+  "finding": "Immediate 'failed' display root cause confirmed",
+  "root_cause_file": "public/js/app.js",
+  "root_cause_lines": "2826-2831, 2834-2836",
+  "mechanism": {
+    "db_state": "outreach_recipients rows are inserted in transaction with status = 'pending' (correct).",
+    "frontend_bug": "pollOutreachJob in public/js/app.js maps recipient rows using binary check: ${r.status === 'sent' ? 'ok' : 'fail'}. Since 'pending' !== 'sent', it applies class 'fail' (red). Furthermore, ${r.status === 'sent' ? Icon('check-circle') : (r.reason ? escapeHtml(r.reason) : 'failed')} defaults to string 'failed' because reason is empty for pending rows.",
+    "polling_bug": "terminalStatuses in line 2834 was ['completed', 'cancelled', 'interrupted', 'done'], omitting 'completed_with_errors' and 'failed', preventing terminal completion handling for partial or total failures."
+  },
+  "required_fix": {
+    "frontend": "Render Pending with neutral/amber badge until processed, Sending... (blue with spinner) for in-progress recipient, Sent (green check) for sent, Failed (red) with reason for failed, and Skipped (grey) with reason.",
+    "api": "Return pending count and next_send_at estimates in outreach job payload."
+  }
+}

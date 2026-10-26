@@ -807,6 +807,7 @@
                                 <th scope="col">Message Preview</th>
                                 <th scope="col">Status</th>
                                 <th scope="col">Total</th>
+                                <th scope="col">Pending</th>
                                 <th scope="col">Sent</th>
                                 <th scope="col">Failed</th>
                                 <th scope="col">Skipped</th>
@@ -815,7 +816,7 @@
                             </tr>
                         </thead>
                         <tbody id="campaignsBody">
-                            <tr><td colspan="9" class="empty-state">Loading campaigns…</td></tr>
+                            <tr><td colspan="10" class="empty-state">Loading campaigns…</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -943,11 +944,12 @@
                                 <th scope="col">Date &amp; Time</th>
                                 <th scope="col">Booked Via</th>
                                 <th scope="col">Status</th>
+                                <th scope="col">Reminders</th>
                                 <th scope="col"><span class="sr-only">Actions</span></th>
                             </tr>
                         </thead>
                         <tbody id="appointmentsBody">
-                            <tr><td colspan="5" class="empty-state">No appointments yet</td></tr>
+                            <tr><td colspan="6" class="empty-state">No appointments yet</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -1726,6 +1728,45 @@
                     </div>
                 </div>
 
+                <!-- 4b. Send Buffer / Delay between messages -->
+                <div class="composer-card">
+                    <div class="composer-card-header">
+                        <span class="step-num">4</span>
+                        <div>
+                            <div class="composer-card-title">Delay Between Messages</div>
+                            <div class="composer-card-subtitle">Spacing helps prevent WhatsApp anti-spam flags</div>
+                        </div>
+                    </div>
+                    <div class="composer-card-body">
+                        <div class="form-group mb-sm">
+                            <label for="outreachBufferMinutes" class="form-label text-sm font-bold">Spacing interval</label>
+                            <select id="outreachBufferMinutes" class="form-select form-control" aria-label="Spacing between messages">
+                                <option value="0">Default pacing (3–9s randomized)</option>
+                                <option value="1">1 minute apart</option>
+                                <option value="2">2 minutes apart</option>
+                                <option value="3" selected>3 minutes apart (Recommended)</option>
+                                <option value="4">4 minutes apart</option>
+                                <option value="5">5 minutes apart</option>
+                                <option value="10">10 minutes apart</option>
+                                <option value="15">15 minutes apart</option>
+                            </select>
+                            <div class="flex-wrap-center gap-6 mt-8" id="outreachBufferChips">
+                                <button type="button" class="btn btn-secondary btn-xs" data-buffer-min="0">Default</button>
+                                <button type="button" class="btn btn-secondary btn-xs" data-buffer-min="1">1 min</button>
+                                <button type="button" class="btn btn-secondary btn-xs" data-buffer-min="2">2 min</button>
+                                <button type="button" class="btn btn-secondary btn-xs" data-buffer-min="3">3 min</button>
+                                <button type="button" class="btn btn-secondary btn-xs" data-buffer-min="5">5 min</button>
+                                <button type="button" class="btn btn-secondary btn-xs" data-buffer-min="10">10 min</button>
+                                <button type="button" class="btn btn-secondary btn-xs" data-buffer-min="15">15 min</button>
+                            </div>
+                        </div>
+                        <div class="composer-help-text">
+                            Longer gaps lower the chance of WhatsApp flagging your account as spam. First message sends immediately.
+                        </div>
+                        <div id="outreachEstimateText" class="mt-8 text-secondary-sm font-medium"></div>
+                    </div>
+                </div>
+
                 <!-- 5. Campaign summary and actions (Sticky Persistent Footer) -->
                 <div class="composer-footer">
                     <div class="composer-summary-box">
@@ -1748,9 +1789,14 @@
 
             <!-- Progress View -->
             <div id="outreachProgressView" hidden>
-                <p id="outreachProgressSummary" class="mb-sm"></p>
+                <div class="flex-between align-center mb-sm">
+                    <p id="outreachProgressSummary" class="mb-0 font-bold"></p>
+                    <span id="outreachCountdownBadge" class="pill pill-running" hidden></span>
+                </div>
+                <div id="outreachProgressNotice" class="text-secondary-sm mb-sm">You can close this window; the campaign keeps running in the background.</div>
                 <div class="outreach-progress-list" id="outreachProgressList"></div>
-                <div class="modal-actions">
+                <div class="modal-actions mt-md flex-between">
+                    <button type="button" class="btn btn-secondary btn-sm text-danger" id="outreachProgressCancelBtn">Cancel Campaign</button>
                     <button type="button" class="btn btn-primary" id="outreachDoneBtn" hidden>Done</button>
                 </div>
             </div>
@@ -1897,6 +1943,22 @@
                     <button type="button" class="btn btn-secondary" id="campaignDetailDoneBtn">Close</button>
                 </div>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Appointment Detail Modal (with Reminders Panel) ── -->
+<div class="modal-backdrop" id="appointmentDetailModalBackdrop" hidden role="dialog" aria-modal="true" aria-labelledby="appointmentDetailModalTitle">
+    <div class="modal modal-lg" id="appointmentDetailModal">
+        <div class="modal-header">
+            <div>
+                <h2 id="appointmentDetailModalTitle">Appointment Details</h2>
+                <div id="appointmentDetailSubTitle" class="text-secondary-sm mt-4 font-mono"></div>
+            </div>
+            <button class="modal-close" id="appointmentDetailModalClose" aria-label="Close" type="button">×</button>
+        </div>
+        <div class="modal-body" id="appointmentDetailModalBody">
+            <!-- Filled by JS -->
         </div>
     </div>
 </div>

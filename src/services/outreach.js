@@ -42,8 +42,126 @@ const MAX_DELAY_MS = 9000;
 // Global and per-user limits for concurrent outreach jobs across the platform.
 const MAX_CONCURRENT_OUTREACH_JOBS = parseInt(process.env.MAX_CONCURRENT_OUTREACH_JOBS, 10) || 5;
 const MAX_CONCURRENT_JOBS_PER_USER = parseInt(process.env.MAX_CONCURRENT_OUTREACH_PER_USER, 10) || 1;
+
+let _sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+function setSleepImplementation(fn) {
+    _sleep = fn || ((ms) => new Promise(resolve => setTimeout(resolve, ms)));
+}
+
 function randomDelay() {
     return MIN_DELAY_MS + Math.floor(Math.random() * (MAX_DELAY_MS - MIN_DELAY_MS));
+}
+
+function calculateNextDelay(bufferMinutes, bufferJitter = true) {
+    const num = Number(bufferMinutes);
+    if (!Number.isFinite(num) || num <= 0) {
+        return randomDelay();
+    }
+    const clampedMinutes = Math.max(1, Math.min(15, num));
+    const baseMs = clampedMinutes * 60 * 1000;
+    if (!bufferJitter) {
+        return baseMs;
+    }
+    // ±20% jitter
+    const minJitter = -0.20;
+    const maxJitter = 0.20;
+    const factor = 1 + (minJitter + Math.random() * (maxJitter - minJitter));
+    const jitteredMs = Math.round(baseMs * factor);
+    // Bounds: never below 30s and never above 15 min (900,000ms)
+    return Math.max(30000, Math.min(900000, jitteredMs));
+}
+
+function serializeSendError(err, phone = '') {
+    const rawMsg = String(err?.message || '').trim();
+    const rawName = String(err?.name || '').trim();
+    const rawCode = String(err?.code || '').trim();
+    const rawStack = String(err?.stack || '').trim();
+
+    // 1. Session disconnection
+    const isDisconnect = /not connected|disconnected|destroyed|session closed/i.test(rawMsg) ||
+                         rawCode === 'WA_NOT_CONNECTED' ||
+                         rawCode === 'SESSION_NOT_CONNECTED';
+    if (isDisconnect) {
+        const reason = 'WhatsApp session disconnected (SESSION_NOT_CONNECTED)';
+        return {
+            code: 'SESSION_NOT_CONNECTED',
+            reason,
+            message: reason,
+            transient: true
+        };
+    }
+
+    // 2. Timeout
+    if (/timed?\s*out/i.test(rawMsg) || rawCode === 'SEND_TIMEOUT' || rawCode === 'ETIMEDOUT') {
+        const reason = 'Send timed out while waiting for WhatsApp confirmation (SEND_TIMEOUT)';
+        return {
+            code: 'SEND_TIMEOUT',
+            reason,
+            message: reason,
+            transient: true
+        };
+    }
+
+    // 3. Media asset unavailable
+    if (/media file missing|file not found|media empty|asset.*unavailable/i.test(rawMsg) ||
+        rawCode === 'MEDIA_FILE_NOT_FOUND' || rawCode === 'MEDIA_EMPTY' || rawCode === 'ASSET_UNAVAILABLE') {
+        const reason = 'Media asset file unavailable on server (ASSET_UNAVAILABLE)';
+        return {
+            code: 'ASSET_UNAVAILABLE',
+            reason,
+            message: reason,
+            transient: false
+        };
+    }
+
+    // 4. Recipient not registered on WhatsApp
+    if (/not registered on WhatsApp|not on WhatsApp/i.test(rawMsg) || rawCode === 'RECIPIENT_NOT_ON_WHATSAPP') {
+        const reason = 'Recipient is not registered on WhatsApp (RECIPIENT_NOT_ON_WHATSAPP)';
+        return {
+            code: 'RECIPIENT_NOT_ON_WHATSAPP',
+            reason,
+            message: reason,
+            transient: false
+        };
+    }
+
+    // 5. Minified WhatsApp Web "t" or "t: t" or unresolvable identifier
+    const isMinifiedOrLidError = /^(evaluation failed:\s*)?t(\s*:\s*t)?$/i.test(rawMsg) ||
+                                rawMsg === 't' ||
+                                rawName === 't' ||
+                                /No LID for user|chat not found|wid error|invalid wid/i.test(rawMsg);
+    if (isMinifiedOrLidError) {
+        const reason = 'Recipient identifier could not be resolved on WhatsApp (RECIPIENT_UNRESOLVABLE)';
+        return {
+            code: 'RECIPIENT_UNRESOLVABLE',
+            reason,
+            message: reason,
+            transient: false
+        };
+    }
+
+    // 6. Generic meaningful fallback
+    let meaningfulMsg = rawMsg;
+    if (!meaningfulMsg || meaningfulMsg === 't' || meaningfulMsg === 't: t' || meaningfulMsg.length <= 1) {
+        const firstLine = rawStack.split('\n')[0].replace(/^Error:\s*/, '').trim();
+        if (firstLine && firstLine !== 't' && firstLine !== 't: t') {
+            meaningfulMsg = firstLine;
+        } else if (rawName && rawName !== 't' && rawName !== 'Error') {
+            meaningfulMsg = rawName;
+        } else {
+            meaningfulMsg = 'WhatsApp message dispatch rejected by client';
+        }
+    }
+
+    const code = rawCode && rawCode !== 't' ? rawCode : 'UNKNOWN_SEND_ERROR';
+    const refId = randomUUID().slice(0, 8);
+    const reason = `[${code}] ${meaningfulMsg} (ref: ${refId})`.slice(0, 200);
+    return {
+        code,
+        reason,
+        message: meaningfulMsg,
+        transient: true
+    };
 }
 
 function renderTemplate(template, contact) {
@@ -57,13 +175,55 @@ function renderTemplate(template, contact) {
         .replace(/\{\{\s*phone\s*\}\}/gi, contact?.phone || '');
 }
 
+async function interruptibleDelay(delayMs, userId, jobId, nextRecipientId) {
+    const start = Date.now();
+    const nextSendAt = new Date(start + delayMs);
+    await runSql(
+        "UPDATE outreach_jobs SET next_send_at = $1 WHERE id = $2 AND user_id = $3",
+        [nextSendAt, jobId, userId]
+    ).catch(() => {});
+    if (nextRecipientId) {
+        await runSql(
+            "UPDATE outreach_recipients SET next_send_at = $1 WHERE id = $2 AND user_id = $3",
+            [nextSendAt, nextRecipientId, userId]
+        ).catch(() => {});
+    }
+
+    const checkIntervalMs = 1000;
+    let elapsed = 0;
+    while (elapsed < delayMs) {
+        const step = Math.min(checkIntervalMs, delayMs - elapsed);
+        await _sleep(step);
+        elapsed = Date.now() - start;
+
+        const fresh = await getStoredOutreachJob(userId, jobId);
+        if (!fresh || fresh.status === 'cancel_requested') {
+            await runSql(
+                "UPDATE outreach_recipients SET status = 'cancelled', reason = 'Cancelled before sending', next_send_at = NULL WHERE job_id = $1 AND user_id = $2 AND status IN ('pending', 'sending')",
+                [jobId, userId]
+            );
+            await runSql(
+                "UPDATE outreach_jobs SET status = 'cancelled', finished_at = CURRENT_TIMESTAMP, next_send_at = NULL WHERE id = $1 AND user_id = $2",
+                [jobId, userId]
+            );
+            return false;
+        }
+    }
+
+    await runSql(
+        "UPDATE outreach_jobs SET next_send_at = NULL WHERE id = $1 AND user_id = $2",
+        [jobId, userId]
+    ).catch(() => {});
+    return true;
+}
+
 /**
  * Starts a bulk-send job for one user against a list of contacts. Returns
  * the job immediately (status 'running', nothing sent yet) — the actual
  * sending happens afterward, off the caller's stack. Poll
  * getOutreachJob(jobId) for progress.
  */
-async function startOutreachJob(user, contacts, messageTemplate, mediaAssetId = null) {
+async function startOutreachJob(user, contacts, messageTemplate, mediaAssetId = null, options = {}) {
     if (contacts.length > MAX_RECIPIENTS_PER_JOB) {
         const err = new Error(`Outreach is capped at ${MAX_RECIPIENTS_PER_JOB} recipients per send — you selected ${contacts.length}. Split into smaller batches.`);
         err.status = 400;
@@ -80,7 +240,19 @@ async function startOutreachJob(user, contacts, messageTemplate, mediaAssetId = 
         throw err;
     }
 
-    const job = await createOutreachJob(user.id, randomUUID(), messageTemplate, contacts, mediaAssetId);
+    let bufferMinutes = 0;
+    if (options.bufferMinutes !== undefined && options.bufferMinutes !== null && options.bufferMinutes !== '') {
+        const parsed = Number(options.bufferMinutes);
+        if (!Number.isInteger(parsed) || parsed < 0 || parsed > 15) {
+            const err = new Error('Delay between messages must be an integer between 0 and 15 minutes.');
+            err.status = 400;
+            throw err;
+        }
+        bufferMinutes = parsed;
+    }
+    const bufferJitter = options.bufferJitter !== false;
+
+    const job = await createOutreachJob(user.id, randomUUID(), messageTemplate, contacts, mediaAssetId, { bufferMinutes, bufferJitter });
 
     // Deliberately not awaited. The rejection handler matters: an unhandled
     // rejection here would, given server.js's process.exit(1) policy, take
@@ -104,59 +276,60 @@ async function runJob(jobOrId, maybeUser = null) {
         }
     }
     const messageTemplate = job.message_template || job.template || '';
+    const bufferMinutes = Number(job.buffer_minutes || 0);
+    const bufferJitter = job.buffer_jitter !== false;
+
     const recipients = await queryAll("SELECT * FROM outreach_recipients WHERE job_id=$1 AND user_id=$2 AND status='pending' ORDER BY id", [job.id, user.id]);
-    for (const recipient of recipients) {
+    for (let i = 0; i < recipients.length; i++) {
+        const recipient = recipients[i];
+        const nextRecipient = i + 1 < recipients.length ? recipients[i + 1] : null;
+
         const freshJob = await getStoredOutreachJob(user.id, job.id);
         if (!freshJob || freshJob.status === 'cancel_requested') {
-            await runSql("UPDATE outreach_recipients SET status='skipped', reason='Cancelled before sending' WHERE job_id=$1 AND user_id=$2 AND status='pending'", [job.id,user.id]);
-            await runSql("UPDATE outreach_jobs SET status='cancelled', finished_at=CURRENT_TIMESTAMP WHERE id=$1 AND user_id=$2", [job.id,user.id]);
+            await runSql("UPDATE outreach_recipients SET status='cancelled', reason='Cancelled before sending', next_send_at=NULL WHERE job_id=$1 AND user_id=$2 AND status IN ('pending', 'sending')", [job.id, user.id]);
+            await runSql("UPDATE outreach_jobs SET status='cancelled', finished_at=CURRENT_TIMESTAMP, next_send_at=NULL WHERE id=$1 AND user_id=$2", [job.id, user.id]);
             return;
         }
         const contact = { id: recipient.contact_id, phone: recipient.phone, name: recipient.contact_name };
-        await runSql("UPDATE outreach_recipients SET status='sending' WHERE id=$1 AND user_id=$2 AND status='pending'", [recipient.id,user.id]);
+        await runSql("UPDATE outreach_recipients SET status='sending', next_send_at=NULL WHERE id=$1 AND user_id=$2 AND status='pending'", [recipient.id, user.id]);
 
-        // Re-read the account each iteration. A job can run for 20 minutes,
-        // during which an admin may suspend the account — continuing to send
-        // on behalf of a suspended tenant is exactly what suspension is
-        // supposed to stop.
+        // Re-read the account each iteration.
         const fresh = await getUserById(user.id);
         if (!fresh || fresh.status !== 'active') {
-            await runSql("UPDATE outreach_recipients SET status='skipped', reason='Account is no longer active' WHERE job_id=$1 AND user_id=$2 AND status IN ('pending','sending')", [job.id,user.id]);
-            await runSql("UPDATE outreach_jobs SET status='cancelled', finished_at=CURRENT_TIMESTAMP WHERE id=$1 AND user_id=$2", [job.id,user.id]);
+            await runSql("UPDATE outreach_recipients SET status='cancelled', reason='Account is no longer active', next_send_at=NULL WHERE job_id=$1 AND user_id=$2 AND status IN ('pending','sending')", [job.id, user.id]);
+            await runSql("UPDATE outreach_jobs SET status='cancelled', finished_at=CURRENT_TIMESTAMP, next_send_at=NULL WHERE id=$1 AND user_id=$2", [job.id, user.id]);
             return;
         }
 
-        // Plan message-limit check, re-evaluated per send since it can change
-        // mid-job — same rule /messages/send enforces.
+        // Plan message-limit check
         if (fresh.message_limit && (await getMonthlyOutgoingCount(fresh.id)) >= fresh.message_limit) {
-            await runSql("UPDATE outreach_recipients SET status='skipped', reason='Monthly message limit reached' WHERE job_id=$1 AND user_id=$2 AND status IN ('pending','sending')", [job.id,user.id]);
+            await runSql("UPDATE outreach_recipients SET status='skipped', reason='Monthly message limit reached', next_send_at=NULL WHERE job_id=$1 AND user_id=$2 AND status IN ('pending','sending')", [job.id, user.id]);
             break;
         }
 
-        // Optional per-user setting (routes/calendar.js): skip this contact
-        // rather than send while the owner's own Google Calendar shows them
-        // busy right now. checkAvailabilityNow fails open (busy: false) on
-        // any error or if the feature isn't connected, so a Calendar API
-        // hiccup can never silently stall a whole outreach job.
+        // Optional per-user calendar check
         const availability = await checkAvailabilityNow(fresh.id);
         if (availability.busy) {
-            await runSql("UPDATE outreach_recipients SET status='skipped', reason='Google Calendar shows you as busy' WHERE id=$1 AND user_id=$2", [recipient.id,user.id]);
-            continue;
+            await runSql("UPDATE outreach_recipients SET status='skipped', reason='Google Calendar shows you as busy', next_send_at=NULL WHERE id=$1 AND user_id=$2", [recipient.id, user.id]);
+            continue; // Skipped rows do not consume buffer
         }
 
-        // The contact rows come from our own database, but they may predate
-        // phone validation (see migration 4), so normalise rather than trust.
         const phone = tryNormalizePhone(contact.phone);
         if (!phone) {
-            await runSql("UPDATE outreach_recipients SET status='failed', reason='Not a valid phone number' WHERE id=$1 AND user_id=$2", [recipient.id,user.id]);
+            await runSql("UPDATE outreach_recipients SET status='failed', reason='Not a valid phone number', next_send_at=NULL WHERE id=$1 AND user_id=$2", [recipient.id, user.id]);
+            if (nextRecipient) {
+                const delayMs = calculateNextDelay(bufferMinutes, bufferJitter);
+                const ok = await interruptibleDelay(delayMs, user.id, job.id, nextRecipient.id);
+                if (!ok) return;
+            }
             continue;
         }
 
-        // Enforce opt-out suppression: skip any contact who has opted out
+        // Enforce opt-out suppression
         const optOutStatus = await getContactOptOutStatus(fresh.id, phone);
         if (optOutStatus && optOutStatus.is_opted_out) {
-            await runSql("UPDATE outreach_recipients SET status='skipped', reason='Contact has opted out' WHERE id=$1 AND user_id=$2", [recipient.id, user.id]);
-            continue;
+            await runSql("UPDATE outreach_recipients SET status='skipped', reason='Contact has opted out', next_send_at=NULL WHERE id=$1 AND user_id=$2", [recipient.id, user.id]);
+            continue; // Skipped rows do not consume buffer
         }
 
         const personalized = renderTemplate(messageTemplate, contact);
@@ -171,7 +344,12 @@ async function runJob(jobOrId, maybeUser = null) {
                 const fs = require('fs');
                 const hasBytes = (mediaAsset.data && mediaAsset.data.length > 0) || (mediaAsset.storage_path && fs.existsSync(mediaAsset.storage_path));
                 if (!mediaAsset.is_active || !hasBytes) {
-                    await runSql("UPDATE outreach_recipients SET status='failed', reason='Media file missing on server' WHERE id=$1 AND user_id=$2", [recipient.id, user.id]);
+                    await runSql("UPDATE outreach_recipients SET status='failed', reason='Media file missing on server', next_send_at=NULL WHERE id=$1 AND user_id=$2", [recipient.id, user.id]);
+                    if (nextRecipient) {
+                        const delayMs = calculateNextDelay(bufferMinutes, bufferJitter);
+                        const ok = await interruptibleDelay(delayMs, user.id, job.id, nextRecipient.id);
+                        if (!ok) return;
+                    }
                     continue;
                 }
                 const { sendMedia } = require('./messaging');
@@ -201,43 +379,39 @@ async function runJob(jobOrId, maybeUser = null) {
 
             if (!(await getContactByPhone(fresh.id, phone))) await upsertContact(fresh.id, phone, contact.name);
             await markContactOutreached(fresh.id, phone);
-            await runSql("UPDATE outreach_recipients SET status='sent', sent_at=CURRENT_TIMESTAMP WHERE id=$1 AND user_id=$2", [recipient.id,user.id]);
+            await runSql("UPDATE outreach_recipients SET status='sent', sent_at=CURRENT_TIMESTAMP, next_send_at=NULL WHERE id=$1 AND user_id=$2", [recipient.id, user.id]);
             logOutreachEvent(fresh.id, { phone, name: contact.name, message: personalized }).catch?.(() => {});
         } catch (err) {
-            const isDisconnect = /not connected/i.test(err?.message || '') || err?.code === 'WA_NOT_CONNECTED' || err?.code === 'SESSION_NOT_CONNECTED';
-            let detail = err?.message;
-            if (!detail || detail === 't' || detail.length <= 1) {
-                if (err?.code) {
-                    detail = err.code;
-                } else if (err?.stack) {
-                    const firstLine = err.stack.split('\n')[0].trim();
-                    detail = (firstLine && firstLine !== 'Error: t') ? firstLine : (err?.name || String(err));
-                } else {
-                    detail = String(err || 'Unknown dispatch error');
+            const serialized = serializeSendError(err, phone);
+            await runSql("UPDATE outreach_recipients SET status='failed', reason=$1, next_send_at=NULL WHERE id=$2 AND user_id=$3", [serialized.reason, recipient.id, user.id]);
+
+            if (serialized.code === 'SESSION_NOT_CONNECTED') {
+                const whatsappClient = require('./whatsapp-client');
+                let reconnected = false;
+                for (let retry = 0; retry < 15; retry++) {
+                    await _sleep(2000);
+                    const st = whatsappClient.getStatus(user.id);
+                    if (st && st.connected) {
+                        reconnected = true;
+                        break;
+                    }
                 }
-            }
-            const errorCode = isDisconnect ? 'SESSION_NOT_CONNECTED' : (err?.code || 'SEND_ERROR');
-            const failReason = isDisconnect
-                ? 'WhatsApp disconnected (SESSION_NOT_CONNECTED)'
-                : (err?.code ? `[${err.code}] Send failed: ${detail}` : `Send failed: ${detail}`).slice(0, 200);
-            await runSql("UPDATE outreach_recipients SET status='failed', reason=$1 WHERE id=$2 AND user_id=$3", [failReason, recipient.id, user.id]);
-            if (isDisconnect) {
-                await runSql("UPDATE outreach_recipients SET status='skipped', reason='Stopped: WhatsApp is disconnected (SESSION_NOT_CONNECTED)' WHERE job_id=$1 AND user_id=$2 AND status IN ('pending','sending')", [job.id, user.id]);
-                break;
+                if (!reconnected) {
+                    await runSql("UPDATE outreach_recipients SET status='failed', reason='Stopped: WhatsApp is disconnected (SESSION_NOT_CONNECTED)', next_send_at=NULL WHERE job_id=$1 AND user_id=$2 AND status IN ('pending','sending')", [job.id, user.id]);
+                    break;
+                }
             }
         }
 
-        // Skip the delay after the very last send — nothing left to wait for.
-        if (recipient !== recipients[recipients.length - 1]) {
-            await new Promise(resolve => setTimeout(resolve, randomDelay()));
+        // Wait buffer delay before next message (unless this is the last recipient)
+        if (nextRecipient) {
+            const delayMs = calculateNextDelay(bufferMinutes, bufferJitter);
+            const ok = await interruptibleDelay(delayMs, user.id, job.id, nextRecipient.id);
+            if (!ok) return; // Cancelled during wait
         }
     }
 
-    // Honest status derivation invariant:
-    // sent === 0 && failed > 0 -> 'failed' (Never show green Completed when sent = 0)
-    // sent > 0 && failed > 0   -> 'completed_with_errors'
-    // sent > 0 && failed === 0 -> 'completed'
-    // sent === 0 && all skipped/cancelled -> 'cancelled'
+    // Honest status derivation invariant
     const counts = await queryAll(
         "SELECT status, COUNT(*)::int AS count FROM outreach_recipients WHERE job_id = $1 AND user_id = $2 GROUP BY status",
         [job.id, user.id]
@@ -245,7 +419,7 @@ async function runJob(jobOrId, maybeUser = null) {
     const summary = counts.reduce((acc, row) => { acc[row.status] = Number(row.count); return acc; }, {});
     const sentCount = summary.sent || 0;
     const failedCount = summary.failed || 0;
-    const skippedCount = (summary.skipped || 0) + (summary.unknown || 0);
+    const skippedCount = (summary.skipped || 0) + (summary.unknown || 0) + (summary.cancelled || 0);
 
     let finalStatus = 'completed';
     if (sentCount === 0 && failedCount > 0) {
@@ -258,16 +432,13 @@ async function runJob(jobOrId, maybeUser = null) {
 
     await runSql(`UPDATE outreach_jobs
                   SET status=CASE WHEN status='cancel_requested' THEN 'cancelled' ELSE $1 END,
-                      finished_at=CURRENT_TIMESTAMP
+                      finished_at=CURRENT_TIMESTAMP,
+                      next_send_at=NULL
                   WHERE id=$2 AND user_id=$3 AND status IN ('running','cancel_requested')`, [finalStatus, job.id, user.id]);
 }
 
 /**
  * Returns a job only to the account that owns it.
- *
- * The ownership check is the authorization boundary for this resource: job
- * ids are short and sequential, so without it any tenant could read another
- * tenant's recipient phone numbers by guessing.
  */
 function getOutreachJob(arg1, arg2) {
     const userId = typeof arg1 === 'number' ? arg1 : arg2;
@@ -275,16 +446,18 @@ function getOutreachJob(arg1, arg2) {
     return getStoredOutreachJob(userId, jobId);
 }
 
-async function createOutreachJobService(userId, arg2, maybeTemplate, maybeContacts, maybeMediaAssetId) {
+async function createOutreachJobService(userId, arg2, maybeTemplate, maybeContacts, maybeMediaAssetId, maybeOptions = {}) {
     if (typeof arg2 === 'object' && arg2 !== null && !Array.isArray(arg2)) {
         const { getContactsByIds } = require('./database');
         const template = arg2.messageTemplate || '';
         const contacts = await getContactsByIds(userId, arg2.contactIds || []);
         const mediaAssetId = arg2.mediaAssetId || null;
         const jobId = randomUUID();
-        return createOutreachJob(userId, jobId, template, contacts, mediaAssetId);
+        const bufferMinutes = arg2.bufferMinutes || 0;
+        const bufferJitter = arg2.bufferJitter !== false;
+        return createOutreachJob(userId, jobId, template, contacts, mediaAssetId, { bufferMinutes, bufferJitter });
     }
-    return createOutreachJob(userId, arg2, maybeTemplate, maybeContacts, maybeMediaAssetId);
+    return createOutreachJob(userId, arg2, maybeTemplate, maybeContacts, maybeMediaAssetId, maybeOptions);
 }
 
 function cancelOutreachJob(jobId, userId) {
@@ -298,7 +471,7 @@ async function cancelAllOutreachJobs() {
 
 async function getOutreachRecipients(userId, jobId) {
     return queryAll(
-        `SELECT id, job_id, user_id, contact_id, phone, contact_name, status, reason, reason AS error_message, sent_at
+        `SELECT id, job_id, user_id, contact_id, phone, contact_name, status, reason, reason AS error_message, sent_at, next_send_at
          FROM outreach_recipients
          WHERE user_id = $1 AND job_id = $2
          ORDER BY id ASC`,
@@ -329,7 +502,7 @@ async function retryFailedOutreachRecipients(userId, jobId) {
     }
 
     await runSql(
-        "UPDATE outreach_recipients SET status = 'pending', reason = '' WHERE job_id = $1 AND user_id = $2 AND status = 'failed'",
+        "UPDATE outreach_recipients SET status = 'pending', reason = '', next_send_at = NULL WHERE job_id = $1 AND user_id = $2 AND status = 'failed'",
         [jid, uid]
     );
     await runSql(
@@ -346,6 +519,21 @@ async function retryFailedOutreachRecipients(userId, jobId) {
     return { retried: failedRecipients.length, jobId: jid, total: job.total };
 }
 
+async function reclaimInterruptedOutreachJobs() {
+    const reclaimedRecipients = await runSql(
+        "UPDATE outreach_recipients SET status = 'pending', next_send_at = NULL WHERE status = 'sending'",
+        []
+    );
+    const interruptedJobs = await runSql(
+        "UPDATE outreach_jobs SET status = 'interrupted', finished_at = CURRENT_TIMESTAMP, next_send_at = NULL WHERE status IN ('running', 'cancel_requested')",
+        []
+    );
+    return {
+        reclaimedRecipients: reclaimedRecipients.changes || 0,
+        interruptedJobs: interruptedJobs.changes || 0
+    };
+}
+
 module.exports = {
     startOutreachJob,
     createOutreachJob: createOutreachJobService,
@@ -356,7 +544,11 @@ module.exports = {
     retryFailedOutreachRecipients,
     cancelOutreachJob,
     cancelAllOutreachJobs,
+    reclaimInterruptedOutreachJobs,
     renderTemplate,
+    calculateNextDelay,
+    serializeSendError,
+    setSleepImplementation,
     MAX_RECIPIENTS_PER_JOB,
     MIN_DELAY_MS,
     MAX_DELAY_MS

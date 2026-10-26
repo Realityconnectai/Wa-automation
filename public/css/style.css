@@ -1074,13 +1074,19 @@ h1, h2, h3, h4 { font-family: var(--font-display); letter-spacing: -0.015em; }
 .outreach-progress-row {
     display: flex;
     justify-content: space-between;
-    padding: 6px 10px;
-    font-size: 0.8rem;
+    align-items: center;
+    padding: 8px 12px;
+    font-size: 0.85rem;
     border-bottom: 1px solid var(--color-border);
+    transition: background-color 0.15s ease;
 }
 .outreach-progress-row:last-child { border-bottom: none; }
+.outreach-progress-row.pending { color: var(--color-text-secondary); background: transparent; }
+.outreach-progress-row.sending { color: var(--color-primary); background: var(--cream-subtle); }
 .outreach-progress-row.ok { color: var(--color-success); }
 .outreach-progress-row.fail { color: var(--color-error); }
+.outreach-progress-row.skipped { color: var(--color-text-muted); }
+.outreach-progress-row.cancelled { color: var(--color-text-muted); opacity: 0.8; }
 
 /* ─── Quick-select (outreach batch picker) ──────────────────── */
 .quick-select-row {
@@ -3008,7 +3014,7 @@ iframe.asset-preview-media { min-height: 48vh; }
     background: var(--cream-subtle);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
-    padding: 12px;
+    padding: 14px 16px;
     margin-bottom: 14px;
 }
 .deal-assignment-row {
@@ -3018,30 +3024,204 @@ iframe.asset-preview-media { min-height: 48vh; }
     gap: 12px;
     flex-wrap: wrap;
 }
+.deal-assignment-header-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.deal-assignment-label {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+}
 .reassign-form {
     display: flex;
     gap: 8px;
     align-items: center;
-    margin-top: 10px;
+    margin-top: 12px;
     flex-wrap: wrap;
 }
 .reassign-form select,
 .reassign-form input {
-    margin-bottom: 0;
+    height: 38px;
+    padding: 6px 12px;
     font-size: 0.85rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-card, #ffffff);
+    color: var(--color-text);
+    font-family: inherit;
+    box-sizing: border-box;
+    margin-bottom: 0;
+}
+.reassign-form select:focus,
+.reassign-form input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px var(--color-primary-subtle);
+}
+.reassign-form select {
+    flex: 1 1 200px;
+    min-width: 170px;
+}
+.reassign-form input {
+    flex: 2 1 200px;
+    min-width: 170px;
+}
+.reassign-form button {
+    height: 38px;
+    padding: 0 16px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.assignment-history {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--color-border);
+    max-height: 220px;
+    overflow-y: auto;
+}
+.assignment-history-title {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    margin-bottom: 8px;
 }
 .assignment-history-item {
-    padding: 8px 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
     border-bottom: 1px solid var(--color-border);
     font-size: 0.82rem;
-    color: var(--color-text-secondary);
+    background: var(--color-bg-subtle, rgba(0,0,0,0.02));
+    border-radius: var(--radius-sm);
+    margin-bottom: 4px;
 }
 .assignment-history-item:last-child {
     border-bottom: none;
+    margin-bottom: 0;
 }
 .assignment-history-time {
     font-size: 0.75rem;
     color: var(--color-text-muted);
+    white-space: nowrap;
+}
+.deal-identifier-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    background: var(--cream-subtle);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    margin-top: 12px;
+    flex-wrap: wrap;
+}
+.modal-actions-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin: 16px 0 8px;
+}
+.modal-actions-primary {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.btn-deal-action {
+    height: 36px;
+    padding: 0 14px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: var(--radius-sm);
+    box-shadow: none !important;
+}
+
+/* Appointment Reminders Panel (S5B) */
+.reminder-cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px;
+    margin-top: 10px;
+}
+.reminder-card {
+    background: var(--cream-subtle);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 12px 14px;
+}
+.reminder-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+.reminder-card-title {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--color-text);
+}
+.reminder-card-time {
+    font-size: 0.82rem;
+    color: var(--color-text-secondary);
+}
+.reminder-card-reason {
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+    margin-top: 4px;
+}
+.reminder-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+.reminder-chip-scheduled {
+    background: #e0f2fe;
+    color: #0369a1;
+}
+.reminder-chip-sending {
+    background: #fef3c7;
+    color: #b45309;
+}
+.reminder-chip-sent {
+    background: #dcfce7;
+    color: #15803d;
+}
+.reminder-chip-failed {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+.reminder-chip-skipped,
+.reminder-chip-cancelled {
+    background: #f1f5f9;
+    color: #64748b;
+}
+.reminder-compact-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 10px;
+    background: var(--cream-subtle);
+    border: 1px solid var(--color-border);
+    cursor: default;
 }
 
 /* Campaigns & Outreach Management */

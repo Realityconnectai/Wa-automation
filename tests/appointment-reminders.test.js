@@ -114,7 +114,7 @@ describe('Site Visit Appointment Reminders (24h and 2h notifications)', () => {
         expect(r2.body).toContain('in 2 hours');
     });
 
-    test('2. Schedules only 2h reminder when booked 10h in advance (24h skipped)', async () => {
+    test('2. Records 24h reminder as skipped and schedules 2h reminder when booked 10h in advance', async () => {
         const slotStart = new Date(Date.now() + 10 * 60 * 60 * 1000);
         slotStart.setMinutes(0, 0, 0);
 
@@ -125,12 +125,17 @@ describe('Site Visit Appointment Reminders (24h and 2h notifications)', () => {
         });
 
         const reminders = await appointmentReminders.getAppointmentReminders(userA.id, appt.id);
-        expect(reminders).toHaveLength(1);
-        expect(reminders[0].reminder_type).toBe('2h');
-        expect(reminders[0].status).toBe('pending');
+        expect(reminders).toHaveLength(2);
+
+        const r24 = reminders.find(r => r.reminder_type === '24h');
+        const r2 = reminders.find(r => r.reminder_type === '2h');
+
+        expect(r24.status).toBe('skipped');
+        expect(r24.error_message).toBe('Booked less than 24h ahead');
+        expect(r2.status).toBe('pending');
     });
 
-    test('3. Schedules no reminders when booked 1h in advance (<2h lead time)', async () => {
+    test('3. Records both 24h and 2h reminders as skipped when booked 1h in advance (<2h lead time)', async () => {
         const slotStart = new Date(Date.now() + 60 * 60 * 1000);
         slotStart.setMinutes(0, 0, 0);
 
@@ -141,7 +146,15 @@ describe('Site Visit Appointment Reminders (24h and 2h notifications)', () => {
         });
 
         const reminders = await appointmentReminders.getAppointmentReminders(userA.id, appt.id);
-        expect(reminders).toHaveLength(0);
+        expect(reminders).toHaveLength(2);
+
+        const r24 = reminders.find(r => r.reminder_type === '24h');
+        const r2 = reminders.find(r => r.reminder_type === '2h');
+
+        expect(r24.status).toBe('skipped');
+        expect(r24.error_message).toBe('Booked less than 24h ahead');
+        expect(r2.status).toBe('skipped');
+        expect(r2.error_message).toBe('Booked less than 2h ahead');
     });
 
     test('4. Includes project property details (name, address, map_url) when project_id is provided', async () => {

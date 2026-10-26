@@ -206,12 +206,13 @@ async function processPendingMessages() {
                 // the log — annoying. The other order risks a delivered
                 // message still marked 'sending', which a later reclaim
                 // reports as failed and a human may then re-send.
-                await updateScheduledMessageStatus(msg.id, 'sent');
+                const waMsgId = result?.id?._serialized || result?.messageId || (typeof result === 'string' ? result : null);
+                await updateScheduledMessageStatus(msg.id, 'sent', null, waMsgId);
                 summary.sent++;
 
                 try {
                     await logMessage(msg.user_id, {
-                        waMessageId: result?.id?._serialized || result?.messageId || null,
+                        waMessageId: waMsgId,
                         phone,
                         direction: 'outgoing',
                         messageType: 'text',
@@ -222,7 +223,7 @@ async function processPendingMessages() {
                     console.warn('⚠️ Could not log scheduled message (non-fatal):', logErr.message);
                 }
 
-                console.log(`✅ Scheduled message #${msg.id} sent`);
+                console.log(`✅ Scheduled message #${msg.id} sent (waMessageId: ${waMsgId})`);
                 // Best-effort; a calendar-import-created scheduled message
                 // (see google-calendar.js) logging back to the same calendar
                 // it came from is harmless — it's tagged so a resync never
@@ -249,11 +250,13 @@ async function processPendingMessages() {
                     summary.failed++;
                     console.error(`❌ Scheduled message #${msg.id} failed:`, error.message);
                     try {
-                        // Truncate: the message is shown in the dashboard, and a
-                        // raw stack from Puppeteer is neither useful nor safe there.
-                        const reason = /not connected/i.test(error.message)
+                        let reason = /not connected/i.test(error.message)
                             ? 'WhatsApp was not connected at the scheduled time'
-                            : String(error.message).split('\n')[0].slice(0, 300);
+                            : (/not registered on WhatsApp/i.test(error.message)
+                                ? 'Recipient not registered on WhatsApp'
+                                : (/^(evaluation failed:\s*)?t(\s*:\s*t)?$/i.test(error.message) || error.message === 't'
+                                    ? 'Recipient identifier unresolvable on WhatsApp'
+                                    : String(error.message).split('\n')[0].slice(0, 300)));
                         await updateScheduledMessageStatus(msg.id, 'failed', reason);
                     } catch (dbErr) {
                         console.error('❌ Could not update failed status:', dbErr.message);

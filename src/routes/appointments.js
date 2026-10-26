@@ -11,7 +11,7 @@ const express = require('express');
 const router = express.Router();
 
 const { getSettings, saveSettings, getAvailableSlots, bookAppointment, rescheduleAppointment, cancelAppointment } = require('../services/availability');
-const { listAppointments, countAppointments, assertPersistable } = require('../services/database');
+const { listAppointments, countAppointments, assertPersistable, getAppointmentById, getAppointmentReminders } = require('../services/database');
 const { asyncHandler } = require('../utils/errors');
 const { perUser } = require('../middleware/rateLimit');
 const { ValidationError, requireId, normalizePhone, optionalString, LIMITS } = require('../utils/validate');
@@ -123,6 +123,21 @@ router.delete('/:id', writeLimiter, asyncHandler(async (req, res) => {
         return res.status(409).json({ success: false, error: 'That appointment was not found, or is already cancelled.' });
     }
     res.json({ success: true });
+}));
+
+router.get('/:id', asyncHandler(async (req, res) => {
+    const id = requireId(req.params.id, 'appointment id');
+    const appt = await getAppointmentById(req.user.id, id);
+    if (!appt) {
+        return res.status(404).json({ success: false, error: 'Appointment not found' });
+    }
+    res.json({ success: true, data: appt });
+}));
+
+router.get('/:id/reminders', asyncHandler(async (req, res) => {
+    const id = requireId(req.params.id, 'appointment id');
+    const reminders = await getAppointmentReminders(req.user.id, id);
+    res.json({ success: true, data: reminders });
 }));
 
 module.exports = router;

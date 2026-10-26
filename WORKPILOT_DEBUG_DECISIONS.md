@@ -373,6 +373,52 @@ Tested on live WhatsApp Web session across all 7 cases:
   6. **Startup Wiring Invariant & Integration Test:** Created `src/services/wiring-check.js` asserting inter-service function contracts at boot in `server.js` and `src/config/app.js`. Added `tests/campaign-media-wiring.test.js` (8/8 passed). Ran `npm run lint` (134/134 passed) and unit suites (188/188 passed).
 - **Status Change:** Campaign media wiring & honest status invariants are **VERIFIED** via automated tests. Historical broken campaign repaired to `failed`. Awaiting owner device authorization for live end-to-end send.
 
+---
+
+### Iteration 8 — 2026-10-26 (Campaign UX "Pending", Send Buffer 1–15m, Error Un-truncation "t: t", Deal Modal Polish, Appointment Reminders Tracking)
+- **1. S0 Immediate "Failed" Status Root Cause (CONFIRMED):**
+  - *Location:* `public/js/app.js:2827`
+  - *Root Cause:* The per-recipient rendering loop in `pollOutreachJob` used a binary ternary expression:
+    ```javascript
+    `<div class="outreach-progress-row ${r.status === 'sent' ? 'ok' : 'fail'}">`
+    `<span>${r.status === 'sent' ? Icon('check-circle') : (r.reason ? escapeHtml(r.reason) : 'failed')}</span>`
+    ```
+    When a campaign was launched and recipients were inserted with status `pending`, `r.status === 'sent'` evaluated to `false`. Because `r.reason` was empty string `""`, the ternary fell through to class `fail` (red background) and printed the text `'failed'` before any message was ever attempted.
+  - *Fix:* Replaced binary mapping with explicit multi-state badge and class mapping supporting `pending`, `sending`, `sent`, `failed`, `skipped`, and `cancelled`. Recipients now show neutral amber "Pending" immediately upon launch.
+- **2. S1/S3/S4 Message Send Buffer (1–15 min) & Durable Scheduling:**
+  - *Migration 027:* Added `buffer_minutes`, `buffer_jitter`, `next_send_at` to `outreach_jobs`; `next_send_at` to `outreach_recipients`; updated check constraints to allow `'cancelled'` on recipients and `'skipped'` on scheduled messages.
+  - *Server-side Validation:* In `src/services/outreach.js` and `src/routes/api.js`, validated `bufferMinutes` as integer 0–15. Clamped boundaries strictly to 30s min and 15m max with ±20% jitter.
+  - *Durable Pacing Worker:* Added `interruptibleDelay` polling DB every 1s for early cancellation, updating `next_send_at` on DB rows. First send occurs immediately; subsequent sends wait buffer delay. Opt-out skips do NOT consume buffer; failed sends DO consume buffer. Reclaim logic `reclaimInterruptedOutreachJobs()` marks stuck `sending` rows back to `pending` upon daemon startup.
+  - *UI Controls:* Added "Delay Between Messages" card in Create Campaign modal with spacing interval dropdown (0–15 min), quick-pick buttons (`Default`, `1 min`, `2 min`, `3 min`, `5 min`, `10 min`, `15 min`), dynamic finish time estimate (`"4 recipients · ~3 min apart · finishes around 05:25 pm"`), live countdown badge (`"Next message in 2m 30s"`), and "You can close this window; the campaign keeps running" reassurance.
+- **3. S5 Error Un-truncation & `Send failed: t: t` (Aaryan, 105957396857003) Root Cause (CONFIRMED):**
+  - *Root Cause:* In minified WhatsApp Web code, unresolved multi-device LIDs or missing session keys throw an error object where `name = 't'` and `message = 't'`. In Node.js/V8, `err.toString()` evaluates to `"t: t"`. In `outreach.js:209`, the guard `if (!detail || detail === 't' || detail.length <= 1)` evaluated to `false` on `"t: t"`, setting `failReason = "Send failed: t: t"`.
+  - *Fix:* Added `serializeSendError(err, phone)` in `src/services/outreach.js`. Catches all regex matches of `/^(evaluation failed:\s*)?t(\s*:\s*t)?$/i`, `name === 't'`, or LID/WID errors and maps them to `RECIPIENT_UNRESOLVABLE` with human-readable text `"Recipient identifier could not be resolved on WhatsApp (RECIPIENT_UNRESOLVABLE)"`. Added mappings for `SESSION_NOT_CONNECTED`, `SEND_TIMEOUT`, and `ASSET_UNAVAILABLE`.
+- **4. S5A CRM Deal Modal Alignment & Polish Sweep:**
+  - *Styled Controls:* Fixed unstyled native `<select>` and `<input>` in Reassign form. Standardized to 38px height, matching focus rings, border-radius, and font. Placeholder changed to `"Reason (optional)"` to prevent truncation.
+  - *Header Alignment:* Vertically centered "Assigned Agent:" and "SLA Status:" labels and pills (`.deal-assignment-header-item` with flex alignment). Added dynamic relative overdue indicator (`"(overdue by 1h 12m)"`) for breached/escalated SLAs computed against IST deadline.
+  - *Structured Assignment History:* Formatted into a structured scrollable list. Humanized snake_case codes (`sla_escalation` -> "SLA escalation", `auto_inbound` -> "Auto-assigned (new inbound)").
+  - *Truthful Escalation Display:* Checked `src/services/lead-assignment.js` policy: SLA escalation notifies the Escalation Manager without changing the assigned agent (Rahul Sharma remains assignee). Fixed misleading reassignment arrow `Rahul Sharma -> Escalation Manager` to truthfully display `"Escalated to Escalation Manager (notified)"`.
+  - *Identifier Bar:* Added logic checking for 14-16 digit internal WhatsApp IDs vs standard E.164 phone numbers. Correctly labels as `"WhatsApp ID:"` with source badge and AI paused status.
+  - *Action Buttons & Safety:* Unified button system (same 36px height, consistent padding/radius, removed oversized glow shadow on Save). Moved destructive "Delete Deal" button to the far right, added confirmation dialog, and added double-click protection (disabled/loading states) on Save, Reassign, and Delete.
+  - *Top Alignment:* Aligned Qualification Temperature badge (`COLD`) and rule explanation row.
+- **5. S5B Appointment Reminders (24h & 2h) Audit & UI Tracking:**
+  - *Audit Map:*
+    - **Where Created:** Bookings in `src/services/availability.js` call `scheduleAppointmentReminders()` in `src/services/appointment-reminders.js`.
+    - **Product Notice Policy:** Notice >24h creates both 24h & 2h reminders. Notice 2h–24h creates 2h reminder and records 24h as `status = 'skipped'` with reason `"Booked less than 24h ahead"`. Notice <2h records both as `status = 'skipped'` with reason `"Booked less than 2h ahead"`.
+    - **Where Stored:** `scheduled_messages` table with `appointment_id`, `reminder_type` (`'24h'` / `'2h'`), `scheduled_at`, `status` (`'scheduled'` / `'pending'` / `'sending'` / `'sent'` / `'failed'` / `'skipped'` / `'cancelled'`), `wa_message_id`, and `error_message`.
+    - **Scheduler:** `src/services/scheduler.js` runs every 60s, querying due rows with row-level locking. On send success, stamps `wa_message_id` and `sent_at`. On failure, sanitizes error reason.
+    - **Reschedule / Cancel:** Cancelling appointment immediately sets pending reminders to `cancelled`. Rescheduling cancels old reminders and schedules new reminders for the updated start time.
+  - *Appointments UI Tracking:*
+    - Added "Reminders" column to Appointments table with compact status indicator: `24h ✓ · 2h ⏱` (green tick for sent, blue clock for scheduled, grey slash for skipped, red warning for failed).
+    - Added Appointment Details modal (`appointmentDetailModal`) with dedicated "Appointment Reminders (24h & 2h)" panel displaying cards for both 24h and 2h reminders with exact scheduled time in IST, status chip, WhatsApp message ID, and confirmed green tick ONLY when delivery is confirmed.
+- **Automated Verification:**
+  - `npx jest tests/campaign-buffer-pending.test.js`: 10/10 passed.
+  - `npx jest tests/appointment-reminders.test.js`: 12/12 passed.
+  - `npx jest tests/campaigns-unit.test.js`: 11/11 passed.
+  - `npx jest tests/csp-inline-styles.test.js`: 2/2 passed (0 CSP inline style violations).
+  - `npm run lint`: 137/137 files passed syntax validation.
+  - Live Browser Subagent: Visual check of deal modal, appointments reminders panel, and campaign delay buffer completed cleanly with screenshots captured.
+
 
 
 

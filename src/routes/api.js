@@ -371,8 +371,18 @@ router.post('/contacts/outreach', sendLimiter, requireDurableWrite, asyncHandler
         return res.status(400).json({ success: false, error: 'None of the selected contacts could be found' });
     }
 
-    const job = await startOutreachJob(req.user, contacts, message, mediaAssetId);
-    res.json({ success: true, data: { jobId: job.id, total: job.total } });
+    let bufferMinutes = 0;
+    if (body.bufferMinutes !== undefined && body.bufferMinutes !== null && body.bufferMinutes !== '') {
+        const parsed = Number(body.bufferMinutes);
+        if (!Number.isInteger(parsed) || parsed < 0 || parsed > 15) {
+            return res.status(400).json({ success: false, error: 'Buffer minutes must be an integer between 0 and 15' });
+        }
+        bufferMinutes = parsed;
+    }
+    const bufferJitter = body.bufferJitter !== false;
+
+    const job = await startOutreachJob(req.user, contacts, message, mediaAssetId, { bufferMinutes, bufferJitter });
+    res.json({ success: true, data: { jobId: job.id, total: job.total, results: job.results, pending: job.pending, bufferMinutes, bufferJitter } });
 }));
 
 router.get('/contacts/outreach', asyncHandler(async (req, res) => {

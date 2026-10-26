@@ -1057,6 +1057,29 @@ async function openDealModal(phone) {
         title.textContent = deal.contact_name || deal.phone;
 
         const followupVal = deal.next_followup_at ? deal.next_followup_at.replace(' ', 'T').slice(0, 16) : '';
+        const isWhatsAppId = typeof deal.phone === 'string' && (deal.phone.length >= 14 || deal.phone.includes('@lid'));
+
+        // Calculate SLA overdue relative time if breached or escalated
+        let overdueText = '';
+        if (['sla_breached', 'escalated'].includes(deal.sla_status) && deal.sla_response_due_at && !deal.first_response_at) {
+            const dueTime = new Date(deal.sla_response_due_at + (deal.sla_response_due_at.includes('Z') || deal.sla_response_due_at.includes('+') ? '' : 'Z')).getTime();
+            const diffMins = Math.max(1, Math.round((Date.now() - dueTime) / 60000));
+            const hrs = Math.floor(diffMins / 60);
+            const mins = diffMins % 60;
+            const diffStr = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
+            overdueText = ` <span class="text-danger font-bold">(overdue by ${diffStr})</span>`;
+        }
+
+        const humanizeHistoryReason = (code) => {
+            if (!code) return 'Manual update';
+            const map = {
+                sla_escalation: 'SLA escalation',
+                auto_inbound: 'Auto-assigned (new inbound)',
+                manual: 'Manual reassignment',
+                workload_rebalance: 'Workload rebalance'
+            };
+            return map[code] || code.replace(/_/g, ' ');
+        };
 
         body.innerHTML = `
             <div class="deal-detail-grid">
@@ -1102,7 +1125,15 @@ async function openDealModal(phone) {
                     <div class="form-group"><label for="modalFinancing">Financing needed</label><select id="modalFinancing"><option value="">Not set</option>${['yes','no','unknown'].map(v => `<option value="${v}" ${deal.financing_needed === v ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
                     <div class="form-group"><label for="modalVisitPref">Site-visit preference</label><input id="modalVisitPref" value="${escapeHtml(deal.site_visit_pref || '')}"></div>
                     <div class="form-group"><label for="modalProject">Interested project</label><select id="modalProject"><option value="">Not set</option>${projects.map(p => `<option value="${p.id}" ${Number(deal.interested_project_id) === Number(p.id) ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}</select></div>
-                    <div class="form-group"><label>Temperature</label><p class="form-text"><span class="lead-badge lead-temp-${escapeHtml((deal.lead_temp || 'COLD').toLowerCase())}">${escapeHtml(deal.lead_temp || 'COLD')}</span> ${escapeHtml(deal.lead_temp_reason || 'Set by deterministic analysis rules.')}</p></div>
+                    <div class="form-group">
+                        <label>Temperature</label>
+                        <div class="deal-assignment-header-item mt-4">
+                            <span class="lead-badge lead-temp-${escapeHtml((deal.lead_temp || 'COLD').toLowerCase())}">${escapeHtml(deal.lead_temp || 'COLD')}</span>
+                            <span class="text-secondary-sm" title="${escapeHtml(deal.lead_temp_reason || '')}">
+                                ${escapeHtml(deal.lead_temp_reason || 'Set by deterministic analysis rules')}
+                            </span>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -1110,54 +1141,78 @@ async function openDealModal(phone) {
                 <h3>${Icon('users', 'icon-inline')}Lead Assignment &amp; Response SLA</h3>
                 <div class="deal-assignment-box">
                     <div class="deal-assignment-row">
-                        <div>
-                            <strong>Assigned Agent:</strong>
+                        <div class="deal-assignment-header-item">
+                            <span class="deal-assignment-label">Assigned Agent:</span>
                             ${deal.assigned_agent_name
                                 ? `<span class="lead-badge agent-badge">${Icon('user', 'icon-inline')}${escapeHtml(deal.assigned_agent_name)} (${escapeHtml(deal.assigned_agent_role || 'agent')})</span>`
                                 : '<span class="lead-badge agent-badge-unassigned">Unassigned</span>'}
                         </div>
-                        <div>
-                            <strong>SLA Status:</strong>
+                        <div class="deal-assignment-header-item">
+                            <span class="deal-assignment-label">SLA Status:</span>
                             ${getSlaBadge(deal)}
                         </div>
                     </div>
                     <div class="deal-assignment-row mt-8">
                         <div>
-                            <small class="text-secondary">Due: ${deal.sla_response_due_at ? formatDate(deal.sla_response_due_at) : 'None'}</small>
+                            <small class="text-secondary">Due: ${deal.sla_response_due_at ? formatDate(deal.sla_response_due_at) : 'None'}${overdueText}</small>
                         </div>
                         <div>
                             <small class="text-secondary">First Replied: ${deal.first_response_at ? formatDate(deal.first_response_at) : 'Pending'}</small>
                         </div>
                     </div>
                     <div class="reassign-form">
-                        <select id="modalReassignAgent">
+                        <select id="modalReassignAgent" aria-label="Reassign to Agent">
                             <option value="">-- Reassign to Agent --</option>
                             ${(agentsList || []).map(a => `<option value="${a.id}" ${deal.assigned_agent_id === a.id ? 'selected' : ''}>${escapeHtml(a.name)} (${escapeHtml(a.role)} - ${escapeHtml(a.routing_status)})</option>`).join('')}
                         </select>
-                        <input type="text" id="modalReassignReason" placeholder="Reassignment reason (optional)">
+                        <input type="text" id="modalReassignReason" placeholder="Reason (optional)" aria-label="Reassignment reason">
                         <button class="btn btn-secondary btn-sm" id="modalReassignBtn" data-deal-action="reassign" type="button" data-deal-id="${deal.id}">${Icon('shuffle', 'icon-inline')}Reassign</button>
                     </div>
                 </div>
                 ${assignments && assignments.length ? `
                 <div class="assignment-history">
-                    <small class="font-bold">Assignment History:</small>
-                    ${assignments.map(h => `
-                        <div class="assignment-history-item">
-                            <span>${h.from_agent_name ? escapeHtml(h.from_agent_name) : 'System/New'} → <strong>${escapeHtml(h.to_agent_name || 'Unassigned')}</strong></span>
-                            ${h.reason ? ` · <em>${escapeHtml(h.reason)}</em>` : ''}
-                            <span class="assignment-history-time"> · ${formatDate(h.created_at)}</span>
-                        </div>
-                    `).join('')}
+                    <div class="assignment-history-title">Assignment History:</div>
+                    ${assignments.map(h => {
+                        if (h.reason === 'sla_escalation') {
+                            return `
+                                <div class="assignment-history-item">
+                                    <div>
+                                        <span>Escalated to <strong>${escapeHtml(h.to_agent_name || 'Escalation Manager')}</strong> (notified)</span>
+                                        ${h.notes ? ` · <span class="text-secondary">${escapeHtml(h.notes)}</span>` : ''}
+                                    </div>
+                                    <span class="assignment-history-time">${formatDate(h.created_at)}</span>
+                                </div>
+                            `;
+                        }
+                        return `
+                            <div class="assignment-history-item">
+                                <div>
+                                    <span>${h.from_agent_name ? escapeHtml(h.from_agent_name) : 'System/New'} → <strong>${escapeHtml(h.to_agent_name || 'Unassigned')}</strong></span>
+                                    <span class="text-secondary"> · ${escapeHtml(humanizeHistoryReason(h.reason))}</span>
+                                    ${h.notes ? ` · <em>${escapeHtml(h.notes)}</em>` : ''}
+                                </div>
+                                <span class="assignment-history-time">${formatDate(h.created_at)}</span>
+                            </div>
+                        `;
+                    }).join('')}
                 </div>` : ''}
             </div>
 
-            <div class="modal-actions">
-                <button class="btn btn-primary btn-sm" data-deal-action="save" data-deal-id="${deal.id}" type="button">${Icon('save', 'icon-inline')}Save Changes</button>
-                <button class="btn ${deal.is_ai_paused ? 'btn-success' : 'btn-warning'} btn-sm" data-deal-action="toggle-ai" data-deal-id="${deal.id}" data-deal-paused="${deal.is_ai_paused ? 'true' : 'false'}" type="button">
-                    ${deal.is_ai_paused ? Icon('play', 'icon-inline') + ' Resume AI' : Icon('pause', 'icon-inline') + ' Human Takeover (Pause AI)'}
-                </button>
-                <button class="btn btn-danger btn-sm" data-deal-action="delete" data-deal-id="${deal.id}" type="button">${Icon('trash-2', 'icon-inline')}Delete Deal</button>
-                <small class="text-secondary">${escapeHtml(deal.phone)} · Source: ${escapeHtml(deal.source || 'whatsapp')}${deal.is_ai_paused ? ' · <span class="badge badge-warning">AI Paused</span>' : ''}</small>
+            <div class="deal-identifier-bar">
+                <span class="deal-assignment-label">${isWhatsAppId ? 'WhatsApp ID:' : 'Phone:'}</span>
+                <span class="font-mono font-bold">${escapeHtml(deal.phone)}</span>
+                <span class="badge badge-attachment">Source: ${escapeHtml(deal.source || 'whatsapp')}</span>
+                ${deal.is_ai_paused ? '<span class="badge badge-warning">AI Paused (Human Takeover)</span>' : ''}
+            </div>
+
+            <div class="modal-actions-container">
+                <div class="modal-actions-primary">
+                    <button class="btn btn-primary btn-sm btn-deal-action" data-deal-action="save" data-deal-id="${deal.id}" type="button">${Icon('save', 'icon-inline')}Save Changes</button>
+                    <button class="btn ${deal.is_ai_paused ? 'btn-success' : 'btn-warning'} btn-sm btn-deal-action" data-deal-action="toggle-ai" data-deal-id="${deal.id}" data-deal-paused="${deal.is_ai_paused ? 'true' : 'false'}" type="button">
+                        ${deal.is_ai_paused ? Icon('play', 'icon-inline') + ' Resume AI' : Icon('pause', 'icon-inline') + ' Human Takeover (Pause AI)'}
+                    </button>
+                </div>
+                <button class="btn btn-danger btn-sm btn-deal-action" data-deal-action="delete" data-deal-id="${deal.id}" type="button">${Icon('trash-2', 'icon-inline')}Delete Deal</button>
             </div>
 
             ${analysis ? `
@@ -1208,6 +1263,13 @@ function closeDealModal() {
 }
 
 async function saveDealFromModal(dealId) {
+    const btn = document.querySelector('[data-deal-action="save"]');
+    if (btn) {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
+    }
+
     try {
         await api(`/api/crm/deals/${dealId}`, {
             method: 'PUT',
@@ -1234,11 +1296,21 @@ async function saveDealFromModal(dealId) {
         loadCrm();
     } catch (err) {
         showToast(err.message || 'Failed to update deal', 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = `${Icon('save', 'icon-inline')}Save Changes`;
+        }
     }
 }
 
 async function deleteDealFromModal(dealId) {
-    if (!confirm('Delete this deal? The conversation and lead analysis are kept.')) return;
+    if (!confirm('Are you sure you want to delete this deal? The conversation history and contact details are kept, but CRM stage tracking will be removed.')) return;
+    const btn = document.querySelector('[data-deal-action="delete"]');
+    if (btn) {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        btn.textContent = 'Deleting…';
+    }
     try {
         await api(`/api/crm/deals/${dealId}`, { method: 'DELETE' });
         showToast('Deal deleted', 'success');
@@ -1246,6 +1318,10 @@ async function deleteDealFromModal(dealId) {
         loadCrm();
     } catch (err) {
         showToast('Failed to delete deal', 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = `${Icon('trash-2', 'icon-inline')}Delete Deal`;
+        }
     }
 }
 
@@ -1273,6 +1349,14 @@ async function reassignDealFromModal(dealId) {
         showToast('Please select an agent to reassign to', 'error');
         return;
     }
+
+    const btn = document.getElementById('modalReassignBtn');
+    if (btn) {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        btn.textContent = 'Reassigning…';
+    }
+
     try {
         await api(`/api/crm/deals/${dealId}/assign`, {
             method: 'POST',
@@ -1283,6 +1367,10 @@ async function reassignDealFromModal(dealId) {
         loadCrm();
     } catch (err) {
         showToast(err.message || 'Reassignment failed', 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = `${Icon('shuffle', 'icon-inline')}Reassign`;
+        }
     }
 }
 
@@ -2701,12 +2789,42 @@ async function confirmComposerCsvImport() {
     }
 }
 
+function updateOutreachEstimate() {
+    const estimateEl = document.getElementById('outreachEstimateText');
+    if (!estimateEl) return;
+    const count = SELECTED_CONTACTS.size;
+    const bufferSelect = document.getElementById('outreachBufferMinutes');
+    const bufferMins = bufferSelect ? parseInt(bufferSelect.value, 10) || 0 : 0;
+
+    if (count === 0) {
+        estimateEl.textContent = 'Select contacts to see sending estimate';
+        return;
+    }
+
+    if (bufferMins === 0) {
+        estimateEl.textContent = `${count} recipient${count > 1 ? 's' : ''} · default pacing (3–9s apart) · finishes in ~${Math.max(1, Math.round(count * 6 / 60))} min`;
+    } else {
+        const totalMinutes = (count - 1) * bufferMins;
+        const finishDate = new Date(Date.now() + totalMinutes * 60 * 1000);
+        const timeStr = finishDate.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+        const hours = Math.floor(totalMinutes / 60);
+        const mins = totalMinutes % 60;
+        const durationStr = hours > 0 ? `${hours}h ${mins}m` : `${mins} min`;
+        let text = `${count} recipient${count > 1 ? 's' : ''} · ~${bufferMins} min apart · finishes around ${timeStr} (~${durationStr})`;
+        if (totalMinutes > 360) {
+            text += ' ⚠️ Note: Long-running campaign';
+        }
+        estimateEl.textContent = text;
+    }
+}
+
 function updateOutreachSendBtnState() {
     const btn = document.getElementById('outreachSendBtn');
     const msg = (document.getElementById('outreachMessage')?.value || '').trim();
     if (btn) {
         btn.disabled = SELECTED_CONTACTS.size === 0 || !msg;
     }
+    updateOutreachEstimate();
 }
 
 async function openOutreachModal(opts = {}) {
@@ -2748,6 +2866,7 @@ async function openOutreachModal(opts = {}) {
     await loadOutreachPickerContacts('', '');
     updateOutreachModalSelectionState();
     updateOutreachMessageStats();
+    updateOutreachEstimate();
 
     const msgEl = document.getElementById('outreachMessage');
     if (msgEl) {
@@ -2775,6 +2894,8 @@ async function submitOutreach() {
 
     const mediaSelect = document.getElementById('outreachMediaSelect');
     const mediaAssetId = mediaSelect && mediaSelect.value ? parseInt(mediaSelect.value, 10) : null;
+    const bufferSelect = document.getElementById('outreachBufferMinutes');
+    const bufferMinutes = bufferSelect ? parseInt(bufferSelect.value, 10) || 0 : 0;
 
     const btn = document.getElementById('outreachSendBtn');
     btn.disabled = true;
@@ -2783,12 +2904,13 @@ async function submitOutreach() {
         const contactIds = Array.from(SELECTED_CONTACTS.keys());
         const { jobId, total } = await api('/api/contacts/outreach', {
             method: 'POST',
-            body: JSON.stringify({ contactIds, message, mediaAssetId })
+            body: JSON.stringify({ contactIds, message, mediaAssetId, bufferMinutes })
         });
 
         const composeView = document.getElementById('outreachComposeView');
         const progressView = document.getElementById('outreachProgressView');
         const doneBtn = document.getElementById('outreachDoneBtn');
+        const cancelBtn = document.getElementById('outreachProgressCancelBtn');
 
         if (composeView) {
             composeView.hidden = true;
@@ -2802,8 +2924,14 @@ async function submitOutreach() {
             doneBtn.hidden = true;
             doneBtn.style.display = 'none';
         }
+        if (cancelBtn) {
+            cancelBtn.hidden = false;
+            cancelBtn.style.display = '';
+            cancelBtn.onclick = () => cancelCampaign(jobId);
+        }
         document.getElementById('outreachProgressList').innerHTML = '';
-        document.getElementById('outreachProgressSummary').textContent = `Sending to ${total} contacts — this runs in the background with a delay between each send, so it'll take a while. You can close this and it'll keep going.`;
+        const pacingDesc = bufferMinutes > 0 ? `~${bufferMinutes} min buffer between messages` : 'default pacing';
+        document.getElementById('outreachProgressSummary').textContent = `Starting campaign for ${total} contacts (${pacingDesc}). You can close this window; the campaign keeps running.`;
 
         if (currentSection === 'campaigns') {
             loadCampaigns(0);
@@ -2823,15 +2951,47 @@ async function pollOutreachJob(jobId) {
         OUTREACH_POLL_ERRORS = 0;
         const list = document.getElementById('outreachProgressList');
         if (list && Array.isArray(job.results)) {
-            list.innerHTML = job.results.map(r => `
-                <div class="outreach-progress-row ${r.status === 'sent' ? 'ok' : 'fail'}">
-                    <span>${escapeHtml(r.name || r.phone)}</span>
-                    <span>${r.status === 'sent' ? Icon('check-circle') : (r.reason ? escapeHtml(r.reason) : 'failed')}</span>
-                </div>
-            `).join('');
+            const statusConfig = {
+                pending: { cls: 'pending', badge: '<span class="pill pill-pending">Pending</span>' },
+                sending: { cls: 'sending', badge: '<span class="pill pill-running">Sending…</span>' },
+                sent: { cls: 'ok', badge: '<span class="pill pill-active">✓ Sent</span>' },
+                failed: { cls: 'fail', badge: `<span class="pill pill-error" title="${escapeHtml(job.error || 'Failed')}">Failed: ${escapeHtml(job.error || 'Failed')}</span>` },
+                skipped: { cls: 'skipped', badge: '<span class="pill pill-neutral">Skipped</span>' },
+                cancelled: { cls: 'cancelled', badge: '<span class="pill pill-neutral">Cancelled</span>' }
+            };
+
+            list.innerHTML = job.results.map(r => {
+                const cfg = (r.status === 'failed')
+                    ? { cls: 'fail', badge: `<span class="pill pill-error" title="${escapeHtml(r.reason || 'Failed')}">Failed: ${escapeHtml(r.reason || 'Failed')}</span>` }
+                    : (statusConfig[r.status] || { cls: 'pending', badge: `<span class="pill pill-pending">${escapeHtml(r.status || 'Pending')}</span>` });
+                return `
+                    <div class="outreach-progress-row ${cfg.cls}">
+                        <span>${escapeHtml(r.name || r.phone)}</span>
+                        <span>${cfg.badge}</span>
+                    </div>
+                `;
+            }).join('');
         }
 
-        const terminalStatuses = ['completed', 'cancelled', 'interrupted', 'done'];
+        const countdownBadge = document.getElementById('outreachCountdownBadge');
+        if (countdownBadge) {
+            if (job.next_send_at && !['completed', 'completed_with_errors', 'failed', 'cancelled', 'interrupted', 'done'].includes(job.status)) {
+                const remainingSecs = Math.max(0, Math.round((new Date(job.next_send_at).getTime() - Date.now()) / 1000));
+                if (remainingSecs > 0) {
+                    const m = Math.floor(remainingSecs / 60);
+                    const s = remainingSecs % 60;
+                    countdownBadge.textContent = `Next message in ${m}m ${s < 10 ? '0' : ''}${s}s`;
+                    countdownBadge.hidden = false;
+                } else {
+                    countdownBadge.textContent = 'Sending next message…';
+                    countdownBadge.hidden = false;
+                }
+            } else {
+                countdownBadge.hidden = true;
+            }
+        }
+
+        const terminalStatuses = ['completed', 'completed_with_errors', 'failed', 'cancelled', 'interrupted', 'done'];
         const isTerminal = terminalStatuses.includes(job.status);
 
         if (isTerminal) {
@@ -2842,6 +3002,8 @@ async function pollOutreachJob(jobId) {
 
             const statusLabels = {
                 completed: 'Finished',
+                completed_with_errors: 'Finished with some errors',
+                failed: 'Campaign Failed',
                 cancelled: 'Cancelled',
                 interrupted: 'Interrupted',
                 done: 'Finished'
@@ -2856,22 +3018,30 @@ async function pollOutreachJob(jobId) {
                 summaryText += ` (${escapeHtml(job.error)})`;
             }
             document.getElementById('outreachProgressSummary').textContent = summaryText;
+
             const doneBtn = document.getElementById('outreachDoneBtn');
             if (doneBtn) {
                 doneBtn.hidden = false;
                 doneBtn.style.display = '';
+            }
+            const cancelBtn = document.getElementById('outreachProgressCancelBtn');
+            if (cancelBtn) {
+                cancelBtn.hidden = true;
+                cancelBtn.style.display = 'none';
             }
 
             if (job.status === 'cancelled') {
                 showToast(`Outreach cancelled — ${sent} sent`, 'info');
             } else if (job.status === 'interrupted') {
                 showToast(`Outreach interrupted — ${sent} sent`, 'error');
+            } else if (job.status === 'failed') {
+                showToast(`Outreach failed: ${job.error || 'Check details'}`, 'error');
             } else {
-                showToast(`Outreach finished — ${sent} sent`, failed > sent ? 'error' : 'success');
+                showToast(`Outreach finished — ${sent} sent`, failed > 0 ? 'warning' : 'success');
             }
 
             // Clear selection and refresh list if outreach completed or actually sent
-            if (sent > 0 || job.status === 'completed') {
+            if (sent > 0 || job.status === 'completed' || job.status === 'completed_with_errors') {
                 SELECTED_CONTACTS.clear();
                 updateSelectionBar();
                 loadContacts();
@@ -2885,7 +3055,7 @@ async function pollOutreachJob(jobId) {
             const total = job.total || (job.results ? job.results.length : 0);
             const statusLabel = job.status === 'cancel_requested' ? 'Cancelling…' : 'Sending…';
             document.getElementById('outreachProgressSummary').textContent =
-                `${statusLabel} ${doneCount}/${total} processed so far.`;
+                `${statusLabel} ${doneCount}/${total} processed so far. You can close this window; the campaign keeps running.`;
 
             OUTREACH_POLL_TIMER = setTimeout(() => pollOutreachJob(jobId), 2000);
         }
@@ -2942,7 +3112,7 @@ async function loadCampaigns(offset = 0) {
         renderCampaignsPagination(meta.total, offset, meta.limit);
     } catch (err) {
         if (tbody) {
-            tbody.innerHTML = `<tr><td colspan="9" class="empty-state text-danger">Failed to load campaigns.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="10" class="empty-state text-danger">Failed to load campaigns.</td></tr>`;
         }
         showErrorBanner('campaignsError', err.message || 'Failed to load campaigns', () => loadCampaigns(offset));
     }
@@ -2955,7 +3125,7 @@ function renderCampaignsTable(jobs) {
     if (!jobs || jobs.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="9">
+                <td colspan="10">
                     <div class="empty-state">
                         <span class="empty-state-icon" aria-hidden="true">${Icon('send')}</span>
                         <div class="empty-state-title">No campaigns found</div>
@@ -2981,6 +3151,7 @@ function renderCampaignsTable(jobs) {
         const fullId = escapeHtml(String(job.id));
         const messagePreview = escapeHtml(job.message_template || '—');
         const startedText = job.started_at ? formatDate(job.started_at) : '—';
+        const pendingCount = job.pending_count ?? job.pending ?? 0;
 
         const isCancellable = job.cancellable || ['running', 'cancel_requested'].includes(job.status);
         const cancelBtnHtml = isCancellable
@@ -2998,6 +3169,7 @@ function renderCampaignsTable(jobs) {
                 <td class="truncate-cell" title="${messagePreview}">${attachmentBadgeHtml}${messagePreview}</td>
                 <td>${statusHtml}</td>
                 <td class="font-bold">${job.total || 0}</td>
+                <td class="${pendingCount > 0 ? 'text-warning font-bold' : 'text-secondary'}">${pendingCount}</td>
                 <td class="text-success font-bold">${job.sent || 0}</td>
                 <td class="${job.failed > 0 ? 'text-danger font-bold' : 'text-secondary'}">${job.failed || 0}</td>
                 <td class="${job.skipped > 0 ? 'text-warning font-bold' : 'text-secondary'}">${job.skipped || 0}</td>
@@ -3119,6 +3291,7 @@ async function viewCampaignDetails(jobId) {
             interrupted: '<span class="pill badge-interrupted">Interrupted</span>'
         };
         const statusHtml = statusBadgeMap[job.status] || `<span class="pill pill-neutral">${escapeHtml(job.status || 'unknown')}</span>`;
+        const bufferText = job.buffer_minutes > 0 ? `${job.buffer_minutes} min` : 'Default pacing';
 
         if (statsContainer) {
             statsContainer.innerHTML = `
@@ -3131,16 +3304,24 @@ async function viewCampaignDetails(jobId) {
                     <span class="stat-chip-val">${job.total || (job.results ? job.results.length : 0)}</span>
                 </div>
                 <div class="stat-chip">
+                    <span class="stat-chip-label">Pending</span>
+                    <span class="stat-chip-val ${job.pending > 0 ? 'text-warning font-bold' : ''}">${job.pending || 0}</span>
+                </div>
+                <div class="stat-chip">
                     <span class="stat-chip-label">Sent</span>
-                    <span class="stat-chip-val text-success">${job.sent || 0}</span>
+                    <span class="stat-chip-val text-success font-bold">${job.sent || 0}</span>
                 </div>
                 <div class="stat-chip">
                     <span class="stat-chip-label">Failed</span>
-                    <span class="stat-chip-val ${job.failed > 0 ? 'text-danger' : ''}">${job.failed || 0}</span>
+                    <span class="stat-chip-val ${job.failed > 0 ? 'text-danger font-bold' : ''}">${job.failed || 0}</span>
                 </div>
                 <div class="stat-chip">
                     <span class="stat-chip-label">Skipped</span>
-                    <span class="stat-chip-val ${job.skipped > 0 ? 'text-warning' : ''}">${job.skipped || 0}</span>
+                    <span class="stat-chip-val ${job.skipped > 0 ? 'text-warning font-bold' : ''}">${job.skipped || 0}</span>
+                </div>
+                <div class="stat-chip">
+                    <span class="stat-chip-label">Spacing</span>
+                    <span class="stat-chip-val font-mono">${bufferText}</span>
                 </div>
             `;
         }
@@ -3186,21 +3367,28 @@ async function viewCampaignDetails(jobId) {
                 tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No recipients found for this campaign.</td></tr>';
             } else {
                 tbody.innerHTML = results.map(r => {
-                    let statusPill = '<span class="pill pill-neutral">Pending</span>';
-                    if (r.status === 'sent') {
-                        statusPill = '<span class="pill pill-active">Sent</span>';
+                    let statusPill = '<span class="pill pill-pending">Pending</span>';
+                    if (r.status === 'sending') {
+                        statusPill = '<span class="pill pill-running">Sending…</span>';
+                    } else if (r.status === 'sent') {
+                        statusPill = '<span class="pill pill-active">✓ Sent</span>';
                     } else if (r.status === 'failed') {
                         statusPill = '<span class="pill pill-error">Failed</span>';
                     } else if (r.status === 'skipped') {
-                        statusPill = '<span class="pill pill-warning">Skipped</span>';
-                    } else if (r.status === 'unknown') {
-                        statusPill = '<span class="pill pill-neutral">Unknown</span>';
+                        statusPill = '<span class="pill pill-neutral">Skipped</span>';
+                    } else if (r.status === 'cancelled') {
+                        statusPill = '<span class="pill pill-neutral">Cancelled</span>';
                     }
 
                     const contactName = r.name ? escapeHtml(r.name) : '<span class="text-secondary">—</span>';
                     const phone = r.phone ? escapeHtml(r.phone) : '—';
                     const reason = r.reason ? escapeHtml(r.reason) : '<span class="text-secondary">—</span>';
-                    const sentAt = r.sent_at ? formatDate(r.sent_at) : '<span class="text-secondary">—</span>';
+                    let sentAt = '<span class="text-secondary">—</span>';
+                    if (r.sent_at) {
+                        sentAt = formatDate(r.sent_at);
+                    } else if (r.status === 'pending' && r.next_send_at) {
+                        sentAt = `<span class="text-secondary-sm">Est. ${formatDate(r.next_send_at)}</span>`;
+                    }
 
                     return `
                         <tr>
@@ -3311,6 +3499,26 @@ async function cancelScheduled(id) {
 // ═══════════════════════════════════════════════════════════
 //  APPOINTMENTS
 // ═══════════════════════════════════════════════════════════
+function renderCompactReminders(reminders) {
+    if (!reminders || !reminders.length) {
+        return '<span class="text-secondary-sm">None</span>';
+    }
+    const r24 = reminders.find(r => r.type === '24h');
+    const r2 = reminders.find(r => r.type === '2h');
+
+    const formatChip = (r, label) => {
+        if (!r) return `${label} —`;
+        if (r.status === 'sent') return `<span class="text-success font-bold" title="${label} sent">✓ ${label}</span>`;
+        if (r.status === 'scheduled') return `<span class="text-primary font-bold" title="${label} scheduled">⏱ ${label}</span>`;
+        if (r.status === 'sending') return `<span class="text-warning font-bold" title="${label} sending">… ${label}</span>`;
+        if (r.status === 'failed') return `<span class="text-danger font-bold" title="${label} failed: ${escapeHtml(r.error_message || '')}">⚠ ${label}</span>`;
+        if (r.status === 'skipped') return `<span class="text-secondary" title="${label} skipped: ${escapeHtml(r.error_message || 'Notice period')}">⊘ ${label}</span>`;
+        return `<span class="text-secondary">✕ ${label}</span>`;
+    };
+
+    return `<span class="reminder-compact-indicator font-mono">${formatChip(r24, '24h')} · ${formatChip(r2, '2h')}</span>`;
+}
+
 async function loadAppointments() {
     clearErrorBanner('appointmentsError');
     try {
@@ -3320,7 +3528,7 @@ async function loadAppointments() {
         if (appointments.length === 0) {
             tbody.innerHTML = `
                 <tr>
-                    <td colspan="5">
+                    <td colspan="6">
                         <div class="empty-state">
                             <span class="empty-state-icon" aria-hidden="true">${Icon('calendar-clock')}</span>
                             <div class="empty-state-title">No appointments yet</div>
@@ -3332,7 +3540,7 @@ async function loadAppointments() {
             tbody.innerHTML = appointments.map(a => `
                 <tr>
                     <td>
-                        <strong>${escapeHtml(a.contact_name || a.phone)}</strong>
+                        <strong class="cursor-pointer text-primary" data-open-appointment="${a.id}">${escapeHtml(a.contact_name || a.phone)}</strong>
                         ${a.contact_name ? `<br><small class="text-secondary">${escapeHtml(a.phone)}</small>` : ''}
                     </td>
                     <td class="text-secondary-nowrap">${formatDate(a.start_at)}</td>
@@ -3341,9 +3549,15 @@ async function loadAppointments() {
                         <span class="pill pill-${a.status === 'confirmed' ? 'active' : 'error'}">${escapeHtml(a.status)}</span>
                     </td>
                     <td>
-                        ${a.status === 'confirmed'
-                            ? `<button class="btn btn-sm btn-danger" data-action="cancel-appointment" data-id="${a.id}" aria-label="Cancel appointment" type="button">Cancel</button>`
-                            : '—'}
+                        ${renderCompactReminders(a.reminders)}
+                    </td>
+                    <td>
+                        <div class="flex-center-gap-8">
+                            <button class="btn btn-sm btn-secondary" data-action="view-appointment" data-id="${a.id}" type="button">View</button>
+                            ${a.status === 'confirmed'
+                                ? `<button class="btn btn-sm btn-danger" data-action="cancel-appointment" data-id="${a.id}" aria-label="Cancel appointment" type="button">Cancel</button>`
+                                : ''}
+                        </div>
                     </td>
                 </tr>
             `).join('');
@@ -3355,6 +3569,135 @@ async function loadAppointments() {
     }
 
     loadApptSlotOptions();
+}
+
+async function openAppointmentDetailModal(appointmentId) {
+    const modal = document.getElementById('appointmentDetailModalBackdrop');
+    if (!modal) return;
+    modal.hidden = false;
+    modal.style.display = 'flex';
+
+    const titleEl = document.getElementById('appointmentDetailModalTitle');
+    const subTitleEl = document.getElementById('appointmentDetailSubTitle');
+    const bodyEl = document.getElementById('appointmentDetailModalBody');
+
+    if (bodyEl) bodyEl.innerHTML = '<div class="empty-state">Loading appointment details…</div>';
+
+    try {
+        const appt = await api(`/api/appointments/${appointmentId}`);
+        if (titleEl) titleEl.textContent = `Appointment with ${appt.contact_name || appt.phone}`;
+        if (subTitleEl) subTitleEl.textContent = `ID: ${appt.id} • ${formatDate(appt.start_at)}`;
+
+        const reminders = appt.reminders || [];
+        const r24 = reminders.find(r => r.type === '24h');
+        const r2 = reminders.find(r => r.type === '2h');
+
+        const renderReminderCard = (label, r) => {
+            if (!r) {
+                return `
+                    <div class="reminder-card">
+                        <div class="reminder-card-header">
+                            <span class="reminder-card-title">${label}</span>
+                            <span class="reminder-chip reminder-chip-skipped">Not Scheduled</span>
+                        </div>
+                        <div class="reminder-card-time text-secondary-sm">No reminder record found for this time</div>
+                    </div>`;
+            }
+
+            const statusClassMap = {
+                scheduled: 'reminder-chip-scheduled',
+                sending: 'reminder-chip-sending',
+                sent: 'reminder-chip-sent',
+                failed: 'reminder-chip-failed',
+                skipped: 'reminder-chip-skipped',
+                cancelled: 'reminder-chip-cancelled'
+            };
+            const cls = statusClassMap[r.status] || 'reminder-chip-skipped';
+            let statusBadge = `<span class="reminder-chip ${cls}">${r.status.toUpperCase()}</span>`;
+
+            if (r.status === 'sent') {
+                statusBadge = `<span class="reminder-chip reminder-chip-sent">${Icon('check-circle', 'icon-inline')}✓ Sent · ${formatDate(r.sent_at)}</span>`;
+            } else if (r.status === 'scheduled') {
+                const targetTime = new Date(r.scheduled_at + (r.scheduled_at.includes('Z') || r.scheduled_at.includes('+') ? '' : 'Z')).getTime();
+                const dueInMins = Math.round((targetTime - Date.now()) / 60000);
+                const hrs = Math.floor(dueInMins / 60);
+                const mins = dueInMins % 60;
+                const dueStr = dueInMins > 0 ? ` (in ${hrs > 0 ? hrs + 'h ' : ''}${mins}m)` : '';
+                statusBadge = `<span class="reminder-chip reminder-chip-scheduled">${Icon('clock', 'icon-inline')}Scheduled${dueStr}</span>`;
+            } else if (r.status === 'sending') {
+                statusBadge = `<span class="reminder-chip reminder-chip-sending">${Icon('loader', 'icon-inline')}Sending…</span>`;
+            } else if (r.status === 'failed') {
+                statusBadge = `<span class="reminder-chip reminder-chip-failed">${Icon('alert-triangle', 'icon-inline')}Failed</span>`;
+            } else if (r.status === 'skipped') {
+                statusBadge = `<span class="reminder-chip reminder-chip-skipped">${Icon('slash', 'icon-inline')}Skipped</span>`;
+            } else if (r.status === 'cancelled') {
+                statusBadge = `<span class="reminder-chip reminder-chip-cancelled">${Icon('x', 'icon-inline')}Cancelled</span>`;
+            }
+
+            return `
+                <div class="reminder-card">
+                    <div class="reminder-card-header">
+                        <span class="reminder-card-title">${label}</span>
+                        ${statusBadge}
+                    </div>
+                    <div class="reminder-card-time">
+                        Scheduled for: <strong>${formatDate(r.scheduled_at)}</strong> (IST)
+                    </div>
+                    ${r.wa_message_id ? `<div class="text-secondary-sm font-mono mt-4">WA Message ID: ${escapeHtml(r.wa_message_id)}</div>` : ''}
+                    ${r.error_message ? `<div class="reminder-card-reason">${escapeHtml(r.error_message)}</div>` : ''}
+                </div>`;
+        };
+
+        if (bodyEl) {
+            bodyEl.innerHTML = `
+                <div class="deal-detail-grid">
+                    <div class="form-group">
+                        <label>Contact Name</label>
+                        <div class="font-bold">${escapeHtml(appt.contact_name || '—')}</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Phone / Identifier</label>
+                        <div class="font-mono">${escapeHtml(appt.phone)}</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Date & Time</label>
+                        <div>${formatDate(appt.start_at)} (IST)</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Booking Status</label>
+                        <div><span class="pill pill-${appt.status === 'confirmed' ? 'active' : 'error'}">${escapeHtml(appt.status)}</span></div>
+                    </div>
+                </div>
+
+                ${appt.notes ? `
+                    <div class="form-group mt-12">
+                        <label>Notes</label>
+                        <p class="text-secondary-sm">${escapeHtml(appt.notes)}</p>
+                    </div>` : ''}
+
+                <div class="modal-section mt-16">
+                    <h3>${Icon('bell', 'icon-inline')}Appointment Reminders (24h & 2h)</h3>
+                    <p class="text-secondary-sm">Automated WhatsApp reminders scheduled to ensure client attendance. The green tick appears only when WhatsApp confirms delivery.</p>
+                    <div class="reminder-cards-grid">
+                        ${renderReminderCard('24 Hours Before Reminder', r24)}
+                        ${renderReminderCard('2 Hours Before Reminder', r2)}
+                    </div>
+                </div>
+            `;
+        }
+    } catch (err) {
+        if (bodyEl) {
+            bodyEl.innerHTML = `<div class="empty-state text-danger">Failed to load appointment details: ${escapeHtml(err.message)}</div>`;
+        }
+    }
+}
+
+function closeAppointmentDetailModal() {
+    const modal = document.getElementById('appointmentDetailModalBackdrop');
+    if (modal) {
+        modal.hidden = true;
+        modal.style.display = 'none';
+    }
 }
 
 async function cancelAppointment(id) {
@@ -4175,6 +4518,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('outreachInsertNameTag')?.addEventListener('click', insertNameTokenToMessage);
     document.getElementById('outreachMessage')?.addEventListener('input', updateOutreachMessageStats);
 
+    // Buffer spacing controls
+    document.getElementById('outreachBufferMinutes')?.addEventListener('change', updateOutreachEstimate);
+    document.getElementById('outreachBufferChips')?.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-buffer-min]');
+        if (btn) {
+            const select = document.getElementById('outreachBufferMinutes');
+            if (select) {
+                select.value = btn.dataset.bufferMin;
+                updateOutreachEstimate();
+            }
+        }
+    });
+
     // CSV import controls inside composer
     document.getElementById('outreachDownloadCsvTemplate')?.addEventListener('click', (e) => {
         e.preventDefault();
@@ -4377,6 +4733,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             closeAgentModal();
             closeCampaignDetailModal();
             closeOutreachModal();
+            closeAppointmentDetailModal();
         }
     });
     document.getElementById('agentModal')?.addEventListener('click', (e) => e.stopPropagation());
@@ -4541,6 +4898,20 @@ document.addEventListener('DOMContentLoaded', async () => {
             btn.disabled = false;
             btn.textContent = 'Book Appointment';
         }
+    });
+
+    // ── Appointment list actions & detail modal ──────────────
+    document.getElementById('appointmentsBody')?.addEventListener('click', (e) => {
+        const viewBtn = e.target.closest('[data-action="view-appointment"]');
+        if (viewBtn) return openAppointmentDetailModal(viewBtn.dataset.id);
+        const contactLink = e.target.closest('[data-open-appointment]');
+        if (contactLink) return openAppointmentDetailModal(contactLink.dataset.openAppointment);
+        const cancelBtn = e.target.closest('[data-action="cancel-appointment"]');
+        if (cancelBtn) return cancelAppointment(cancelBtn.dataset.id);
+    });
+    document.getElementById('appointmentDetailModalClose')?.addEventListener('click', closeAppointmentDetailModal);
+    document.getElementById('appointmentDetailModalBackdrop')?.addEventListener('click', (e) => {
+        if (e.target.id === 'appointmentDetailModalBackdrop') closeAppointmentDetailModal();
     });
 
     // ── Settings (General) form ─────────────────────────────

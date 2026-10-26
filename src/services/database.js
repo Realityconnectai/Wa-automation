@@ -1182,12 +1182,13 @@ async function countPendingScheduledMessages(userId) {
     return row ? row.count : 0;
 }
 
-async function updateScheduledMessageStatus(id, status, errorMessage = null) {
+async function updateScheduledMessageStatus(id, status, errorMessage = null, waMessageId = null) {
     return runSql(
         `UPDATE scheduled_messages SET status = $1, error_message = $2,
-            sent_at = CASE WHEN $3 = 'sent' THEN CURRENT_TIMESTAMP ELSE sent_at END
-         WHERE id = $4`,
-        [status, errorMessage, status, id]
+            wa_message_id = COALESCE($3, wa_message_id),
+            sent_at = CASE WHEN $4 = 'sent' THEN CURRENT_TIMESTAMP ELSE sent_at END
+         WHERE id = $5`,
+        [status, errorMessage, waMessageId, status, id]
     );
 }
 
@@ -1238,7 +1239,16 @@ async function cancelScheduledMessage(userId, id) {
     );
 }
 
-async function createAppointmentReminder(userId, appointmentId, phone, body, scheduledAt, reminderType) {
+async function createAppointmentReminder(userId, appointmentId, phone, body, scheduledAt, reminderType, status = 'pending', errorMessage = null) {
+    if (status === 'skipped') {
+        const res = await query(
+            `INSERT INTO scheduled_messages (user_id, appointment_id, phone, body, scheduled_at, reminder_type, status, error_message)
+             VALUES ($1, $2, $3, $4, $5, $6, 'skipped', $7)
+             RETURNING *`,
+            [userId, appointmentId, phone, body, scheduledAt, reminderType, errorMessage]
+        );
+        return res.rows[0] || null;
+    }
     const res = await query(
         `INSERT INTO scheduled_messages (user_id, appointment_id, phone, body, scheduled_at, reminder_type, status)
          VALUES ($1, $2, $3, $4, $5, $6, 'pending')
@@ -1281,15 +1291,17 @@ async function checkMediaAssetColumn(client = null) {
     return _hasMediaAssetIdColumn;
 }
 
-async function createOutreachJob(userId, id, messageTemplate, contacts, mediaAssetId = null) {
+async function createOutreachJob(userId, id, messageTemplate, contacts, mediaAssetId = null, { bufferMinutes = 0, bufferJitter = true } = {}) {
+    const bMin = Math.max(0, Math.min(15, parseInt(bufferMinutes, 10) || 0));
+    const bJitter = Boolean(bufferJitter);
     return transaction(async (tx) => {
         const hasMediaCol = await checkMediaAssetColumn(tx.client);
         if (hasMediaCol) {
-            await tx.query(`INSERT INTO outreach_jobs (id,user_id,message_template,status,total,media_asset_id)
-                            VALUES ($1,$2,$3,'running',$4,$5)`, [id, userId, messageTemplate, contacts.length, mediaAssetId || null]);
+            await tx.query(`INSERT INTO outreach_jobs (id,user_id,message_template,status,total,media_asset_id,buffer_minutes,buffer_jitter)
+                            VALUES ($1,$2,$3,'running',$4,$5,$6,$7)`, [id, userId, messageTemplate, contacts.length, mediaAssetId || null, bMin, bJitter]);
         } else {
-            await tx.query(`INSERT INTO outreach_jobs (id,user_id,message_template,status,total)
-                            VALUES ($1,$2,$3,'running',$4)`, [id, userId, messageTemplate, contacts.length]);
+            await tx.query(`INSERT INTO outreach_jobs (id,user_id,message_template,status,total,buffer_minutes,buffer_jitter)
+                            VALUES ($1,$2,$3,'running',$4,$5,$6)`, [id, userId, messageTemplate, contacts.length, bMin, bJitter]);
         }
         for (const contact of contacts) {
             if (contact.id) {
@@ -1327,7 +1339,7 @@ async function getOutreachJob(userId, id, client = null) {
         job = await queryGet('SELECT * FROM outreach_jobs WHERE id=$1 AND user_id=$2', [id, userId], client);
     }
     if (!job) return null;
-    const results = await queryAll(`SELECT phone, contact_name AS name, status, reason, sent_at FROM outreach_recipients
+    const results = await queryAll(`SELECT phone, contact_name AS name, status, reason, sent_at, next_send_at FROM outreach_recipients
                                     WHERE job_id=$1 AND user_id=$2 ORDER BY id`, [id, userId], client);
     const counts = results.reduce((out, row) => { out[row.status] = (out[row.status] || 0) + 1; return out; }, {});
     const assetDisplay = job.asset_file_name ? resolveDisplayFilename(job.asset_file_name, job.user_id) : null;
@@ -1338,10 +1350,12 @@ async function getOutreachJob(userId, id, client = null) {
         results,
         sent: counts.sent || 0,
         failed: counts.failed || 0,
-        skipped: (counts.skipped || 0) + (counts.unknown || 0),
+        skipped: (counts.skipped || 0) + (counts.unknown || 0) + (counts.cancelled || 0),
+        pending: (counts.pending || 0) + (counts.sending || 0),
+        cancelled: counts.cancelled || 0,
         total_recipients: job.total || results.length,
         sent_count: counts.sent || 0,
-        failed_count: (counts.failed || 0) + (counts.skipped || 0) + (counts.unknown || 0),
+        failed_count: (counts.failed || 0) + (counts.skipped || 0) + (counts.unknown || 0) + (counts.cancelled || 0),
         cancelRequested: job.status === 'cancel_requested',
         cancellable: ['running', 'cancel_requested'].includes(job.status)
     };
@@ -1359,6 +1373,9 @@ async function getOutreachJobs(userId, { status = '', limit = 20, offset = 0 } =
             j.started_at,
             j.finished_at,
             j.error,
+            j.buffer_minutes,
+            j.buffer_jitter,
+            j.next_send_at,
             ${hasMediaCol ? `
             j.media_asset_id,
             m.file_name AS asset_file_name,
@@ -1367,7 +1384,8 @@ async function getOutreachJobs(userId, { status = '', limit = 20, offset = 0 } =
             p.name AS project_name,` : ''}
             COUNT(r.id) FILTER (WHERE r.status = 'sent')::int AS sent_count,
             COUNT(r.id) FILTER (WHERE r.status = 'failed')::int AS failed_count,
-            COUNT(r.id) FILTER (WHERE r.status IN ('skipped', 'unknown'))::int AS skipped_count
+            COUNT(r.id) FILTER (WHERE r.status IN ('skipped', 'unknown', 'cancelled'))::int AS skipped_count,
+            COUNT(r.id) FILTER (WHERE r.status IN ('pending', 'sending'))::int AS pending_count
         FROM outreach_jobs j
         ${hasMediaCol ? `
         LEFT JOIN media_assets m ON m.id = j.media_asset_id AND m.user_id = j.user_id
@@ -1402,12 +1420,17 @@ async function getOutreachJobs(userId, { status = '', limit = 20, offset = 0 } =
             started_at: r.started_at,
             finished_at: r.finished_at,
             error: r.error || '',
+            buffer_minutes: Number(r.buffer_minutes || 0),
+            buffer_jitter: Boolean(r.buffer_jitter),
+            next_send_at: r.next_send_at || null,
             sent: Number(r.sent_count || 0),
             failed: Number(r.failed_count || 0),
             skipped: Number(r.skipped_count || 0),
+            pending: Number(r.pending_count || 0),
             sent_count: Number(r.sent_count || 0),
             failed_count: Number(r.failed_count || 0),
             skipped_count: Number(r.skipped_count || 0),
+            pending_count: Number(r.pending_count || 0),
             cancelRequested: r.status === 'cancel_requested',
             cancellable: ['running', 'cancel_requested'].includes(r.status),
             media_asset_id: r.media_asset_id || null,
@@ -2028,23 +2051,44 @@ async function countOverlappingAppointments(userId, startAt, endAt, excludeId = 
 }
 
 async function listAppointments(userId, { status = null, fromAt = null, toAt = null, limit = 500 } = {}) {
-    let sql = 'SELECT * FROM appointments WHERE user_id = $1';
+    let sql = `
+        SELECT a.*,
+               p.name AS project_name,
+               COALESCE(
+                   json_agg(
+                       json_build_object(
+                           'id', sm.id,
+                           'reminder_type', sm.reminder_type,
+                           'scheduled_at', sm.scheduled_at,
+                           'status', sm.status,
+                           'sent_at', sm.sent_at,
+                           'wa_message_id', sm.wa_message_id,
+                           'error_message', sm.error_message
+                       ) ORDER BY sm.scheduled_at ASC
+                   ) FILTER (WHERE sm.id IS NOT NULL),
+                   '[]'::json
+               ) AS reminders
+        FROM appointments a
+        LEFT JOIN projects p ON p.id = a.project_id AND p.user_id = a.user_id
+        LEFT JOIN scheduled_messages sm ON sm.appointment_id = a.id AND sm.user_id = a.user_id
+        WHERE a.user_id = $1
+    `;
     const params = [userId];
     let idx = 2;
 
     if (status) {
-        sql += ` AND status = $${idx++}`;
+        sql += ` AND a.status = $${idx++}`;
         params.push(status);
     }
     if (fromAt) {
-        sql += ` AND end_at >= $${idx++}`;
+        sql += ` AND a.end_at >= $${idx++}`;
         params.push(fromAt);
     }
     if (toAt) {
-        sql += ` AND start_at <= $${idx++}`;
+        sql += ` AND a.start_at <= $${idx++}`;
         params.push(toAt);
     }
-    sql += ` ORDER BY start_at ASC LIMIT $${idx++}`;
+    sql += ` GROUP BY a.id, p.name ORDER BY a.start_at ASC LIMIT $${idx++}`;
     params.push(limit);
     return queryAll(sql, params);
 }
@@ -2085,7 +2129,10 @@ async function createAppointment(userId, { phone, contactName = '', startAt, end
 }
 
 async function getAppointmentById(userId, id) {
-    return queryGet('SELECT * FROM appointments WHERE id = $1 AND user_id = $2', [id, userId]);
+    const appt = await queryGet('SELECT a.*, p.name AS project_name FROM appointments a LEFT JOIN projects p ON p.id = a.project_id AND p.user_id = a.user_id WHERE a.id = $1 AND a.user_id = $2', [id, userId]);
+    if (!appt) return null;
+    const reminders = await getAppointmentReminders(userId, id);
+    return { ...appt, reminders };
 }
 
 async function getLatestAppointmentForPhone(userId, phone) {

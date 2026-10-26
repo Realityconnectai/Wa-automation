@@ -171,39 +171,63 @@ async function scheduleAppointmentReminders(userId, appointment, { now = new Dat
 
     const scheduled = [];
 
-    // Schedule 24-hour reminder if its scheduled_at is still in the future
+    // Schedule 24-hour reminder if its scheduled_at is still in the future, else mark skipped
+    const template24h = (custom24h && custom24h.trim()) || DEFAULT_TEMPLATES['24h'];
+    const body24h = renderReminderText(template24h, vars);
     if (target24h.getTime() > currentMs) {
-        const template = (custom24h && custom24h.trim()) || DEFAULT_TEMPLATES['24h'];
-        const body = renderReminderText(template, vars);
         const row = await createAppointmentReminder(
             userId,
             appointment.id,
             appointment.phone,
-            body,
+            body24h,
             target24h,
             REMINDER_TYPES.HOURS_24
         );
         if (row) scheduled.push(row);
-    }
-
-    // Schedule 2-hour reminder if its scheduled_at is still in the future
-    if (target2h.getTime() > currentMs) {
-        const template = (custom2h && custom2h.trim()) || DEFAULT_TEMPLATES['2h'];
-        const body = renderReminderText(template, vars);
+    } else {
         const row = await createAppointmentReminder(
             userId,
             appointment.id,
             appointment.phone,
-            body,
+            body24h,
+            target24h,
+            REMINDER_TYPES.HOURS_24,
+            'skipped',
+            'Booked less than 24h ahead'
+        );
+        if (row) scheduled.push(row);
+    }
+
+    // Schedule 2-hour reminder if its scheduled_at is still in the future, else mark skipped
+    const template2h = (custom2h && custom2h.trim()) || DEFAULT_TEMPLATES['2h'];
+    const body2h = renderReminderText(template2h, vars);
+    if (target2h.getTime() > currentMs) {
+        const row = await createAppointmentReminder(
+            userId,
+            appointment.id,
+            appointment.phone,
+            body2h,
             target2h,
             REMINDER_TYPES.HOURS_2
+        );
+        if (row) scheduled.push(row);
+    } else {
+        const row = await createAppointmentReminder(
+            userId,
+            appointment.id,
+            appointment.phone,
+            body2h,
+            target2h,
+            REMINDER_TYPES.HOURS_2,
+            'skipped',
+            'Booked less than 2h ahead'
         );
         if (row) scheduled.push(row);
     }
 
     if (scheduled.length > 0) {
         const safePhone = maskPhoneNumber(appointment.phone);
-        console.log(`⏰ Scheduled ${scheduled.length} reminder(s) for appointment #${appointment.id} (${safePhone})`);
+        console.log(`⏰ Processed ${scheduled.length} reminder row(s) for appointment #${appointment.id} (${safePhone})`);
     }
 
     return scheduled;
@@ -212,9 +236,13 @@ async function scheduleAppointmentReminders(userId, appointment, { now = new Dat
 /**
  * Cancels all pending reminders for a given appointment.
  */
-async function cancelAppointmentReminders(userId, appointmentId) {
+async function cancelAppointmentReminders(userId, appointmentId, reason = 'Appointment cancelled') {
     if (!userId || !appointmentId) return;
-    await dbCancelAppointmentReminders(userId, appointmentId);
+    const { runSql } = require('./db-pool');
+    await runSql(
+        "UPDATE scheduled_messages SET status = 'cancelled', error_message = $1 WHERE user_id = $2 AND appointment_id = $3 AND status = 'pending'",
+        [reason, userId, appointmentId]
+    );
 }
 
 /**
@@ -223,7 +251,7 @@ async function cancelAppointmentReminders(userId, appointmentId) {
  */
 async function rescheduleAppointmentReminders(userId, appointment, options = {}) {
     if (!appointment || !appointment.id) return [];
-    await cancelAppointmentReminders(userId, appointment.id);
+    await cancelAppointmentReminders(userId, appointment.id, 'Appointment rescheduled');
     if (appointment.status === 'confirmed') {
         return scheduleAppointmentReminders(userId, appointment, options);
     }
