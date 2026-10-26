@@ -169,7 +169,8 @@ async function runJob(jobOrId, maybeUser = null) {
 
             if (mediaAsset) {
                 const fs = require('fs');
-                if (!mediaAsset.is_active || !fs.existsSync(mediaAsset.storage_path)) {
+                const hasBytes = (mediaAsset.data && mediaAsset.data.length > 0) || (mediaAsset.storage_path && fs.existsSync(mediaAsset.storage_path));
+                if (!mediaAsset.is_active || !hasBytes) {
                     await runSql("UPDATE outreach_recipients SET status='failed', reason='Media file missing on server' WHERE id=$1 AND user_id=$2", [recipient.id, user.id]);
                     continue;
                 }

@@ -1160,7 +1160,7 @@ async function sendTextMessage(userId, phone, text) {
  *
  * Returns the whatsapp-web.js result object (has .id._serialized).
  */
-async function sendMediaMessage(userId, phone, { base64Data, mimeType, fileName, caption = '' }) {
+async function sendMediaMessage(userId, phone, { base64Data, mimeType, fileName, caption = '', sendMediaAsDocument = false }) {
     const s = getSession(Number(userId), false);
     if (!s || !s.isConnected || !s.client) {
         const err = new Error('WhatsApp client is not connected');
@@ -1171,7 +1171,11 @@ async function sendMediaMessage(userId, phone, { base64Data, mimeType, fileName,
     const chatId = await resolveDestinationChatId(s.client, phone);
     const { MessageMedia } = require('whatsapp-web.js');
     const media = new MessageMedia(mimeType, base64Data, fileName);
-    const opts  = caption ? { caption } : {};
+    const opts = {};
+    if (caption) opts.caption = String(caption).trim();
+    if (sendMediaAsDocument || (mimeType && mimeType.toLowerCase().trim() === 'application/pdf')) {
+        opts.sendMediaAsDocument = true;
+    }
     try {
         return await s.client.sendMessage(chatId, media, opts);
     } catch (err) {

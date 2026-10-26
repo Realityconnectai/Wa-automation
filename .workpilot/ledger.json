@@ -48,16 +48,21 @@
     "id": "W3",
     "title": "Shared media service: id property ... got undefined",
     "status": "LIVE_PENDING_HUMAN",
-    "attempts": 1,
+    "attempts": 2,
     "hypotheses": [
       {
-        "text": "whatsapp-web.js injected Utils.js spreads mediaOptions.toJSON() which has an internal id: undefined property, overwriting message.id and causing WhatsApp Web's memoized collection getter to throw 'Data passed to get must include an id property ... but got undefined'.",
-        "result": "CONFIRMED: Object spread order in whatsapp-web.js Injected/Utils.js caused mediaOptions.toJSON().id (undefined) to overwrite message.id (newMsgKey). Fixed via reproducible postinstall script applying fallback guard `if (!message.id) message.id = newMsgKey;`."
+        "text": "Initial patch `if (!message.id) message.id = newMsgKey;` was ineffective because mediaData.id was truthy ('1'/'2'), and MediaData internal properties (__x_id, parent, collection) leaked into message, causing WhatsApp Web getter s(id) in WTkqok0RSi-.js:85:180 to receive undefined.",
+        "result": "CONFIRMED: Root cause isolated in scripts/media-isolation.js. Updated scripts/patch-wwebjs.js to spread clean toJSON attributes, delete leaked internal keys, and set message.id = newMsgKey;. In addition, built database-backed media storage (media_assets with BYTEA data and SHA-256 integrity, SSRF-safe one-time URL download) and unified dispatch service (src/services/media-dispatch.js) with clean options and document fallback."
       }
     ],
-    "last_error_signature": "Data passed to get must include an id property ... but got undefined",
-    "next_action": "Awaiting owner test device phone number in allowlist to complete live media send; proceed to W4",
-    "evidence": [".workpilot/evidence/W3/evidence.json"]
+    "last_error_signature": "Data passed to getter must include an id property ... but got undefined",
+    "next_action": "Automated pipeline tests (9/9), unit tests (188/188), and integration tests (45/45) PASS. Awaiting owner-approved allowlist numbers to run live device delivery verification.",
+    "evidence": [
+      ".workpilot/evidence/MEDIA/s0-environment.json",
+      ".workpilot/evidence/MEDIA/s1-failing-call.json",
+      ".workpilot/evidence/MEDIA/s2-isolation-matrix.json",
+      ".workpilot/evidence/MEDIA/s3-hypotheses.json"
+    ]
   },
   {
     "id": "W4",

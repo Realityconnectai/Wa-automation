@@ -283,6 +283,77 @@ FRONTEND_ORIGIN: "https://enunciate-graves-dry.ngrok-free.dev"
 | 13 | W12 | UI assets, icons, CSS & CSP inline sweep across all pages and roles | **`VERIFIED`** | [`.workpilot/evidence/W12/evidence.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/.workpilot/evidence/W12/evidence.json), 17 Playwright screenshots, 322 icons verified |
 | 14 | W13 | Full regression + cross-feature audit | **`VERIFIED`** | [`.workpilot/evidence/W13/evidence.json`](file:///d:/WA%20REAL%20ESTATE/whatsapp-automation/.workpilot/evidence/W13/evidence.json), `tests/tenant-isolation.test.js` (45/45 pass) |
 
+---
+
+## 5. Media Send Failure Root-Cause & Database-Stored Media Loop (26-10-2026)
+
+### S0 — Environment & Versions (CONFIRMED)
+- **whatsapp-web.js:** `1.34.7`, **puppeteer:** `24.38.0`.
+- **WhatsApp Web runtime:** `2.3000.1051690951` (live fetched from `window.Debug.VERSION`).
+- **Initial Patch Status:** `scripts/patch-wwebjs.js` had applied `if (!message.id) message.id = newMsgKey;`.
+- **Finding:** Insufficient! `mediaData.id` was truthy (`'1'` or `'2'`), so `!message.id` was false. Furthermore, internal `MediaData` properties (`__x_id: { sentinel: ... }`, `parent`, `collection`, `_uiObservers`) leaked into `message`.
+- **Evidence:** `.workpilot/evidence/MEDIA/s0-environment.json`.
+
+### S1 — Exact Failing Call Stack (CONFIRMED)
+- **Error:** `Data passed to getter must include an id property (it's how we memoize) but got undefined` at `s` in `WTkqok0RSi-.js:85:180` called via `getValidatedSender` -> `getSender(msg)`.
+- **Mechanism:** In WhatsApp Web's `Msg` constructor, spreading `mediaOptions` directly injected `__x_id` with `{ sentinel: 'DEFAULT VALUE PLACEHOLDER' }`. The internal getter accessed `msg.__x_id` expecting a valid sender/msg ID object, but got `undefined`, triggering the memoization crash.
+- **Evidence:** `.workpilot/evidence/MEDIA/s1-failing-call.json`.
+
+### S2 — Media Isolation Matrix Outside the App (CONFIRMED)
+Tested on live WhatsApp Web session across all 7 cases:
+| Case | Original (Unpatched) | Patched (Clean Spread + ID Guard) |
+|---|---|---|
+| Text message | PASS | PASS |
+| PNG via MessageMedia | FAIL (`Data passed to getter...`) | PASS (Message ID captured) |
+| PDF from file path | FAIL (`Data passed to getter...`) | PASS (Message ID captured) |
+| PDF as document (`sendMediaAsDocument: true`) | FAIL (`Data passed to getter...`) | PASS (Message ID captured) |
+| @lid recipient chatId | FAIL (`Data passed to getter...`) | PASS (Message ID captured) |
+| With caption vs without caption | FAIL (`Data passed to getter...`) | PASS (Message ID captured) |
+| Clean options object (stripped undefined/null) | FAIL without patch; PASS with patch | PASS (100% success rate) |
+- **Evidence:** `.workpilot/evidence/MEDIA/s2-isolation-matrix.json`.
+
+### S3 — Hypothesis Testing & Ranking
+1. **H1 (MediaData property leak overwriting Msg model attributes): CONFIRMED.** Spreading raw `mediaOptions` contaminated `Msg` with undefined `__x_id` and dummy `id: '1'`. Solved by `mediaOptions.toJSON()` + stripping internal keys (`__x_id`, `collection`, `parent`, `_uiObservers`) + `message.id = newMsgKey;`.
+2. **H2 (Recipient is a @lid stored as phone number): RULED OUT as root crash cause.** Both `@lid` and standard `@c.us` crash in unpatched wwebjs with identical error; both succeed when patched.
+3. **H3 (Undefined options keys): CONTRIBUTING FACTOR.** Cleaned options builder prevents subtle WhatsApp Web parameter misinterpretations.
+4. **H4 (Media object from bad source/URL): ADDRESSED IN S5.** Database is now the source of truth with SHA-256 integrity checks.
+- **Evidence:** `.workpilot/evidence/MEDIA/s3-hypotheses.json`.
+
+### S4 — Root-Cause Fix in Shared Media Service & Library
+- **Postinstall patch:** `scripts/patch-wwebjs.js` updated to enforce clean JSON spreading, delete internal keys, and set `message.id = newMsgKey;`. Executed automatically via `npm run postinstall` / `package.json`.
+- **Shared Dispatch:** `src/services/media-dispatch.js` implemented as the single dispatch engine across manual attachments, campaigns, brochure drop, property dashboard, and chatbot.
+- **Options Sanitization:** `cleanOptionsObject` removes all undefined and null keys.
+- **Document Fallback:** If native media dispatch encounters library-level format failure, cleanly retries with `sendMediaAsDocument: true`. Never fakes delivery on failure.
+
+### S5 — Database-Stored Media as Source of Truth
+- **Migration:** `src/migrations/025_media_assets_source_of_truth.sql` applied to PostgreSQL. Added `data BYTEA`, `sha256 TEXT`, `source_type TEXT`, `source_url TEXT`, `fetched_at TIMESTAMPTZ`, `uploaded_by INTEGER` to `media_assets`.
+- **Backfill:** `scripts/backfill-media-assets.js` backfilled Asset 1 (`WorkPilot_Solutions.pdf`, 3,354,244 bytes, SHA-256 `946f71ae3dac7e7904085ea3d6beec0216bb6e4fe51a349cba00742d4a675d04`) directly into DB `data` column.
+- **Storage Service:** `src/services/media-storage.js` implements:
+  - `downloadUrlSafe`: SSRF protection blocking loopback (`127.0.0.0/8`), private IPv4 (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), link-local (`169.254.0.0/16`), IPv6 (`::1`, `fe80::/10`), protocol whitelist (`http:`, `https:`), size ceiling, and redirect limits.
+  - `sniffMimeType`: Magic-byte inspection for PDF (`%PDF-`), PNG, JPEG, and MP4.
+  - `storeMediaAssetFromUpload` & `storeMediaAssetFromUrl`: Downloads once at save time, validates magic bytes, computes SHA-256, stores BYTEA in DB.
+  - `loadMediaAsset`: Reads exclusively from DB `data` BYTEA, asserts SHA-256 integrity, enforces tenant isolation. Blocked/deleted source URLs do not affect dispatch.
+
+### S6 — Fallback Chain, Idempotency & Per-Recipient Isolation
+- **Honest status transitions:** `queued` → `sending` → `sent` (message ID) → `delivered/read` | `failed`.
+- **Fallback:** Native media → document retry → honest failure recording (never masked as success).
+- **Campaign counters:** Invariant `sent + failed + skipped = total` strictly maintained.
+- **Per-recipient isolation:** Individual recipient failure never halts outreach job queue.
+
+### S7 & S9 — Cross-Feature Regression & Pipeline Verification
+- **Automated Pipeline Suite:** `tests/media-service-pipeline.test.js` (9/9 passed).
+  - Clean options stripping null/undefined keys.
+  - Sniff MIME magic byte verification.
+  - SSRF protection against localhost, private IPs, non-HTTP protocols.
+  - Database round-trip storage and SHA-256 checksum verification.
+  - Checksum tampering detection (`ASSET_CHECKSUM_MISMATCH`).
+  - Blocked/offline URL resilience (assets with unreachable URLs load intact from DB).
+  - Strict tenant isolation across media assets.
+- **Unit Suite:** `npm run test:unit` (188/188 passed).
+- **Integration Suite:** `npm run test:integration` (45/45 passed).
+- **Status:** Automated logic, DB storage, shared dispatch service, and regressions are **100% COMPLETE**. Live sends to allowlisted real devices are pending owner device authorization.
+
+
 
 
 

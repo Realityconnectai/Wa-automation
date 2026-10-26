@@ -182,86 +182,20 @@ async function sendText(userId, phone, text) {
  * @returns {{ waMessageId: string|null, sizeBytes: number, fileName: string }}
  * @throws  Error with .code if validation fails or WA client not connected
  */
-async function sendMedia(userId, phone, { filePath, mimeType, caption = '', idempotencyKey = null, mediaAssetId = null, fileName = null }) {
-    const digits = String(phone).replace(/\D/g, '');
-
-    // Validate before reading the file into memory
-    const validation = validateMediaFile(filePath, mimeType);
-    if (!validation.ok) {
-        const err = new Error(validation.message);
-        err.code   = validation.code;
-        err.status = 400;
-        throw err;
-    }
-
-    const { sizeBytes } = validation;
-    const resolvedFileName = fileName || validation.fileName;
-    const normMime = mimeType.toLowerCase().trim();
-    // Map mime to the message_type stored in DB
-    const messageType = normMime.startsWith('video/') ? 'video'
-                      : normMime.startsWith('image/') ? 'image'
-                      : normMime === 'application/pdf' ? 'document'
-                      : 'media';
-
-    // Read file and encode as base64
-    let base64Data;
-    try {
-        base64Data = fs.readFileSync(filePath, 'base64');
-    } catch (e) {
-        const err = new Error('Failed to read media file.');
-        err.code = 'MEDIA_READ_ERROR';
-        err.status = 500;
-        throw err;
-    }
-
-    // Log as 'pending' BEFORE sending — same idempotency pattern as sendText
-    let logRow;
-    const bodyText = caption ? `${caption} [${resolvedFileName}]` : `[${resolvedFileName}]`;
-
-    if (idempotencyKey) {
-        const claim = await logOutgoingMessageIdempotent(userId, idempotencyKey, {
-            phone: digits, direction: 'outgoing', messageType,
-            body: bodyText, status: 'pending'
-        });
-        if (!claim.created) {
-            // Already sent — return original row info
-            return { waMessageId: claim.row.wa_message_id, sizeBytes, fileName: resolvedFileName, duplicate: true };
-        }
-        logRow = claim.row;
-        if (mediaAssetId) {
-            await runSql('UPDATE messages SET media_asset_id=$1 WHERE id=$2 AND user_id=$3', [mediaAssetId, logRow.id, userId]);
-        }
-    }
-
-    let result;
-    try {
-        result = await sendMediaMessage(userId, digits, { base64Data, mimeType: normMime, fileName: resolvedFileName, caption });
-    } catch (sendErr) {
-        // Mark as failed in the log row if we created one
-        if (logRow) {
-            await runSql("UPDATE messages SET status = 'failed' WHERE id = $1", [logRow.id]);
-        }
-        throw sendErr;
-    }
-
-    const waId = result?.id?._serialized || null;
-
-    if (logRow) {
-        // Update the pending row with the real WA message ID and mark sent
-        await runSql("UPDATE messages SET wa_message_id = $1, status = 'sent' WHERE id = $2",
-            [waId, logRow.id]);
-    } else {
-        // No idempotency key — just log
-        const created = await logMessage(userId, {
-            waMessageId: waId, phone: digits, direction: 'outgoing',
-            messageType, body: bodyText, status: 'sent'
-        });
-        if (mediaAssetId) {
-            await runSql('UPDATE messages SET media_asset_id=$1 WHERE id=$2 AND user_id=$3', [mediaAssetId, created.id, userId]);
-        }
-    }
-
-    return { waMessageId: waId, sizeBytes, fileName: resolvedFileName };
+async function sendMedia(userId, phone, { filePath, mimeType, caption = '', idempotencyKey = null, mediaAssetId = null, fileName = null, buffer = null, sendMediaAsDocument = false }) {
+    const { dispatchMedia } = require('./media-dispatch');
+    return await dispatchMedia({
+        userId,
+        phone,
+        filePath,
+        buffer,
+        mimeType,
+        fileName,
+        caption,
+        idempotencyKey,
+        mediaAssetId,
+        sendMediaAsDocument
+    });
 }
 
 module.exports = { sendText, sendMedia, validateMediaFile, ALLOWED_TYPES };

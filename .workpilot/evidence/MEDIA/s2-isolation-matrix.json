@@ -1,0 +1,108 @@
+[
+  {
+    "testName": "1. Text to @lid (Original)",
+    "pass": true,
+    "modelCreated": true,
+    "msgKeyValid": false,
+    "has__x_id": false
+  },
+  {
+    "testName": "1. Text to @lid (Patched)",
+    "pass": true,
+    "modelCreated": true,
+    "msgKeyValid": false,
+    "has__x_id": false
+  },
+  {
+    "testName": "2. PNG to @lid (Original)",
+    "pass": false,
+    "error": "Data passed to getter must include an id property (it's how we memoize) but got undefined",
+    "stack": "at s (https://static.whatsapp.net/rsrc.php/v4/yU/r/WTkqok0RSi-.js:85:180)"
+  },
+  {
+    "testName": "2. PNG to @lid (Patched)",
+    "pass": true,
+    "modelCreated": true,
+    "msgKeyValid": false,
+    "has__x_id": false
+  },
+  {
+    "testName": "3. PDF standard to @lid (Original)",
+    "pass": false,
+    "error": "Data passed to getter must include an id property (it's how we memoize) but got undefined",
+    "stack": "at s (https://static.whatsapp.net/rsrc.php/v4/yU/r/WTkqok0RSi-.js:85:180)"
+  },
+  {
+    "testName": "3. PDF standard to @lid (Patched)",
+    "pass": true,
+    "modelCreated": true,
+    "msgKeyValid": false,
+    "has__x_id": false
+  },
+  {
+    "testName": "4. PDF doc (sendMediaAsDocument: true) (Original)",
+    "pass": false,
+    "error": "Data passed to getter must include an id property (it's how we memoize) but got undefined",
+    "stack": "at s (https://static.whatsapp.net/rsrc.php/v4/yU/r/WTkqok0RSi-.js:85:180)"
+  },
+  {
+    "testName": "4. PDF doc (sendMediaAsDocument: true) (Patched)",
+    "pass": true,
+    "modelCreated": true,
+    "msgKeyValid": false,
+    "has__x_id": false
+  },
+  {
+    "testName": "5a. PDF doc to @lid (Original)",
+    "pass": false,
+    "error": "Data passed to getter must include an id property (it's how we memoize) but got undefined",
+    "stack": "at s (https://static.whatsapp.net/rsrc.php/v4/yU/r/WTkqok0RSi-.js:85:180)"
+  },
+  {
+    "testName": "5a. PDF doc to @lid (Patched)",
+    "pass": true,
+    "modelCreated": true,
+    "msgKeyValid": false,
+    "has__x_id": false
+  },
+  {
+    "testName": "5b. PDF doc to @c.us (Original)",
+    "pass": false,
+    "error": "Data passed to getter must include an id property (it's how we memoize) but got undefined",
+    "stack": "at s (https://static.whatsapp.net/rsrc.php/v4/yU/r/WTkqok0RSi-.js:85:180)"
+  },
+  {
+    "testName": "5b. PDF doc to @c.us (Patched)",
+    "pass": true,
+    "modelCreated": true,
+    "msgKeyValid": false,
+    "has__x_id": false
+  },
+  {
+    "testName": "6a. PDF doc WITH caption (Patched)",
+    "pass": true,
+    "modelCreated": true,
+    "msgKeyValid": false,
+    "has__x_id": false
+  },
+  {
+    "testName": "6b. PDF doc WITHOUT caption (Patched)",
+    "pass": true,
+    "modelCreated": true,
+    "msgKeyValid": false,
+    "has__x_id": false
+  },
+  {
+    "testName": "7a. Dirty options (Original)",
+    "pass": false,
+    "error": "Data passed to getter must include an id property (it's how we memoize) but got undefined",
+    "stack": "at s (https://static.whatsapp.net/rsrc.php/v4/yU/r/WTkqok0RSi-.js:85:180)"
+  },
+  {
+    "testName": "7b. Stripped clean options (Patched)",
+    "pass": true,
+    "modelCreated": true,
+    "msgKeyValid": false,
+    "has__x_id": false
+  }
+]

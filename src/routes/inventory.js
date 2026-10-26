@@ -28,6 +28,7 @@ const {
 } = require('../services/database');
 
 const { validateMediaFile, sendMedia } = require('../services/messaging');
+const { storeMediaAssetFromUpload, storeMediaAssetFromUrl } = require('../services/media-storage');
 const { sanitizeOriginalFilename, formatSafeContentDisposition, resolveDisplayFilename } = require('../utils/media-filename');
 const { asyncHandler }      = require('../utils/errors');
 const { perUser }           = require('../middleware/rateLimit');
@@ -340,19 +341,42 @@ router.post('/projects/:projectId/assets', writeLimiter, requireDurableWrite,
         // Derive safe original display filename from user upload, not internal storage path
         const displayFileName = sanitizeOriginalFilename(req.file.originalname, validation.fileName);
 
-        const asset = await createMediaAsset(req.user.id, {
+        const asset = await storeMediaAssetFromUpload(req.user.id, {
             projectId,
             unitId:       b.unitId ? requireId(b.unitId, 'unitId') : null,
             assetType,
             fileName:     displayFileName,
-            storagePath:  req.file.path,
+            filePath:     req.file.path,
             mimeType:     req.file.mimetype,
-            sizeBytes:    validation.sizeBytes,
             reraVerified: b.reraVerified === 'true' || b.reraVerified === true
         });
         res.json({ success: true, data: asset });
     })
 );
+
+router.post('/projects/:projectId/assets/link', writeLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
+    const projectId = requireId(req.params.projectId, 'project id');
+    const project = await getProjectById(req.user.id, projectId);
+    if (!project) return res.status(404).json({ success: false, error: 'Project not found' });
+
+    const b = req.body || {};
+    const url = optionalString(b.url, 'url', 1000);
+    if (!url) return res.status(400).json({ success: false, error: 'url is required' });
+
+    const VALID_ASSET_TYPES = ['brochure','floor_plan','photo','walkthrough','price_sheet'];
+    const assetType = VALID_ASSET_TYPES.includes(b.assetType||b.asset_type)
+        ? (b.assetType||b.asset_type) : 'brochure';
+
+    const asset = await storeMediaAssetFromUrl(req.user.id, {
+        projectId,
+        unitId:       b.unitId ? requireId(b.unitId, 'unitId') : null,
+        assetType,
+        url,
+        fileName:     b.fileName ? optionalString(b.fileName, 'fileName', 120) : null,
+        reraVerified: b.reraVerified === 'true' || b.reraVerified === true
+    });
+    res.json({ success: true, data: asset });
+}));
 
 // Manual delivery is intentionally bound to an asset already owned by this
 // tenant and project.  The browser never supplies a disk path or arbitrary
@@ -412,15 +436,19 @@ router.get('/assets/:id/file', asyncHandler(async (req, res) => {
     if (!asset || !asset.is_active) {
         return res.status(404).json({ success: false, error: 'Asset not found' });
     }
-    if (!fs.existsSync(asset.storage_path)) {
-        return res.status(404).json({ success: false, error: 'File not found on server' });
-    }
-    res.setHeader('Content-Type', asset.mime_type);
     const disposition = req.query.download === '1' ? 'attachment' : 'inline';
     const downloadName = asset.display_name || asset.file_name;
+    res.setHeader('Content-Type', asset.mime_type);
     res.setHeader('Content-Disposition', formatSafeContentDisposition(disposition, downloadName));
     res.setHeader('Cache-Control', 'private, max-age=3600');
-    res.sendFile(path.resolve(asset.storage_path));
+
+    if (asset.data && Buffer.isBuffer(asset.data) && asset.data.length > 0) {
+        return res.send(asset.data);
+    }
+    if (asset.storage_path && fs.existsSync(asset.storage_path)) {
+        return res.sendFile(path.resolve(asset.storage_path));
+    }
+    return res.status(404).json({ success: false, error: 'File not found on server' });
 }));
 
 router.delete('/assets/:id', writeLimiter, asyncHandler(async (req, res) => {

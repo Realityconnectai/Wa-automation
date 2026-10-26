@@ -1,6 +1,9 @@
 // scripts/patch-wwebjs.js — Automated, reproducible postinstall patch for whatsapp-web.js
-// Fixes "Data passed to get must include an id property ... but got undefined"
-// by preventing mediaOptions.toJSON() from overwriting message.id with undefined.
+// Fixes "Data passed to getter must include an id property ... but got undefined"
+// Root cause: Injected/Utils.js spreads mediaOptions (an instance of MediaData),
+// leaking internal properties (__x_id: { sentinel... }, parent, collection) into
+// the outgoing Msg model and corrupting message.id.
+// This patch cleans rawMediaProps and strips private model identifiers.
 
 const fs = require('fs');
 const path = require('path');
@@ -13,34 +16,59 @@ function applyPatch() {
         return;
     }
 
-    const content = fs.readFileSync(targetFile, 'utf8');
+    let content = fs.readFileSync(targetFile, 'utf8');
 
-    // Check if already patched
-    if (content.includes('if (!message.id) {') || content.includes('if (!message.id) message.id')) {
-        console.log('✔ whatsapp-web.js is already patched with message.id guard.');
+    // Check if the comprehensive patch is already applied
+    if (content.includes('delete message.__x_id;') && content.includes('message.id = newMsgKey;')) {
+        console.log('✔ whatsapp-web.js is already patched with comprehensive media cleaner & message.id guard.');
         return;
     }
 
-    const targetBlock = '...extraOptions,\n        };';
-    const replacementBlock = '...extraOptions,\n        };\n\n        if (!message.id) {\n            message.id = newMsgKey;\n        }';
+    // If an earlier simple patch was applied, clean it out first
+    content = content.replace(
+        /\n\s*if \(!message\.id\) \{\s*message\.id = newMsgKey;\s*\}/g,
+        ''
+    );
+    content = content.replace(
+        /\r\n\s*if \(!message\.id\) \{\s*message\.id = newMsgKey;\s*\}/g,
+        ''
+    );
 
-    if (!content.includes(targetBlock)) {
-        // Try CRLF matching
-        const targetBlockCRLF = '...extraOptions,\r\n        };';
-        const replacementBlockCRLF = '...extraOptions,\r\n        };\r\n\r\n        if (!message.id) {\r\n            message.id = newMsgKey;\r\n        }';
-        if (content.includes(targetBlockCRLF)) {
-            const updated = content.replace(targetBlockCRLF, replacementBlockCRLF);
-            fs.writeFileSync(targetFile, updated, 'utf8');
-            console.log('✔ Successfully patched whatsapp-web.js Injected/Utils.js (CRLF).');
-            return;
-        }
+    // Patch 1: Replace direct mediaOptions spread with clean JSON attributes
+    const oldMediaSpreadLF = '...mediaOptions,\n            ...(mediaOptions.toJSON ? mediaOptions.toJSON() : {}),';
+    const oldMediaSpreadCRLF = '...mediaOptions,\r\n            ...(mediaOptions.toJSON ? mediaOptions.toJSON() : {}),';
+    const newMediaSpreadLF = '...(mediaOptions.toJSON ? mediaOptions.toJSON() : mediaOptions),';
+
+    if (content.includes(oldMediaSpreadLF)) {
+        content = content.replace(oldMediaSpreadLF, newMediaSpreadLF);
+    } else if (content.includes(oldMediaSpreadCRLF)) {
+        content = content.replace(oldMediaSpreadCRLF, newMediaSpreadLF);
+    }
+
+    // Patch 2: Add post-assembly cleanup after ...extraOptions, };
+    const targetBlockLF = '...extraOptions,\n        };';
+    const targetBlockCRLF = '...extraOptions,\r\n        };';
+    const replacementLF = `...extraOptions,
+        };
+
+        // WORKPILOT MEDIA FIX: Guarantee MsgKey and strip internal MediaData properties
+        message.id = newMsgKey;
+        delete message.__x_id;
+        delete message.collection;
+        delete message.parent;
+        delete message._uiObservers;`;
+
+    if (content.includes(targetBlockLF)) {
+        content = content.replace(targetBlockLF, replacementLF);
+    } else if (content.includes(targetBlockCRLF)) {
+        content = content.replace(targetBlockCRLF, replacementLF.replace(/\n/g, '\r\n'));
+    } else {
         console.warn('⚠️  Could not locate insertion point in whatsapp-web.js Utils.js');
         return;
     }
 
-    const updated = content.replace(targetBlock, replacementBlock);
-    fs.writeFileSync(targetFile, updated, 'utf8');
-    console.log('✔ Successfully patched whatsapp-web.js Injected/Utils.js.');
+    fs.writeFileSync(targetFile, content, 'utf8');
+    console.log('✔ Successfully applied comprehensive patch to whatsapp-web.js Injected/Utils.js.');
 }
 
 applyPatch();

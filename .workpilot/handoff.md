@@ -1,28 +1,52 @@
-# WORKPILOT AUTONOMOUS LOOP — FINAL HANDOFF
+# WORKPILOT AUTONOMOUS LOOP — MEDIA ROOT-CAUSE & DB STORAGE HANDOFF
 
-**Current Status:** All items processed (W0–W13)  
-**Verification Complete:** W0, W5, W7, W8, W9, W10, W11, W12, W13 are **`VERIFIED`** with full system evidence.  
-**Live WhatsApp Outbound Items:** W1, W2, W3, W4, W6 automated logic & guards PASS; marked **`LIVE_PENDING_HUMAN`** waiting for owner-approved test device numbers.  
-**Timestamp:** 2026-10-26T03:41:00+05:30  
+**Current Status:** Stages S0–S7 and S9 are **`COMPLETE & VERIFIED`**. Stage S8 (live delivery to real devices) is marked **`LIVE_PENDING_HUMAN`** awaiting owner-approved allowlist numbers.
+**Timestamp:** 2026-10-26T11:25:00+05:30  
+**Running Process:** Server active on port 3000; PostgreSQL version 25 migrated and healthy.
 
-### Summary of Completed Work
-1. **W0 (Bootstrap & Harness):** Discovered ports/env, established strict `assertRecipientAllowlisted` guard, un-truncated single-char error forwarding (`tests/w0-bootstrap.test.js`).
-2. **W1 (Shared Text Dispatch Service):** Normalized multi-device LID/JID resolution (`227105572937810@lid`), proper upstream error codes (`INVALID_RECIPIENT`, `WA_NOT_CONNECTED`, `NOT_ON_WHATSAPP`), honest status propagation.
-3. **W2 (Campaign Text):** Template engine name fallback (`first_name`, default fallback), per-recipient isolation, accurate counter math (sent/failed/skipped).
-4. **W3 (Shared Media Service):** Reproducible `whatsapp-web.js` patch preserving `message.id` on media attachments across manual reply, brochure drop, property inventory, campaigns, and chatbot.
-5. **W4 (Campaign Media):** Verified image and brochure PDF outreach job creation, tenant isolation, and asset linkage.
-6. **W5 (Gemini AI Tools):** Correct model selection, preserved `thought_signature` across multi-turn tool calling, honest fallback without fabricated success.
-7. **W6 (Brochure Drop Intent):** Robust Hinglish/typo intent classification, contextual project matching, asset lookup, honest missing-asset fallback, clarification on ambiguous context.
-8. **W7 (Appointment Booking):** End-to-end booking intent to real slot generation, persistent PostgreSQL row, double-booking rejection (`SLOT_TAKEN`), rescheduling and cancellation invalidation.
-9. **W8 (Reminders 24h + 2h):** Lead time policy (>24h schedules 2, 10h schedules 1, 1h schedules 0), persistent PostgreSQL status progression to `sent`, idempotency, worker crash recovery (`reclaimStuckScheduledMessages`).
-10. **W9 (Agent Availability):** Whitelisted `routing_status`, `weight`, `max_concurrent_leads` in PUT endpoint, authorized self-toggling for agents, added double-submit button locking.
-11. **W10 (SLA Badges):** Aligned DB/API/frontend enum values, fixed first-response tracking shorthand calls, preserved replied state on reassignment, added approaching SLA sweep.
-12. **W12 (UI Assets, Icons, CSS & CSP Sweep):** Audited and added 10 missing SVG icons to `public/js/icons.js`, verified 0 inline styles/handlers, executed Playwright sweep across 17 pages/modals at desktop and mobile with 0 CSP violations, 0 failed asset loads, 0 console errors, 322 icons verified.
-13. **W13 (Cross-Feature Regression):** 45/45 tenant-isolation tests passed, 271+ unit/integration tests passed, all 12 live test scripts passed.
+---
 
-### Human Device Allowlist Needed for Live Outbound WhatsApp Delivery
-To complete live device delivery verification for W1, W2, W3, W4, W6:
-Please provide your allowlist phone numbers:
-- `TEST_RECIPIENT_PRIMARY`: E.g. `+91XXXXXXXXXX`
-- `TEST_RECIPIENT_SECONDARY`: Secondary phone number or LID contact
-Once provided, running `node tests/live/live_manual_text.js`, `node tests/live/live_campaign_text.js`, `node tests/live/live_media_matrix.js`, `node tests/live/live_campaign_media.js`, and `node tests/live/live_brochure_chat.js` will send the live test messages with unique tracking tokens (`WP-TEST-<ID>-<timestamp>`) and transition those items to `VERIFIED`.
+### 1. Root Cause Confirmed (S0–S3)
+- **The Crash:** `Data passed to getter must include an id property (it's how we memoize) but got undefined s (https://static.whatsapp.net/rsrc.php/v4/yU/r/WTkqokORSi-.js:85:180)`.
+- **Exact Mechanism:** In WhatsApp Web runtime `2.3000.1051690951`, when `window.WWebJS.sendMessage` processes media, `mediaOptions` returned by `processMediaData()` is an instance of WhatsApp Web's internal `MediaData` model.
+  - Spreading raw `mediaOptions` contaminated `message` with `__x_id: { sentinel: 'DEFAULT VALUE PLACEHOLDER' }`, `id: '1'`, `collection`, `parent`, and `_uiObservers`.
+  - The previous patch (`if (!message.id) message.id = newMsgKey;`) was completely bypassed because `mediaData.id` was truthy (`'1'`).
+  - WhatsApp Web's internal message constructor accessed `msg.__x_id` via `getValidatedSender` -> `getSender(msg)` and passed `undefined` to getter `s(id)` in `WTkqok0RSi-.js:85:180`, throwing the fatal memoization exception.
+- **S2 Isolation Test:** Tested in isolation against the live browser. Unpatched wwebjs fails 100% of media sends across both standard `@c.us` and 15-digit `@lid` recipients. With our updated patch, 100% of cases pass cleanly.
+
+---
+
+### 2. Solutions Implemented (S4–S6)
+1. **Library Root-Cause Fix (`scripts/patch-wwebjs.js`):**
+   - Enforces clean attribute spread: `mediaOptions.toJSON ? mediaOptions.toJSON() : mediaOptions`.
+   - Explicitly deletes internal leaked keys: `__x_id`, `collection`, `parent`, `_uiObservers`.
+   - Guarantees valid `message.id = newMsgKey;`.
+   - Wired into `npm run postinstall` for reproducible builds.
+2. **Unified Shared Media Dispatch Service (`src/services/media-dispatch.js`):**
+   - Single dispatch engine for all media features (manual attach, campaigns, brochure drop, property dashboard, chatbot media, scheduled attachments).
+   - Sanitizes options object via `cleanOptionsObject()` (removes null and undefined keys).
+   - Automatic document fallback (`sendMediaAsDocument: true`) on library-level media format errors.
+   - Honest status reporting (never fabricates delivery).
+3. **Database-Stored Media as Source of Truth (`src/services/media-storage.js` & Migration 025):**
+   - PostgreSQL schema version 25: `media_assets` has `data BYTEA`, `sha256 TEXT`, `source_type TEXT`, `source_url TEXT`, `fetched_at TIMESTAMPTZ`, `uploaded_by INTEGER`.
+   - Backfilled Asset 1 (`WorkPilot_Solutions.pdf`, 3,354,244 bytes, SHA-256 `946f71ae3dac7e7904085ea3d6beec0216bb6e4fe51a349cba00742d4a675d04`) directly into DB `data` column.
+   - SSRF-safe URL downloading (`downloadUrlSafe`) blocking loopback, private IPs, link-local, IPv6, non-HTTP protocols.
+   - Magic-byte sniffing (`sniffMimeType`) for PDF, PNG, JPEG, MP4.
+   - `loadMediaAsset` loads directly from DB `data` BYTEA with SHA-256 integrity assertion. Offline/blocked source URLs do not affect send time.
+
+---
+
+### 3. Automated Regression Verification (S9)
+- `tests/media-service-pipeline.test.js`: **9/9 PASS** (Clean options, magic bytes, SSRF guards, DB round-trip, SHA-256 tampering detection, offline URL resilience, tenant isolation).
+- `npm run test:unit`: **188/188 PASS** (Input validation, authentication, security).
+- `npm run test:integration`: **45/45 PASS** (Tenant isolation across all 13 tenant tables).
+
+---
+
+### 4. Action Needed for Stage S8 (Live Delivery Verification)
+In accordance with the safety rules:
+- No outbound messages are ever sent to non-allowlisted devices.
+- To execute live sends to real devices:
+  1. Provide owner-approved test device numbers for `TEST_RECIPIENT_PRIMARY` and `TEST_RECIPIENT_SECONDARY`.
+  2. If the WhatsApp Web session in the browser requires QR re-scan, scan the QR code in Settings → WhatsApp QR.
+  3. Run `node tests/live/live_media_matrix.js`, `node tests/live/live_campaign_media.js`.

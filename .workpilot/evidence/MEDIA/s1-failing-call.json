@@ -1,0 +1,57 @@
+{
+  "stage": "S1",
+  "timestamp": "2026-10-26T11:00:00+05:30",
+  "failing_campaign_id": "dd290e5a-9a2d-4710-989e-305ae3fd0145",
+  "recipients": [
+    {
+      "contact_id": 38,
+      "name": "Anushka Gora",
+      "stored_phone": "278807885947030",
+      "resolved_chat_id": "278807885947030@lid",
+      "real_phone_wid": "919636564673@c.us"
+    },
+    {
+      "contact_id": 1,
+      "name": "WorkPilot",
+      "stored_phone": "249344947167452",
+      "resolved_chat_id": "249344947167452@lid",
+      "real_phone_wid": "918233557250@c.us"
+    }
+  ],
+  "media_asset": {
+    "id": 1,
+    "file_name": "WorkPilot_Solutions.pdf",
+    "mime_type": "application/pdf",
+    "size_bytes": 3354244,
+    "storage_path": "D:\\WA REAL ESTATE\\whatsapp-automation\\data\\assets\\3_1791911094601_WorkPilot_Solutions.pdf"
+  },
+  "call_signature": {
+    "method": "client.sendMessage(chatId, media, options)",
+    "chatId": "278807885947030@lid",
+    "media": {
+      "mimetype": "application/pdf",
+      "filename": "WorkPilot_Solutions.pdf",
+      "data_length_bytes": 3354244
+    },
+    "options": {
+      "caption": "Hii Anushka testing wa"
+    }
+  },
+  "injected_call_signature": {
+    "method": "window.WWebJS.sendMessage(chat, content, options)",
+    "chat": {
+      "id": {
+        "server": "lid",
+        "user": "278807885947030",
+        "_serialized": "278807885947030@lid"
+      }
+    },
+    "content": "",
+    "options": {
+      "caption": "Hii Anushka testing wa",
+      "sendMediaAsDocument": true,
+      "media": "<MessageMedia instance>"
+    }
+  },
+  "stack": "Error: Data passed to getter must include an id property (it's how we memoize) but got undefined\n    at s (https://static.whatsapp.net/rsrc.php/v4/yU/r/WTkqok0RSi-.js:85:180)\n    at I (https://static.whatsapp.net/.../7cL50Ab318nDMjRMEF9O2e-N8J-sIaXzO6rNDBe_wQTJtI1V2mxrKYYJwUvmavsS0GOmex1l3EZC6bQS1MP9SD0GBWs7rxQFpzJ9wOG39rwPJYRMFMwBgdZyBDkk39f6FpLI3xvNBvuh3gkJ4JUsPT2RvL.js:2503:5505)\n    at Object.m [as getSender] (https://static.whatsapp.net/.../7cL50Ab318nDMjRMEF9O2e-N8J-sIaXzO6rNDBe_wQTJtI1V2mxrKYYJwUvmavsS0GOmex1l3EZC6bQS1MP9SD0GBWs7rxQFpzJ9wOG39rwPJYRMFMwBgdZyBDkk39f6FpLI3xvNBvuh3gkJ4JUsPT2RvL.js:2503:2964)\n    at Object.M [as getValidatedSender] (https://static.whatsapp.net/.../prua9yJpZFk.js:1722:7421)\n    at t.initialize (https://static.whatsapp.net/.../prua9yJpZFk.js:1717:23949)\n    at t.a [as constructor] (https://static.whatsapp.net/.../6gZfHQw5zR7vUEGrmrgvKwd0ZlMt9Ehb98_TWP-iHJr1av4zrZ01Lg8lvMg_dWzkHArd2fiFyDeE2lOHn_bicOsUgJQ95wADYdSA7gvOyp8S-v1LWau9eXDkYKv7g6hkZbVbyPvkUeL1J_B6sfx2jV25_DXJjlnme1vtD2Px67ruRd1hSV_WBoRpJClw8aPpBTCuTzAdJ3AfoINSWDyrXBF3zVKIQOtWCB9FfibZcSVj9A_2VfXWnbkD6s7QpdKQoxderLE5hKbP23uwiCy7KJoSQKFgmFOYAuspDhlhzZk-PQqXYsbbzdZJywGwzJ65ppBHKUBaVg.js:591:777)"
+}

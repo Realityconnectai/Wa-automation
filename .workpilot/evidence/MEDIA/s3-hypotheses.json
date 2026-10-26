@@ -1,0 +1,26 @@
+{
+  "stage": "S3",
+  "timestamp": "2026-10-26T11:02:00+05:30",
+  "hypotheses_evaluation": [
+    {
+      "hypothesis": "H1: MediaData internal property collision (__x_id, id, parent, collection) in whatsapp-web.js Utils.js spreads into outgoing message, crashing WhatsApp Web getter memoization.",
+      "status": "CONFIRMED",
+      "experiment": "scripts/media-isolation.js ran matrix comparing unpatched vs patched spread. Every unpatched media case crashed with 'Data passed to getter must include an id property...'. Every patched case passed cleanly."
+    },
+    {
+      "hypothesis": "H2: Recipient is a @lid stored as a phone number causing the crash.",
+      "status": "RULED_OUT_AS_ROOT_CAUSE",
+      "experiment": "In S2 matrix, both @lid and @c.us experienced the exact same getter crash on the original media path. However, bidirectional LID resolution is retained for delivery reliability."
+    },
+    {
+      "hypothesis": "H3: Undefined/null keys leaking in options object.",
+      "status": "CONFIRMED_CONTRIBUTOR",
+      "experiment": "Dirty options containing undefined/null keys caused additional instability; stripping clean options is verified in test 7b."
+    },
+    {
+      "hypothesis": "H4: Media file empty or bad source URL.",
+      "status": "RULED_OUT_FOR_THIS_FAILURE",
+      "experiment": "Asset 1 exists on disk, size 3354244 bytes with valid %PDF header. Addressed permanently via S5 DB-backed storage."
+    }
+  ]
+}

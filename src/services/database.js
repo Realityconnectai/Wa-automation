@@ -2502,6 +2502,10 @@ module.exports = {
     stopPersistence,
     forcePersist,
     transaction,
+    runSql,
+    query,
+    queryGet,
+    queryAll,
     // Users / accounts
     getUserByEmail,
     getUserById,

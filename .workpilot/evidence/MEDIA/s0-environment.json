@@ -1,0 +1,15 @@
+{
+  "stage": "S0",
+  "timestamp": "2026-10-26T10:59:00+05:30",
+  "whatsapp_web_js_installed": "1.34.7",
+  "whatsapp_web_js_package_json": "^1.34.7",
+  "whatsapp_web_js_lockfile": "1.34.7",
+  "puppeteer_version": "24.38.0",
+  "whatsapp_web_version_live": "2.3000.1051690951",
+  "webVersionCache": { "type": "none" },
+  "node_process_start": "2026-10-26T01:10:04",
+  "patch_wwebjs_file_time": "2026-10-25T23:42:31",
+  "patch_verified_in_running_browser": true,
+  "copies_of_whatsapp_web_js": 1,
+  "patch_assessment": "The earlier patch (if (!message.id) message.id = newMsgKey;) was proven active in the running browser, but was completely insufficient. It failed because mediaData instance properties (__x_id, parent, collection) leaked via ...mediaOptions, and mediaData.id ('1'/'2') is truthy so !message.id was false. Furthermore, message.__x_id crashed WhatsApp Web's internal memoization getter."
+}
