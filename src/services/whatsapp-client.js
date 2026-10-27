@@ -294,7 +294,7 @@ const MAX_CRASHES_BEFORE_GIVING_UP = 10;
 
 function scheduleRestart(userId, baseDelayMs = 8000) {
     const s = getSession(userId);
-    if (s.destroyed) return; // deliberately torn down; do not resurrect
+    if (s.destroyed || s.userDisconnected) return; // deliberately torn down or disconnected; do not resurrect
     clearTimers(s);
     s.isConnected    = false;
     s.isInitializing = false;
@@ -738,6 +738,11 @@ function attachHandlers(userId, s, client) {
         s.currentQR      = null;
         clearTimers(s);
 
+        if (s.userDisconnected || s.destroyed) {
+            console.log(`ℹ️ [user ${userId}] Client disconnected following manual action — no auto-reconnect.`);
+            return;
+        }
+
         if (reason === 'LOGOUT') {
             s.userDisconnected = true;
             s.lastError = 'WhatsApp was logged out from the phone.';
@@ -764,18 +769,51 @@ function attachHandlers(userId, s, client) {
         console.error(`❌ [user ${userId}] WhatsApp client error:`, msg.split('\n')[0]);
     });
 
+const recentInboundMsgIds = new Map();
+function isDuplicateInboundMsg(msgId) {
+    if (!msgId) return false;
+    const now = Date.now();
+    if (recentInboundMsgIds.size > 2000) {
+        for (const [id, ts] of recentInboundMsgIds) {
+            if (now - ts > 300000) recentInboundMsgIds.delete(id);
+        }
+    }
+    if (recentInboundMsgIds.has(msgId)) return true;
+    recentInboundMsgIds.set(msgId, now);
+    return false;
+}
+
+function maskPhone(phone) {
+    const s = String(phone || '');
+    if (s.length <= 8) return '***';
+    return `${s.slice(0, 4)}****${s.slice(-4)}`;
+}
+
     // ── Incoming message ─────────────────────────────────────
     client.on('message', async msg => {
         try {
-            if (msg.isGroupMsg || msg.isStatus || msg.from.endsWith('@g.us') || msg.from.endsWith('@broadcast')) return;
+            const msgId = msg.id?._serialized || null;
+            const rawFrom = String(msg.from || '');
+            const msgType = msg.type || (msg.hasMedia ? 'media' : 'text');
+
+            if (msg.isGroupMsg || msg.isStatus || rawFrom.endsWith('@g.us') || rawFrom.endsWith('@broadcast')) {
+                return;
+            }
             if (msg.fromMe) return;
+
+            if (msgId && isDuplicateInboundMsg(msgId)) {
+                console.log(`[STAGE:DROP_DUP] [user ${userId}] Dropping duplicate inbound message ${msgId}`);
+                return;
+            }
 
             // Extract sender address. For modern multi-device WhatsApp, msg.from
             // may be an LID (<digits>@lid). If so, resolve the actual phone number
             // from contact metadata so subsequent sends/CRM lookup use the E.164 number.
-            const rawFrom = String(msg.from || '');
             let phone = rawFrom.split('@')[0].replace(/\D/g, '');
-            if (!/^\d{7,15}$/.test(phone)) return;
+            if (!/^\d{7,15}$/.test(phone)) {
+                console.log(`[STAGE:DROP_INVALID_PHONE] [user ${userId}] Invalid phone from ${maskPhone(rawFrom)}`);
+                return;
+            }
 
             // Mark the session as active so the hibernation timer is re-armed.
             s.lastActivityAt = Date.now();
@@ -802,6 +840,7 @@ function attachHandlers(userId, s, client) {
             // 'media_ack_reply' setting (default: empty = no reply).
             if (msg.hasMedia || !msg.body || msg.body.trim() === '') {
                 if (msg.hasMedia) {
+                    console.log(`[STAGE:MEDIA_MSG] [user ${userId}] id=${msgId || 'none'} type=${msgType} from=${maskPhone(phone)}`);
                     // Derive a safe description from message metadata only.
                     // Never download the file here — that would block the
                     // event loop for large files and is unnecessary for logging.
@@ -854,16 +893,19 @@ function attachHandlers(userId, s, client) {
                 return;
             }
 
+            console.log(`[STAGE:TEXT_INBOUND] [user ${userId}] id=${msgId || 'none'} from=${maskPhone(phone)} chars=${msg.body.length}`);
+            console.log(`[STAGE:CALL_CHATBOT] [user ${userId}] id=${msgId || 'none'} phone=${maskPhone(phone)}`);
             await Promise.race([
                 processMessage(userId, phone, msg.body, contactName, client, msg),
                 new Promise((_, rej) => setTimeout(() => rej(new Error('processMessage timeout after 90s')), 90000))
             ]);
+            console.log(`[STAGE:CHATBOT_RESOLVED] [user ${userId}] id=${msgId || 'none'}`);
         } catch (error) {
             // Swallowed on purpose, and only here: an inbound message handler
             // rejecting would be an unhandledRejection, which server.js
             // treats as fatal — one malformed message would restart the
             // process and disconnect every other tenant.
-            console.error(`   ❌ [user ${userId}] message handler error (non-fatal):`, error.message?.split('\n')[0]);
+            console.error(`❌ [STAGE:HANDLER_ERROR] [user ${userId}] message handler error (non-fatal):`, error.message?.split('\n')[0]);
         }
     });
 
@@ -907,6 +949,8 @@ async function destroyClientForUser(userId, { wipeAuth = false } = {}) {
     s.userDisconnected = true;
     s.isHibernated = false;
     clearTimers(s);
+    const qIdx = initQueue.findIndex(item => item.userId === userId);
+    if (qIdx !== -1) initQueue.splice(qIdx, 1);
     s.isConnected = false;
     s.isInitializing = false;
     s.currentQR = null;
@@ -1121,7 +1165,7 @@ function getStatus(userId) {
     } else if (s.isInitializing) {
         state = 'connecting';
     } else if (s.userDisconnected) {
-        state = 'logged_out';
+        state = 'disconnected';
     } else if (s.lastError) {
         state = 'error';
     }
@@ -1375,7 +1419,8 @@ module.exports = {
     authDataPath,
     MAX_CONCURRENT_SESSIONS,
     MAX_SSE_CLIENTS_PER_USER,
-    MAX_SSE_CLIENTS_TOTAL
+    MAX_SSE_CLIENTS_TOTAL,
+    _clearRecentInboundMsgIdsForTesting: () => recentInboundMsgIds.clear()
 };
 
 

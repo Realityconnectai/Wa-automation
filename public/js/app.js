@@ -4183,12 +4183,12 @@ function startStatusPolling() {
                 applyConnectionState({ type: 'error', data: s.error });
             } else if (s.state === 'reconnecting') {
                 applyConnectionState({ type: 'reconnecting', error: s.error });
-            } else if (s.state === 'logged_out' || s.disconnected) {
+            } else if (s.state === 'logged_out') {
                 applyConnectionState({ type: 'logged_out', error: s.error });
+            } else if (s.state === 'disconnected' || s.disconnected || !s.started) {
+                applyConnectionState({ type: 'disconnected' });
             } else if (s.initializing || s.state === 'connecting') {
                 applyConnectionState({ type: 'loading' });
-            } else if (!s.started) {
-                applyConnectionState({ type: 'disconnected' });
             }
         } catch (e) {
             // API unreachable — keep polling silently

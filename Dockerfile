@@ -45,6 +45,8 @@ WORKDIR /app
 # package.json actually changes, not on every code edit. No Chromium
 # download happens here now (see ENV lines above), just npm packages.
 COPY package.json package-lock.json* ./
+COPY scripts/ ./scripts/
+COPY patches/ ./patches/
 RUN npm install --omit=dev && npm cache clean --force
 
 COPY . .

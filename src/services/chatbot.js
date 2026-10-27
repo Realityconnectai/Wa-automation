@@ -123,6 +123,8 @@ function ruleMatches(rule, text) {
 
 // ─── Human Simulation (Delay & Typing) ──────────────────────
 async function safeReply(client, phone, responseText, msg = null, userId = null) {
+    if (!responseText || !String(responseText).trim()) return;
+
     // Show typing indicator
     if (msg && client) {
         try {
@@ -138,28 +140,37 @@ async function safeReply(client, phone, responseText, msg = null, userId = null)
     const delayMs = process.env.NODE_ENV === 'test' ? 10 : Math.floor(Math.random() * 1500) + 1500;
     await new Promise(resolve => setTimeout(resolve, delayMs));
 
-    // Send reply — prefer msg.reply() to avoid WhatsApp LID format issues
+    // Send reply — prefer msg.reply() to avoid WhatsApp LID format issues, fallback to active client
     try {
         if (msg && typeof msg.reply === 'function') {
             await msg.reply(responseText);
+            return;
         } else if (client && typeof client.sendMessage === 'function') {
             const chatId = phone.includes('@') ? phone : `${phone}@c.us`;
             await client.sendMessage(chatId, responseText);
+            return;
         } else if (userId) {
             const whatsappClient = require('./whatsapp-client');
             if (typeof whatsappClient.sendText === 'function') {
                 await whatsappClient.sendText(userId, phone, responseText);
+                return;
             }
         }
     } catch (sendErr) {
         console.error('   ❌ Primary reply failed, attempting fallback...', sendErr.message?.split('\n')[0]);
+        if (userId) {
+            try {
+                const whatsappClient = require('./whatsapp-client');
+                if (typeof whatsappClient.sendText === 'function') {
+                    await whatsappClient.sendText(userId, phone, responseText);
+                    return;
+                }
+            } catch (fallbackErr) {
+                console.error('   ❌ Fallback via active client failed:', fallbackErr.message?.split('\n')[0]);
+            }
+        }
         if (client && msg && msg.from && typeof client.sendMessage === 'function') {
             await client.sendMessage(msg.from, responseText);
-        } else if (userId) {
-            const whatsappClient = require('./whatsapp-client');
-            if (typeof whatsappClient.sendText === 'function') {
-                await whatsappClient.sendText(userId, phone, responseText);
-            }
         } else {
             throw sendErr;
         }
@@ -192,11 +203,7 @@ function processMessage(userId, arg2, arg3, arg4 = '', arg5 = null, arg6 = null)
 async function _processMessageInternal(userId, phone, messageText, contactName = '', client = null, msg = null) {
     messageText = messageText || '';
     phone = String(phone || '').replace(/@.*$/, '');
-    // Log without the message body: this runs for every inbound message, and
-    // customer message content in stdout ends up in any log aggregator,
-    // container log, or terminal scrollback. Phone is partially masked for
-    // the same reason.
-    console.log(`🤖 processMessage: user ${userId}, ${maskPhone(phone)} (${messageText.length} chars)`);
+    console.log(`[STAGE:CHATBOT_START] [user ${userId}] ${maskPhone(phone)} (${messageText.length} chars)`);
 
     // Always log incoming message to database
     try {
@@ -221,7 +228,7 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
 
     // ── 0a. Compliance: Inbound STOP / UNSUBSCRIBE Keyword Handling ──
     if (/^(stop|unsubscribe|cancel|opt[-_\s]?out|quit|end)$/i.test(cleanText)) {
-        console.log(`🛑 [user ${userId}] Inbound opt-out request received from ${maskPhone(phone)}`);
+        console.log(`[STAGE:OPT_OUT] 🛑 [user ${userId}] Inbound opt-out from ${maskPhone(phone)}`);
         await setContactOptOut(userId, phone, true, 'Inbound STOP keyword');
         await cancelScheduledMessagesForPhone(userId, phone);
         const optOutReply = "You have been unsubscribed and will not receive further automated messages. Reply START to resubscribe.";
@@ -236,7 +243,7 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
 
     // ── 0b. Compliance: Inbound START / UNSTOP Keyword Handling (Opt back in) ──
     if (/^(start|unstop)$/i.test(cleanText)) {
-        console.log(`🟢 [user ${userId}] Inbound opt-in request received from ${maskPhone(phone)}`);
+        console.log(`[STAGE:OPT_IN] 🟢 [user ${userId}] Inbound opt-in from ${maskPhone(phone)}`);
         await setContactOptOut(userId, phone, false, 'Inbound START keyword');
         const optInReply = "You have been resubscribed to messages. How can we help you today?";
         try {
@@ -251,37 +258,30 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
     // ── 0c. Compliance: If contact has opted out, suppress all automated replies ──
     const optOutStatus = await getContactOptOutStatus(userId, phone);
     if (optOutStatus && optOutStatus.is_opted_out) {
-        console.log(`🔇 [user ${userId}] Message from opted-out contact ${maskPhone(phone)} saved; auto-reply suppressed.`);
+        console.log(`[STAGE:OPTED_OUT_SUPPRESS] 🔇 [user ${userId}] Contact ${maskPhone(phone)} opted out; auto-reply suppressed.`);
         return { replied: false, reason: 'contact_opted_out' };
     }
 
     // ── 0d. Human Takeover / AI Pause Check ──
     if (await isConversationAiPaused(userId, phone)) {
-        console.log(`🧑 [user ${userId}] Human takeover active for ${maskPhone(phone)}: auto-reply paused.`);
+        console.log(`[STAGE:AI_PAUSED] 🧑 [user ${userId}] Human takeover active for ${maskPhone(phone)}: auto-reply paused.`);
         return { replied: false, reason: 'human_takeover' };
     }
 
     if (isRateLimited(userId, phone)) {
-        // Warn-level log with only the last 4 digits — no message body, no full phone.
-        console.warn(`⚠️ [user ${userId}] Rate limit exceeded for ****${String(phone).slice(-4)}: message saved, reply suppressed.`);
+        console.warn(`[STAGE:RATE_LIMITED] ⚠️ [user ${userId}] Rate limit exceeded for ****${String(phone).slice(-4)}: reply suppressed.`);
 
-        // Send at most ONE throttle reply per sender per window.
-        // We check and set throttleReplySentAt before the async send to avoid
-        // a race where two queued messages both pass the check simultaneously.
         const rlKey = `${userId}:${phone}`;
         const now = Date.now();
         const lastThrottle = throttleReplySentAt.get(rlKey) || 0;
         if (now - lastThrottle > RATE_LIMIT_WINDOW_MS) {
             throttleReplySentAt.set(rlKey, now);
             try {
-                // Per-tenant override via settings; fall back to env/default.
                 const customReply = await getSetting(userId, 'chatbot_throttle_reply');
                 const throttleText = (customReply && customReply.trim()) || DEFAULT_THROTTLE_REPLY;
-                await safeReply(client, phone, throttleText, msg);
+                await safeReply(client, phone, throttleText, msg, userId);
                 await logMessage(userId, { phone, contactName, direction: 'outgoing', body: throttleText });
             } catch (throttleErr) {
-                // Non-fatal: the message was already saved; losing the throttle
-                // reply is acceptable.
                 console.warn(`   ⚠️ [user ${userId}] Could not send throttle reply (non-fatal):`, throttleErr.message?.split('\n')[0]);
             }
         }
@@ -290,12 +290,13 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
     }
 
     if (await isOverPlanLimit(userId)) {
-        console.log(`⚠️ Account ${userId} has hit its monthly message limit — skipping auto-reply.`);
+        console.log(`[STAGE:PLAN_LIMIT] ⚠️ Account ${userId} hit monthly message limit — skipping auto-reply.`);
         return { replied: false, reason: 'plan_limit_reached' };
     }
 
     const chatbotEnabled = await getSetting(userId, 'chatbot_enabled');
     if (chatbotEnabled !== 'true') {
+        console.log(`[STAGE:CHATBOT_DISABLED] [user ${userId}] Chatbot disabled for account.`);
         return { replied: false, reason: 'chatbot_disabled' };
     }
 
@@ -304,22 +305,25 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
 
     // ── 0. BROCHURE DROP (rule-based, no AI latency) ──
     // Runs BEFORE AI so real estate asset delivery is near-instant.
-    // inboundReceivedAt is Date.now() at the start of this handler (approximate).
     const brochureDropEnabled = await getSetting(userId, 'brochure_drop_enabled');
     if (brochureDropEnabled !== 'false') {
         try {
             const dropResult = await tryBrochureDrop(
                 userId, phone, contactName, messageText, client, msg, Date.now()
             );
-            if (dropResult.handled) {
+            // If already sent recently within dedupe cooldown, do NOT treat as replied.
+            // Fall through so the sender's follow-up question still gets an AI or rules reply!
+            if (dropResult.handled && dropResult.action !== 'already_sent') {
                 if (dropResult.elapsedMs != null) {
-                    console.log(`📦 Brochure drop: ${dropResult.action} for "${dropResult.projectName || 'N/A'}" in ${dropResult.elapsedMs}ms`);
+                    console.log(`[STAGE:BROCHURE_SENT] 📦 [user ${userId}] Brochure drop: ${dropResult.action} for "${dropResult.projectName || 'N/A'}" in ${dropResult.elapsedMs}ms`);
                 }
                 return { replied: true, rule: 'brochure_drop', ...dropResult };
             }
+            if (dropResult.action === 'already_sent') {
+                console.log(`[STAGE:BROCHURE_DEDUPE_FALLTHROUGH] 📦 [user ${userId}] Brochure already sent to ${maskPhone(phone)} recently — continuing to AI/rules`);
+            }
         } catch (dropErr) {
-            // Non-fatal: fall through to normal chatbot/AI path
-            console.warn('⚠️ Brochure drop failed (non-fatal):', dropErr.message?.split('\n')[0]);
+            console.warn('[STAGE:BROCHURE_ERROR] ⚠️ Brochure drop failed (non-fatal):', dropErr.message?.split('\n')[0]);
         }
     }
 
@@ -329,12 +333,14 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
         const recentHistory = await getConversation(userId, phone, { limit: AI_CONTEXT_MESSAGES });
 
         try {
+            console.log(`[STAGE:AI_PERSONA_START] [user ${userId}] Calling Gemini for ${maskPhone(phone)}...`);
             const aiResponse = await generateReply(userId, aiSystemPrompt, recentHistory, contactName, phone);
-            await safeReply(client, phone, aiResponse, msg);
+            await safeReply(client, phone, aiResponse, msg, userId);
             await logMessage(userId, { phone, contactName, direction: 'outgoing', body: aiResponse });
+            console.log(`[STAGE:AI_PERSONA_SENT] ✅ [user ${userId}] Auto-reply sent to ${maskPhone(phone)} via AI persona.`);
             return { replied: true, rule: 'ai_persona', response: aiResponse };
         } catch (aiErr) {
-            console.warn('⚠️ AI Persona Mode failed (falling back to rules/default reply):', aiErr.message?.split('\n')[0]);
+            console.warn(`[STAGE:AI_PERSONA_FAILED] ⚠️ [user ${userId}] AI Persona Mode failed (falling back to rules/default reply):`, aiErr.message?.split('\n')[0]);
         }
     }
 
@@ -343,7 +349,8 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
     if (awayMode === 'true') {
         const awayMessage = await getSetting(userId, 'away_message');
         if (awayMessage) {
-            await safeReply(client, phone, awayMessage, msg);
+            console.log(`[STAGE:AWAY_MODE_SENT] [user ${userId}] Sending away message to ${maskPhone(phone)}`);
+            await safeReply(client, phone, awayMessage, msg, userId);
             await logMessage(userId, { phone, contactName, direction: 'outgoing', body: awayMessage });
             return { replied: true, rule: 'away_mode', response: awayMessage };
         }
@@ -360,7 +367,8 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
         response = response.replace(/\{name\}/gi, contactName || 'there');
         response = response.replace(/\{phone\}/gi, phone);
 
-        await safeReply(client, phone, response, msg);
+        console.log(`[STAGE:RULE_MATCHED] [user ${userId}] Matched rule "${rule.trigger_keyword}" -> replying`);
+        await safeReply(client, phone, response, msg, userId);
         await logMessage(userId, { phone, contactName, direction: 'outgoing', body: response });
         await incrementRuleHitCount(userId, rule.id);
 
@@ -379,12 +387,14 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
         const recentHistory = await getConversation(userId, phone, { limit: AI_CONTEXT_MESSAGES });
 
         try {
+            console.log(`[STAGE:AI_FALLBACK_START] [user ${userId}] Calling Gemini fallback for ${maskPhone(phone)}...`);
             const aiResponse = await generateReply(userId, aiSystemPrompt, recentHistory, contactName, phone);
-            await safeReply(client, phone, aiResponse, msg);
+            await safeReply(client, phone, aiResponse, msg, userId);
             await logMessage(userId, { phone, contactName, direction: 'outgoing', body: aiResponse });
+            console.log(`[STAGE:AI_FALLBACK_SENT] ✅ [user ${userId}] Reply sent to ${maskPhone(phone)} via AI fallback.`);
             return { replied: true, rule: 'ai_fallback', response: aiResponse };
         } catch (aiErr) {
-            console.warn('⚠️ AI Fallback failed (falling back to default reply):', aiErr.message?.split('\n')[0]);
+            console.warn(`[STAGE:AI_FALLBACK_FAILED] ⚠️ [user ${userId}] AI Fallback failed (falling back to default reply):`, aiErr.message?.split('\n')[0]);
         }
     }
 
@@ -412,11 +422,13 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
     // ── 5. Static Default Reply ──
     const defaultReply = await getSetting(userId, 'default_reply');
     if (defaultReply) {
-        await safeReply(client, phone, defaultReply, msg);
+        console.log(`[STAGE:DEFAULT_REPLY_SENT] [user ${userId}] Sending default reply to ${maskPhone(phone)}`);
+        await safeReply(client, phone, defaultReply, msg, userId);
         await logMessage(userId, { phone, contactName, direction: 'outgoing', body: defaultReply });
         return { replied: true, rule: 'default', response: defaultReply };
     }
 
+    console.log(`[STAGE:NO_MATCH] [user ${userId}] No rules or default reply matched for ${maskPhone(phone)}.`);
     return { replied: false, reason: 'no_match' };
 }
 
