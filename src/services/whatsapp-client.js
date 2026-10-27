@@ -4,7 +4,7 @@ const fs     = require('fs');
 const path   = require('path');
 const { AUTH_ROOT, CACHE_ROOT } = require('../config/paths');
 const { processMessage } = require('./chatbot');
-const { logMessage, updateMessageAckStatus, getSetting } = require('./database');
+const { logMessage, updateMessageAckStatus, getSetting, setSetting } = require('./database');
 
 // ─── Per-user session registry ─────────────────────────────────
 // Each signed-up account gets its own isolated whatsapp-web.js Client,
@@ -104,7 +104,10 @@ function newSessionState() {
         // Hibernation: tracks last message activity to decide when to free Chrome.
         lastActivityAt: Date.now(),
         isHibernated: false,
-        qrTimeout: null
+        qrTimeout: null,
+        staleConnectedSince: null,
+        lastLiveStateCheck: 0,
+        isCheckingLiveState: false
     };
 }
 
@@ -444,6 +447,7 @@ async function initWhatsAppClient(userId, options = {}) {
     const s = getSession(userId);
     s.destroyed = false;
     s.userDisconnected = false;
+    try { await setSetting(userId, 'wa_user_disconnected', 'false'); } catch (_) {}
 
     if (s.isInitializing) {
         if (s.startedAt && Date.now() - s.startedAt > 90000) {
@@ -686,6 +690,7 @@ function attachHandlers(userId, s, client) {
 
         clearTimers(s);
 
+        s.staleConnectedSince = null;
         s.keepAliveTimer = setInterval(async () => {
             try {
                 const state = await Promise.race([
@@ -693,14 +698,18 @@ function attachHandlers(userId, s, client) {
                     new Promise((_, rej) => setTimeout(() => rej(new Error('getState timeout')), 5000))
                 ]);
                 if (state && state !== 'CONNECTED') {
+                    if (!s.staleConnectedSince) s.staleConnectedSince = Date.now();
                     s.nonConnectedCount = (s.nonConnectedCount || 0) + 1;
-                    if (s.nonConnectedCount >= 3) {
-                        console.warn(`⚠️ [user ${userId}] WhatsApp state has been ${state} for 3 checks — scheduling reconnect.`);
+                    if (s.nonConnectedCount >= 2 || (Date.now() - s.staleConnectedSince >= 35000)) {
+                        console.warn(`⚠️ [user ${userId}] WhatsApp state has been ${state} for >=35s — scheduling reconnect.`);
                         s.nonConnectedCount = 0;
+                        s.staleConnectedSince = null;
+                        s.isConnected = false;
                         scheduleRestart(userId, 5000);
                     }
                 } else if (state === 'CONNECTED') {
                     s.nonConnectedCount = 0;
+                    s.staleConnectedSince = null;
                     s.transientKeepAliveFailures = 0;
                 }
             } catch (e) {
@@ -711,14 +720,17 @@ function attachHandlers(userId, s, client) {
                                     msg.includes('detached Frame') ||
                                     msg.includes('Protocol error') ||
                                     msg.includes('Session closed');
+                if (!s.staleConnectedSince) s.staleConnectedSince = Date.now();
                 s.transientKeepAliveFailures = (s.transientKeepAliveFailures || 0) + 1;
-                if (s.transientKeepAliveFailures >= 3) {
+                if (s.transientKeepAliveFailures >= 2 || (Date.now() - s.staleConnectedSince >= 35000)) {
                     s.transientKeepAliveFailures = 0;
-                    console.warn(`⚠️ [user ${userId}] Keep-alive failed 3× in a row (${msg.split('\n')[0]}) — reconnecting.`);
+                    s.staleConnectedSince = null;
+                    s.isConnected = false;
+                    console.warn(`⚠️ [user ${userId}] Keep-alive failed >=35s (${msg.split('\n')[0]}) — reconnecting.`);
                     scheduleRestart(userId, 5000);
                 }
             }
-        }, 30000);
+        }, 15000);
         s.keepAliveTimer.unref?.();
 
         s.watchdogTimer = setInterval(() => {
@@ -796,10 +808,18 @@ function attachHandlers(userId, s, client) {
             const rawFrom = String(msg.from || '');
             const msgType = msg.type || (msg.hasMedia ? 'media' : 'text');
 
-            if (msg.isGroupMsg || msg.isStatus || rawFrom.endsWith('@g.us') || rawFrom.endsWith('@broadcast')) {
+            if (msg.isGroupMsg || rawFrom.endsWith('@g.us')) {
+                console.log(`[STAGE:DROP_GROUP] [user ${userId}] Dropping group message from ${maskPhone(rawFrom)}`);
                 return;
             }
-            if (msg.fromMe) return;
+            if (msg.isStatus || rawFrom.endsWith('@broadcast')) {
+                console.log(`[STAGE:DROP_STATUS] [user ${userId}] Dropping status/broadcast message`);
+                return;
+            }
+            if (msg.fromMe) {
+                console.log(`[STAGE:DROP_FROM_ME] [user ${userId}] Dropping outbound/own message`);
+                return;
+            }
 
             if (msgId && isDuplicateInboundMsg(msgId)) {
                 console.log(`[STAGE:DROP_DUP] [user ${userId}] Dropping duplicate inbound message ${msgId}`);
@@ -948,6 +968,7 @@ async function destroyClientForUser(userId, { wipeAuth = false } = {}) {
     s.destroyed = true;
     s.userDisconnected = true;
     s.isHibernated = false;
+    try { await setSetting(userId, 'wa_user_disconnected', 'true'); } catch (_) {}
     clearTimers(s);
     const qIdx = initQueue.findIndex(item => item.userId === userId);
     if (qIdx !== -1) initQueue.splice(qIdx, 1);
@@ -1155,8 +1176,37 @@ function getStatus(userId) {
         qr: null
     };
 
+    // Decision C6: verify stale connected state with cheap cached check (every 10s max)
+    if (s.isConnected && s.client && !s.isCheckingLiveState) {
+        const now = Date.now();
+        if (now - (s.lastLiveStateCheck || 0) > 10000) {
+            s.isCheckingLiveState = true;
+            Promise.race([
+                s.client.getState(),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 2000))
+            ]).then(liveState => {
+                s.lastLiveStateCheck = Date.now();
+                if (liveState && liveState !== 'CONNECTED') {
+                    if (!s.staleConnectedSince) s.staleConnectedSince = Date.now();
+                } else if (liveState === 'CONNECTED') {
+                    s.staleConnectedSince = null;
+                }
+            }).catch(() => {
+                s.lastLiveStateCheck = Date.now();
+                if (!s.staleConnectedSince) s.staleConnectedSince = Date.now();
+            }).finally(() => {
+                s.isCheckingLiveState = false;
+            });
+        }
+    }
+
+    let isEffectivelyConnected = s.isConnected;
+    if (s.isConnected && s.staleConnectedSince && (Date.now() - s.staleConnectedSince >= 35000)) {
+        isEffectivelyConnected = false;
+    }
+
     let state = 'disconnected';
-    if (s.isConnected) {
+    if (isEffectivelyConnected) {
         state = 'connected';
     } else if (s.currentQR) {
         state = 'qr_ready';
@@ -1166,14 +1216,14 @@ function getStatus(userId) {
         state = 'connecting';
     } else if (s.userDisconnected) {
         state = 'disconnected';
-    } else if (s.lastError) {
+    } else if (s.lastError || (s.isConnected && !isEffectivelyConnected)) {
         state = 'error';
     }
 
     return {
         state,
-        connected: s.isConnected,
-        phone: s.isConnected && s.client?.info ? s.client.info.wid.user : null,
+        connected: isEffectivelyConnected,
+        phone: isEffectivelyConnected && s.client?.info ? s.client.info.wid.user : null,
         started: !!(s.client || s.isInitializing),
         initializing: !!s.isInitializing,
         hibernated: !!s.isHibernated,

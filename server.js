@@ -19,7 +19,7 @@
 require('dotenv').config();
 
 const { createApp } = require('./src/config/app');
-const { initDatabase, closeDatabase, getPersistHealth, listUsers, recoverInterruptedOutreachJobs } = require('./src/services/database');
+const { initDatabase, closeDatabase, getPersistHealth, listUsers, recoverInterruptedOutreachJobs, getSetting } = require('./src/services/database');
 const { initScheduler, stopScheduler, isSchedulerBusy } = require('./src/services/scheduler');
 const { initCalendarSync, stopCalendarSync } = require('./src/services/calendar-sync');
 const { initWhatsAppClient, destroyAllClients } = require('./src/services/whatsapp-client');
@@ -228,6 +228,16 @@ async function resumeExistingSessions() {
             // A suspended or deleted account must not be reconnected — its
             // session folder may still exist on disk.
             if (!activeUserIds.has(userId)) continue;
+
+            // Check if user manually disconnected — do not auto-resume (Decision D7)
+            try {
+                const isDisconnected = await getSetting(userId, 'wa_user_disconnected');
+                if (isDisconnected === 'true') {
+                    console.log(`ℹ️ [user ${userId}] Saved session exists but user manually disconnected — skipping auto-resume.`);
+                    continue;
+                }
+            } catch (_) {}
+
             const sessionPath = path.join(authRoot, dir);
             try {
                 if (fs.existsSync(sessionPath) && fs.readdirSync(sessionPath).length > 0) resumable.push(userId);
