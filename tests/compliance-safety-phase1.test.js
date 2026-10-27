@@ -118,7 +118,7 @@ describe('Phase 1: Safety, Compliance & CRM Gaps', () => {
             // Contact 2: active
             const c2 = await db.createContact(adminA.id, '919876543212', 'Active User', 'Lead');
 
-            // Stub whatsapp-client sendText to prevent real WhatsApp calls
+            // Stub outreach send and sleep to prevent real WhatsApp calls and delays
             const whatsappClient = require('../src/services/whatsapp-client');
             const sentPhones = [];
             const origSendText = whatsappClient.sendText;
@@ -129,6 +129,12 @@ describe('Phase 1: Safety, Compliance & CRM Gaps', () => {
             };
             whatsappClient.sendText = stubSend;
             whatsappClient.sendTextMessage = stubSend;
+            if (typeof outreach.setSendMessageImplementation === 'function') {
+                outreach.setSendMessageImplementation(stubSend);
+            }
+            if (typeof outreach.setSleepImplementation === 'function') {
+                outreach.setSleepImplementation(async () => {});
+            }
 
             try {
                 const job = await outreach.createOutreachJob(adminA.id, {
@@ -160,6 +166,12 @@ describe('Phase 1: Safety, Compliance & CRM Gaps', () => {
             } finally {
                 whatsappClient.sendText = origSendText;
                 whatsappClient.sendTextMessage = origSendTextMessage;
+                if (typeof outreach.setSendMessageImplementation === 'function') {
+                    outreach.setSendMessageImplementation(null);
+                }
+                if (typeof outreach.setSleepImplementation === 'function') {
+                    outreach.setSleepImplementation(null);
+                }
             }
         });
 
