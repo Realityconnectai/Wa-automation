@@ -586,6 +586,26 @@ function resolveMediaType(msgType) {
     }
 }
 
+const recentInboundMsgIds = new Map();
+function isDuplicateInboundMsg(msgId) {
+    if (!msgId) return false;
+    const now = Date.now();
+    if (recentInboundMsgIds.size > 2000) {
+        for (const [id, ts] of recentInboundMsgIds) {
+            if (now - ts > 300000) recentInboundMsgIds.delete(id);
+        }
+    }
+    if (recentInboundMsgIds.has(msgId)) return true;
+    recentInboundMsgIds.set(msgId, now);
+    return false;
+}
+
+function maskPhone(phone) {
+    const s = String(phone || '');
+    if (s.length <= 8) return '***';
+    return `${s.slice(0, 4)}****${s.slice(-4)}`;
+}
+
 function attachHandlers(userId, s, client) {
     // ── QR ──────────────────────────────────────────────────
     client.on('qr', async (qr) => {
@@ -768,26 +788,6 @@ function attachHandlers(userId, s, client) {
         if (ignorable.some(s2 => msg.includes(s2))) return;
         console.error(`❌ [user ${userId}] WhatsApp client error:`, msg.split('\n')[0]);
     });
-
-const recentInboundMsgIds = new Map();
-function isDuplicateInboundMsg(msgId) {
-    if (!msgId) return false;
-    const now = Date.now();
-    if (recentInboundMsgIds.size > 2000) {
-        for (const [id, ts] of recentInboundMsgIds) {
-            if (now - ts > 300000) recentInboundMsgIds.delete(id);
-        }
-    }
-    if (recentInboundMsgIds.has(msgId)) return true;
-    recentInboundMsgIds.set(msgId, now);
-    return false;
-}
-
-function maskPhone(phone) {
-    const s = String(phone || '');
-    if (s.length <= 8) return '***';
-    return `${s.slice(0, 4)}****${s.slice(-4)}`;
-}
 
     // ── Incoming message ─────────────────────────────────────
     client.on('message', async msg => {
@@ -1206,6 +1206,87 @@ function getSessionMetrics() {
     };
 }
 
+function getChromeProcessCount(s) {
+    if (!s) return 0;
+    if (typeof s._mockChromeProcessCount === 'number') {
+        return s._mockChromeProcessCount;
+    }
+    const pid = s.browserPid || (s.client?.pupBrowser?.process ? s.client.pupBrowser.process()?.pid : null);
+    if (!pid || typeof pid !== 'number') return 0;
+    try {
+        process.kill(pid, 0);
+    } catch (_) {
+        return 0;
+    }
+    try {
+        if (process.platform === 'win32') {
+            const { execSync } = require('child_process');
+            const out = execSync(`powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid} or ParentProcessId = ${pid}').Count"`, { encoding: 'utf8', timeout: 3000 });
+            const count = parseInt(out.trim(), 10);
+            return Number.isFinite(count) && count > 0 ? count : 1;
+        } else {
+            const { execSync } = require('child_process');
+            const out = execSync(`pgrep -P ${pid} 2>/dev/null || true`, { encoding: 'utf8', timeout: 2000 });
+            const children = out.trim().split('\n').filter(Boolean);
+            return 1 + children.length;
+        }
+    } catch (_) {
+        return 1;
+    }
+}
+
+async function getDebugState(userId) {
+    const s = getSession(Number(userId), false);
+    const storedState = getStatus(userId);
+    let liveState = null;
+    if (s && s.client && typeof s.client.getState === 'function') {
+        try {
+            liveState = await Promise.race([
+                s.client.getState(),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 2000))
+            ]);
+        } catch (e) {
+            liveState = `ERROR: ${e.message}`;
+        }
+    }
+
+    const rawPhone = s?.client?.info?.wid?.user || storedState.phone || null;
+    const linkedNumber = rawPhone ? maskPhone(rawPhone) : null;
+
+    const messageListeners = s?.client && typeof s.client.listenerCount === 'function'
+        ? s.client.listenerCount('message')
+        : 0;
+    const messageAckListeners = s?.client && typeof s.client.listenerCount === 'function'
+        ? s.client.listenerCount('message_ack')
+        : 0;
+
+    const activeTimers = {
+        keepAlive: !!(s && s.keepAliveTimer),
+        watchdog: !!(s && s.watchdogTimer),
+        initWatchdog: !!(s && s.initWatchdog),
+        qrTimeout: !!(s && s.qrTimeout),
+        restartTimer: !!(s && s.restartTimer),
+        hibernation: !!(s && s.hibernationTimer)
+    };
+
+    const chromeProcessCount = getChromeProcessCount(s);
+
+    return {
+        storedState,
+        liveState,
+        readyFired: !!(s && s.isConnected),
+        linkedNumber,
+        listenerCounts: {
+            message: messageListeners,
+            message_ack: messageAckListeners
+        },
+        activeTimers,
+        userDisconnected: !!(s && s.userDisconnected),
+        isInitializing: !!(s && s.isInitializing),
+        chromeProcessCount
+    };
+}
+
 /**
  * Sends a text message on behalf of one account.
  *
@@ -1411,6 +1492,8 @@ module.exports = {
     getConnectedSession,
     getClient,
     getStatus,
+    getDebugState,
+    getChromeProcessCount,
     getSessionMetrics,
     sendTextMessage,
     sendText: sendTextMessage,

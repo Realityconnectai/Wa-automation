@@ -21,7 +21,7 @@ const {
     getOutreachJobs, countOutreachJobs
 } = require('../services/database');
 
-const { sendTextMessage, getStatus, initWhatsAppClient, destroyClientForUser } = require('../services/whatsapp-client');
+const { sendTextMessage, getStatus, getDebugState, initWhatsAppClient, destroyClientForUser } = require('../services/whatsapp-client');
 const { testMessage } = require('../services/chatbot');
 const { analyzeConversation, analyzeAllConversations } = require('../services/lead-analyzer');
 const { analyzeBusinessProfile, getBusinessInfo } = require('../services/business');
@@ -161,6 +161,18 @@ router.get('/dashboard/stats', asyncHandler(async (req, res) => {
 router.get('/status', (req, res) => {
     res.json({ success: true, data: getStatus(req.user.id) });
 });
+
+router.get('/whatsapp/debug', asyncHandler(async (req, res) => {
+    if (process.env.WA_DEBUG !== 'true') {
+        return res.status(403).json({
+            success: false,
+            error: 'WhatsApp debug endpoint is disabled. Set WA_DEBUG=true to enable.',
+            code: 'DEBUG_DISABLED'
+        });
+    }
+    const data = await getDebugState(req.user.id);
+    res.json({ success: true, data });
+}));
 
 // ─────────────────────────────────────────────────────────────
 //  WHATSAPP CONNECTION (per-account)
