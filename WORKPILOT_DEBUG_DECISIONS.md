@@ -495,6 +495,31 @@ Tested on live WhatsApp Web session across all 7 cases:
 - **Blockers:**
   - Rows Q7, M1, M2, M3 are marked `BLOCKED (LIVE)` pending owner-provided allowlist test numbers (enforcing zero live messages sent to unapproved destinations).
 
+---
+
+### Iteration 8 — 2026-10-28 (Appointment Bug Fixes: Cancellation Idempotency & Reminder Status Visibility)
+- **Target:** Fix two specific appointment bugs (Appointment Cancellation 409 & "Not Scheduled" Reminder Chips)
+- **Branch:** `fix-appointments`
+- **Bug 1 Root Cause & Fix:**
+  - *Root Cause:* Cancelled rows in DB returned `null` from `SELECT ... WHERE status = 'confirmed'`. The endpoint returned 409 Conflict, `app.js` threw an unhandled API error without calling `loadAppointments()`, leaving the UI permanently stale. Additionally, duplicate click listeners on `document` and `#appointmentsBody` caused rapid double-submission on single clicks, triggering 409 on the second call.
+  - *Fix:*
+    1. In `src/services/database.js` / `src/services/availability.js`: wrapped in a PostgreSQL transaction with `SELECT ... FOR UPDATE`. If `row.status === 'cancelled'`, returns `{ ...row, alreadyCancelled: true }`. If confirmed, updates `status = 'cancelled'`, sets `cancelled_at` and `cancelled_by`, and cancels pending reminders. Wrapped `cancelAppointmentEvent` in safe non-fatal try/catch (Calendar API failures never leave the appointment half-cancelled).
+    2. In `src/routes/appointments.js`: returns 404 for missing/other tenant's appointments, and 200 OK for already-cancelled (`alreadyCancelled: true`).
+    3. In `public/js/app.js`: removed duplicate listener, disabled button with `Cancelling…` in-flight, always calls `loadAppointments()` on both success and error, and refreshes the detail modal if open.
+  - *Regression Test:* `tests/appointment-cancel.test.js` (6/6 passing).
+  - *Commit:* `a65f88f`.
+- **Bug 2 Root Cause & Fix:**
+  - *Root Cause:* `scheduled_messages` and `getAppointmentReminders` return objects with property `reminder_type` (`'24h'` and `'2h'`). `app.js` looked for `r.type === '24h'`, which was always `undefined`. Even though reminder rows 36 and 37 were present in PostgreSQL for Appointment #28, the UI evaluated `!r` and rendered "Not Scheduled / No reminder record found" and `24h – 2h –`.
+  - *Fix:*
+    1. In `public/js/app.js`: updated `renderCompactReminders` and `openAppointmentDetailModal` to check `r.reminder_type === '24h' || r.type === '24h'`. Added support for `pending` (Scheduled), `skipped_past` ("Skipped: time already passed"), `skipped_unreachable` ("Skipped: unreachable"), and `cancelled`.
+    2. In `src/services/appointment-reminders.js` & `src/services/database.js`: added deliverability check for unreachable LIDs (`status = 'skipped_unreachable'`), stored past send times as `skipped_past`, enforced unique constraint `WHERE status != 'cancelled'` so retries never duplicate, and updated `cancelAppointmentReminders` to cancel all rows on reschedule.
+    3. Added migration `src/migrations/028_appointment_cancel_and_reminder_statuses.sql` allowing `skipped_past` and `skipped_unreachable` in `scheduled_messages_status_check`.
+    4. Added dry-run backfill script `scripts/backfill-appointment-reminders.js` (default `--dry-run`, requires `--apply` for writes).
+  - *Regression Tests:* `tests/appointment-reminders-pipeline.test.js` (8/8 passing), `tests/appointment-reminders.test.js` (12/12 passing).
+  - *Commit:* `fe08ac6`.
+- **Status:** **VERIFIED & CLOSED** — Both appointment bugs resolved with zero WhatsApp messages sent.
+
+
 
 
 
