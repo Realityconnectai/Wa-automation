@@ -9,6 +9,7 @@ const { scheduleAutoAnalysis } = require('./lead-analyzer');
 const { safeRegexTest } = require('../utils/validate');
 const { conversationQueue } = require('../utils/conversation-queue');
 const { tryBrochureDrop } = require('./brochure-drop');
+const { getLinkingTracker } = require('../utils/wa-linking-logger');
 
 // ─── Anti-Ban Rate Limiting ─────────────────────────────────
 const userRateLimits = new Map();
@@ -203,7 +204,9 @@ function processMessage(userId, arg2, arg3, arg4 = '', arg5 = null, arg6 = null)
 async function _processMessageInternal(userId, phone, messageText, contactName = '', client = null, msg = null) {
     messageText = messageText || '';
     phone = String(phone || '').replace(/@.*$/, '');
+    const tracker = getLinkingTracker(userId);
     console.log(`[STAGE:CHATBOT_START] [user ${userId}] ${maskPhone(phone)} (${messageText.length} chars)`);
+    tracker.onInboundStage('CHATBOT_START', `${maskPhone(phone)} (${messageText.length} chars)`);
 
     // Always log incoming message to database
     try {
@@ -229,6 +232,7 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
     // ── 0a. Compliance: Inbound STOP / UNSUBSCRIBE Keyword Handling ──
     if (/^(stop|unsubscribe|cancel|opt[-_\s]?out|quit|end)$/i.test(cleanText)) {
         console.log(`[STAGE:OPT_OUT] 🛑 [user ${userId}] Inbound opt-out from ${maskPhone(phone)}`);
+        tracker.onInboundStage('OPT_OUT', maskPhone(phone));
         await setContactOptOut(userId, phone, true, 'Inbound STOP keyword');
         await cancelScheduledMessagesForPhone(userId, phone);
         const optOutReply = "You have been unsubscribed and will not receive further automated messages. Reply START to resubscribe.";
@@ -244,6 +248,7 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
     // ── 0b. Compliance: Inbound START / UNSTOP Keyword Handling (Opt back in) ──
     if (/^(start|unstop)$/i.test(cleanText)) {
         console.log(`[STAGE:OPT_IN] 🟢 [user ${userId}] Inbound opt-in from ${maskPhone(phone)}`);
+        tracker.onInboundStage('OPT_IN', maskPhone(phone));
         await setContactOptOut(userId, phone, false, 'Inbound START keyword');
         const optInReply = "You have been resubscribed to messages. How can we help you today?";
         try {
@@ -259,17 +264,20 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
     const optOutStatus = await getContactOptOutStatus(userId, phone);
     if (optOutStatus && optOutStatus.is_opted_out) {
         console.log(`[STAGE:OPTED_OUT_SUPPRESS] 🔇 [user ${userId}] Contact ${maskPhone(phone)} opted out; auto-reply suppressed.`);
+        tracker.onInboundStage('OPTED_OUT_SUPPRESS', maskPhone(phone));
         return { replied: false, reason: 'contact_opted_out' };
     }
 
     // ── 0d. Human Takeover / AI Pause Check ──
     if (await isConversationAiPaused(userId, phone)) {
         console.log(`[STAGE:AI_PAUSED] 🧑 [user ${userId}] Human takeover active for ${maskPhone(phone)}: auto-reply paused.`);
+        tracker.onInboundStage('AI_PAUSED', maskPhone(phone));
         return { replied: false, reason: 'human_takeover' };
     }
 
     if (isRateLimited(userId, phone)) {
         console.warn(`[STAGE:RATE_LIMITED] ⚠️ [user ${userId}] Rate limit exceeded for ****${String(phone).slice(-4)}: reply suppressed.`);
+        tracker.onInboundStage('RATE_LIMITED', maskPhone(phone));
 
         const rlKey = `${userId}:${phone}`;
         const now = Date.now();
@@ -291,12 +299,14 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
 
     if (await isOverPlanLimit(userId)) {
         console.log(`[STAGE:PLAN_LIMIT] ⚠️ Account ${userId} hit monthly message limit — skipping auto-reply.`);
+        tracker.onInboundStage('PLAN_LIMIT');
         return { replied: false, reason: 'plan_limit_reached' };
     }
 
     const chatbotEnabled = await getSetting(userId, 'chatbot_enabled');
     if (chatbotEnabled !== 'true') {
         console.log(`[STAGE:CHATBOT_DISABLED] [user ${userId}] Chatbot disabled for account.`);
+        tracker.onInboundStage('CHATBOT_DISABLED');
         return { replied: false, reason: 'chatbot_disabled' };
     }
 
@@ -317,13 +327,16 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
                 if (dropResult.elapsedMs != null) {
                     console.log(`[STAGE:BROCHURE_SENT] 📦 [user ${userId}] Brochure drop: ${dropResult.action} for "${dropResult.projectName || 'N/A'}" in ${dropResult.elapsedMs}ms`);
                 }
+                tracker.onInboundStage('BROCHURE_SENT', `${dropResult.action} for "${dropResult.projectName || 'N/A'}"`);
                 return { replied: true, rule: 'brochure_drop', ...dropResult };
             }
             if (dropResult.action === 'already_sent') {
                 console.log(`[STAGE:BROCHURE_DEDUPE_FALLTHROUGH] 📦 [user ${userId}] Brochure already sent to ${maskPhone(phone)} recently — continuing to AI/rules`);
+                tracker.onInboundStage('BROCHURE_DEDUPE_FALLTHROUGH', maskPhone(phone));
             }
         } catch (dropErr) {
             console.warn('[STAGE:BROCHURE_ERROR] ⚠️ Brochure drop failed (non-fatal):', dropErr.message?.split('\n')[0]);
+            tracker.onInboundStage('BROCHURE_ERROR', dropErr.message?.split('\n')[0]);
         }
     }
 
@@ -334,13 +347,16 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
 
         try {
             console.log(`[STAGE:AI_PERSONA_START] [user ${userId}] Calling Gemini for ${maskPhone(phone)}...`);
+            tracker.onInboundStage('AI_PERSONA_START', maskPhone(phone));
             const aiResponse = await generateReply(userId, aiSystemPrompt, recentHistory, contactName, phone);
             await safeReply(client, phone, aiResponse, msg, userId);
             await logMessage(userId, { phone, contactName, direction: 'outgoing', body: aiResponse });
             console.log(`[STAGE:AI_PERSONA_SENT] ✅ [user ${userId}] Auto-reply sent to ${maskPhone(phone)} via AI persona.`);
+            tracker.onInboundStage('AI_PERSONA_SENT', maskPhone(phone));
             return { replied: true, rule: 'ai_persona', response: aiResponse };
         } catch (aiErr) {
             console.warn(`[STAGE:AI_PERSONA_FAILED] ⚠️ [user ${userId}] AI Persona Mode failed (falling back to rules/default reply):`, aiErr.message?.split('\n')[0]);
+            tracker.onInboundStage('AI_PERSONA_FAILED', aiErr.message?.split('\n')[0]);
         }
     }
 
@@ -350,6 +366,7 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
         const awayMessage = await getSetting(userId, 'away_message');
         if (awayMessage) {
             console.log(`[STAGE:AWAY_MODE_SENT] [user ${userId}] Sending away message to ${maskPhone(phone)}`);
+            tracker.onInboundStage('AWAY_MODE_SENT', maskPhone(phone));
             await safeReply(client, phone, awayMessage, msg, userId);
             await logMessage(userId, { phone, contactName, direction: 'outgoing', body: awayMessage });
             return { replied: true, rule: 'away_mode', response: awayMessage };
@@ -368,6 +385,7 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
         response = response.replace(/\{phone\}/gi, phone);
 
         console.log(`[STAGE:RULE_MATCHED] [user ${userId}] Matched rule "${rule.trigger_keyword}" -> replying`);
+        tracker.onInboundStage('RULE_MATCHED', `keyword="${rule.trigger_keyword}"`);
         await safeReply(client, phone, response, msg, userId);
         await logMessage(userId, { phone, contactName, direction: 'outgoing', body: response });
         await incrementRuleHitCount(userId, rule.id);
@@ -388,13 +406,16 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
 
         try {
             console.log(`[STAGE:AI_FALLBACK_START] [user ${userId}] Calling Gemini fallback for ${maskPhone(phone)}...`);
+            tracker.onInboundStage('AI_FALLBACK_START', maskPhone(phone));
             const aiResponse = await generateReply(userId, aiSystemPrompt, recentHistory, contactName, phone);
             await safeReply(client, phone, aiResponse, msg, userId);
             await logMessage(userId, { phone, contactName, direction: 'outgoing', body: aiResponse });
             console.log(`[STAGE:AI_FALLBACK_SENT] ✅ [user ${userId}] Reply sent to ${maskPhone(phone)} via AI fallback.`);
+            tracker.onInboundStage('AI_FALLBACK_SENT', maskPhone(phone));
             return { replied: true, rule: 'ai_fallback', response: aiResponse };
         } catch (aiErr) {
             console.warn(`[STAGE:AI_FALLBACK_FAILED] ⚠️ [user ${userId}] AI Fallback failed (falling back to default reply):`, aiErr.message?.split('\n')[0]);
+            tracker.onInboundStage('AI_FALLBACK_FAILED', aiErr.message?.split('\n')[0]);
         }
     }
 
@@ -411,6 +432,7 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
                     const reply = `We'd love to schedule an appointment with you! 📅 Here are our upcoming available slots:\n\n${slotOptions}\n\nPlease reply with your preferred slot number or time to confirm!`;
                     await safeReply(client, phone, reply, msg, userId);
                     await logMessage(userId, { phone, contactName, direction: 'outgoing', body: reply });
+                    tracker.onInboundStage('APPOINTMENT_FALLBACK_SENT', maskPhone(phone));
                     return { replied: true, rule: 'appointment_slots_fallback', response: reply };
                 }
             }
@@ -423,12 +445,14 @@ async function _processMessageInternal(userId, phone, messageText, contactName =
     const defaultReply = await getSetting(userId, 'default_reply');
     if (defaultReply) {
         console.log(`[STAGE:DEFAULT_REPLY_SENT] [user ${userId}] Sending default reply to ${maskPhone(phone)}`);
+        tracker.onInboundStage('DEFAULT_REPLY_SENT', maskPhone(phone));
         await safeReply(client, phone, defaultReply, msg, userId);
         await logMessage(userId, { phone, contactName, direction: 'outgoing', body: defaultReply });
         return { replied: true, rule: 'default', response: defaultReply };
     }
 
     console.log(`[STAGE:NO_MATCH] [user ${userId}] No rules or default reply matched for ${maskPhone(phone)}.`);
+    tracker.onInboundStage('NO_MATCH', maskPhone(phone));
     return { replied: false, reason: 'no_match' };
 }
 

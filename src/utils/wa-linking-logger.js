@@ -25,6 +25,21 @@ function hashQR(qrStr) {
     return crypto.createHash('sha256').update(qrStr).digest('hex').slice(0, 12);
 }
 
+function maskPhone(phone) {
+    const s = String(phone || '');
+    if (s.length <= 8) return '***';
+    return `${s.slice(0, 4)}****${s.slice(-4)}`;
+}
+
+function getFromShape(rawFrom) {
+    const s = String(rawFrom || '');
+    if (s.endsWith('@c.us')) return '@c.us';
+    if (s.endsWith('@lid')) return '@lid';
+    if (s.endsWith('@g.us')) return '@g.us';
+    if (s.endsWith('@broadcast')) return '@broadcast';
+    return 'other';
+}
+
 class LinkingTracker {
     constructor(userId) {
         this.userId = Number(userId);
@@ -34,6 +49,13 @@ class LinkingTracker {
         this.currentQRHash = null;
         this.lastEvent = null;
         this.lastEventAt = null;
+        this.inboundEventCount = 0;
+        this.lastInboundEventAt = null;
+        this.lastInboundStage = null;
+        this.lastInboundReason = null;
+        this.lastFrameNavigationAt = null;
+        this.readyAt = null;
+        this.clientGeneration = 0;
         this.logFile = path.join(LOGS_DIR, `wa-linking-${this.userId}.log`);
         ensureLogDir();
     }
@@ -45,6 +67,7 @@ class LinkingTracker {
         this.currentQRHash = null;
         this.lastEvent = null;
         this.lastEventAt = null;
+        this.clientGeneration++;
     }
 
     log(stage, details = '') {
@@ -72,6 +95,49 @@ class LinkingTracker {
         this.lastQRAt = now;
         this.currentQRHash = hashQR(qrStr);
         this.log('QR', `count=${this.qrCounter} sec_since_prev=${secSincePrev}s hash=${this.currentQRHash}`);
+    }
+
+    onReady(phone) {
+        this.readyAt = Date.now();
+        const masked = maskPhone(phone);
+        this.log('READY', `phone=${masked}`);
+    }
+
+    onFrameNavigated(url = '') {
+        this.lastFrameNavigationAt = Date.now();
+        let safeUrl = url;
+        try {
+            const u = new URL(url);
+            safeUrl = `${u.origin}${u.pathname}`;
+        } catch (_) {
+            safeUrl = String(url).split('?')[0];
+        }
+        this.log('PAGE_FRAMENAVIGATED', `url="${safeUrl}"`);
+    }
+
+    onInboundEvent(event, meta = {}) {
+        this.inboundEventCount++;
+        this.lastInboundEventAt = Date.now();
+        this.lastInboundStage = meta.stage || event;
+        this.lastInboundReason = meta.reason || null;
+
+        const id = meta.id || 'none';
+        const type = meta.type || 'text';
+        const fromMe = meta.fromMe ? 'true' : 'false';
+        const isGroup = meta.isGroup ? 'true' : 'false';
+        const isStatus = meta.isStatus ? 'true' : 'false';
+        const shape = meta.fromShape || 'other';
+        const from = meta.maskedFrom || 'unknown';
+        const stage = meta.stage || event;
+        const reason = meta.reason ? ` reason="${meta.reason}"` : '';
+
+        this.log(`INBOUND_${event.toUpperCase()}`, `id=${id} type=${type} fromMe=${fromMe} isGroup=${isGroup} isStatus=${isStatus} shape=${shape} from=${from} stage=${stage}${reason}`);
+    }
+
+    onInboundStage(stage, reason = '') {
+        this.lastInboundStage = stage;
+        this.lastInboundReason = reason || null;
+        this.log(`INBOUND_STAGE:${stage}`, reason ? `reason="${reason}"` : '');
     }
 
     logTimer(timerName, action, details = '') {
@@ -131,7 +197,29 @@ function attachPageDiagnostics(page, tracker) {
             tracker.log('WA_WEB_VERSION', `version=${waVer}`);
         } catch (_) {}
     });
+
+    page.on('framenavigated', frame => {
+        try {
+            // Main frame navigation only to avoid iframe noise
+            if (!frame.parentFrame || frame === page.mainFrame()) {
+                tracker.onFrameNavigated(frame.url());
+            }
+        } catch (_) {}
+    });
+
+    page.on('domcontentloaded', () => {
+        tracker.log('PAGE_DOMCONTENTLOADED');
+    });
+
+    page.on('close', () => {
+        tracker.log('PAGE_CLOSE');
+    });
+
+    page.on('crash', () => {
+        tracker.log('PAGE_CRASH');
+    });
 }
+
 
 const { LocalAuth } = require('whatsapp-web.js');
 
@@ -177,6 +265,8 @@ module.exports = {
     getLinkingTracker,
     attachPageDiagnostics,
     InstrumentedLocalAuth,
-    hashQR
+    hashQR,
+    maskPhone,
+    getFromShape
 };
 

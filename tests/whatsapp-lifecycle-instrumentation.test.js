@@ -53,7 +53,14 @@ describe('Phase A: WhatsApp Lifecycle Instrumentation', () => {
         expect(debug.liveState).toBeNull();
         expect(debug.readyFired).toBe(false);
         expect(debug.linkedNumber).toBeNull();
-        expect(debug.listenerCounts).toEqual({ message: 0, message_ack: 0 });
+        expect(debug.listenerCounts).toEqual({ message: 0, message_create: 0, message_ack: 0 });
+        expect(debug.inboundEventCount).toBe(0);
+        expect(debug.lastInboundEventAt).toBeNull();
+        expect(debug.lastInboundStage).toBeNull();
+        expect(debug.lastInboundReason).toBeNull();
+        expect(debug.lastFrameNavigationAt).toBeNull();
+        expect(debug.readyAt).toBeNull();
+        expect(typeof debug.clientGeneration).toBe('number');
         expect(debug.activeTimers).toEqual({
             keepAlive: false,
             watchdog: false,
@@ -82,7 +89,9 @@ describe('Phase A: WhatsApp Lifecycle Instrumentation', () => {
         expect(debug.readyFired).toBe(true);
         expect(debug.linkedNumber).toBe('9198****3210');
         expect(debug.listenerCounts.message).toBe(1);
+        expect(debug.listenerCounts.message_create).toBe(1);
         expect(debug.listenerCounts.message_ack).toBe(1);
+        expect(debug.readyAt).not.toBeNull();
         expect(debug.activeTimers.keepAlive).toBe(true);
         expect(debug.activeTimers.watchdog).toBe(true);
     });
@@ -112,6 +121,14 @@ describe('Phase A: WhatsApp Lifecycle Instrumentation', () => {
         expect(resAdmin.body.success).toBe(true);
         expect(resAdmin.body.data.linkedNumber).toBe('9198****3210');
         expect(resAdmin.body.data.liveState).toBe('CONNECTED');
+        expect(resAdmin.body.data).toHaveProperty('inboundEventCount');
+        expect(resAdmin.body.data).toHaveProperty('lastInboundEventAt');
+        expect(resAdmin.body.data).toHaveProperty('lastInboundStage');
+        expect(resAdmin.body.data).toHaveProperty('lastInboundReason');
+        expect(resAdmin.body.data).toHaveProperty('lastFrameNavigationAt');
+        expect(resAdmin.body.data).toHaveProperty('readyAt');
+        expect(resAdmin.body.data).toHaveProperty('clientGeneration');
+        expect(resAdmin.body.data.listenerCounts).toEqual({ message: 1, message_create: 1, message_ack: 1 });
         expect(resAdmin.body.data).toHaveProperty('lastEvent');
         expect(resAdmin.body.data).toHaveProperty('lastEventAgeSec');
         expect(resAdmin.body.data).toHaveProperty('currentQRHash');

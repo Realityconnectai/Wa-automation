@@ -5,7 +5,7 @@ const path   = require('path');
 const { AUTH_ROOT, CACHE_ROOT } = require('../config/paths');
 const { processMessage } = require('./chatbot');
 const { logMessage, updateMessageAckStatus, getSetting, setSetting } = require('./database');
-const { getLinkingTracker, InstrumentedLocalAuth } = require('../utils/wa-linking-logger');
+const { getLinkingTracker, InstrumentedLocalAuth, getFromShape } = require('../utils/wa-linking-logger');
 
 let wwebjsVersion = 'unknown';
 try { wwebjsVersion = require('whatsapp-web.js/package.json').version; } catch (_) {}
@@ -724,7 +724,7 @@ function attachHandlers(userId, s, client) {
     client.on('ready', () => {
         if (s.isConnected) return;
         console.log(`✅ [user ${userId}] WhatsApp Client is READY!`);
-        tracker.log('READY', `phone=${client.info?.wid?.user || 'unknown'}`);
+        tracker.onReady(client.info?.wid?.user || 'unknown');
         s.isConnected    = true;
         s.isInitializing = false;
         s.isHibernated   = false;
@@ -865,28 +865,64 @@ function attachHandlers(userId, s, client) {
         console.error(`❌ [user ${userId}] WhatsApp client error:`, msg.split('\n')[0]);
     });
 
+    // ── Raw message create event (diagnostics & logging) ─────
+    client.on('message_create', (msg) => {
+        try {
+            const msgId = msg?.id?._serialized || null;
+            const rawFrom = String(msg?.from || '');
+            const msgType = msg?.type || (msg?.hasMedia ? 'media' : 'text');
+            const shape = getFromShape(rawFrom);
+            tracker.onInboundEvent('message_create', {
+                id: msgId,
+                type: msgType,
+                fromMe: !!msg?.fromMe,
+                isGroup: !!(msg?.isGroupMsg || rawFrom.endsWith('@g.us')),
+                isStatus: !!(msg?.isStatus || rawFrom.endsWith('@broadcast')),
+                fromShape: shape,
+                maskedFrom: maskPhone(rawFrom),
+                stage: 'received'
+            });
+        } catch (_) {}
+    });
+
     // ── Incoming message ─────────────────────────────────────
     client.on('message', async msg => {
         try {
             const msgId = msg.id?._serialized || null;
             const rawFrom = String(msg.from || '');
             const msgType = msg.type || (msg.hasMedia ? 'media' : 'text');
+            const shape = getFromShape(rawFrom);
+
+            tracker.onInboundEvent('message', {
+                id: msgId,
+                type: msgType,
+                fromMe: !!msg.fromMe,
+                isGroup: !!(msg.isGroupMsg || rawFrom.endsWith('@g.us')),
+                isStatus: !!(msg.isStatus || rawFrom.endsWith('@broadcast')),
+                fromShape: shape,
+                maskedFrom: maskPhone(rawFrom),
+                stage: 'received'
+            });
 
             if (msg.isGroupMsg || rawFrom.endsWith('@g.us')) {
                 console.log(`[STAGE:DROP_GROUP] [user ${userId}] Dropping group message from ${maskPhone(rawFrom)}`);
+                tracker.onInboundStage('DROP_GROUP', `from=${maskPhone(rawFrom)}`);
                 return;
             }
             if (msg.isStatus || rawFrom.endsWith('@broadcast')) {
                 console.log(`[STAGE:DROP_STATUS] [user ${userId}] Dropping status/broadcast message`);
+                tracker.onInboundStage('DROP_STATUS');
                 return;
             }
             if (msg.fromMe) {
                 console.log(`[STAGE:DROP_FROM_ME] [user ${userId}] Dropping outbound/own message`);
+                tracker.onInboundStage('DROP_FROM_ME');
                 return;
             }
 
             if (msgId && isDuplicateInboundMsg(msgId)) {
                 console.log(`[STAGE:DROP_DUP] [user ${userId}] Dropping duplicate inbound message ${msgId}`);
+                tracker.onInboundStage('DROP_DUP', `id=${msgId}`);
                 return;
             }
 
@@ -896,6 +932,7 @@ function attachHandlers(userId, s, client) {
             let phone = rawFrom.split('@')[0].replace(/\D/g, '');
             if (!/^\d{7,15}$/.test(phone)) {
                 console.log(`[STAGE:DROP_INVALID_PHONE] [user ${userId}] Invalid phone from ${maskPhone(rawFrom)}`);
+                tracker.onInboundStage('DROP_INVALID_PHONE', `from=${maskPhone(rawFrom)}`);
                 return;
             }
 
@@ -925,6 +962,7 @@ function attachHandlers(userId, s, client) {
             if (msg.hasMedia || !msg.body || msg.body.trim() === '') {
                 if (msg.hasMedia) {
                     console.log(`[STAGE:MEDIA_MSG] [user ${userId}] id=${msgId || 'none'} type=${msgType} from=${maskPhone(phone)}`);
+                    tracker.onInboundStage('MEDIA_MSG', `id=${msgId || 'none'} type=${msgType} from=${maskPhone(phone)}`);
                     // Derive a safe description from message metadata only.
                     // Never download the file here — that would block the
                     // event loop for large files and is unnecessary for logging.
@@ -978,18 +1016,22 @@ function attachHandlers(userId, s, client) {
             }
 
             console.log(`[STAGE:TEXT_INBOUND] [user ${userId}] id=${msgId || 'none'} from=${maskPhone(phone)} chars=${msg.body.length}`);
+            tracker.onInboundStage('TEXT_INBOUND', `id=${msgId || 'none'} from=${maskPhone(phone)} chars=${msg.body.length}`);
             console.log(`[STAGE:CALL_CHATBOT] [user ${userId}] id=${msgId || 'none'} phone=${maskPhone(phone)}`);
+            tracker.onInboundStage('CALL_CHATBOT', `id=${msgId || 'none'} phone=${maskPhone(phone)}`);
             await Promise.race([
                 processMessage(userId, phone, msg.body, contactName, client, msg),
                 new Promise((_, rej) => setTimeout(() => rej(new Error('processMessage timeout after 90s')), 90000))
             ]);
             console.log(`[STAGE:CHATBOT_RESOLVED] [user ${userId}] id=${msgId || 'none'}`);
+            tracker.onInboundStage('CHATBOT_RESOLVED', `id=${msgId || 'none'}`);
         } catch (error) {
             // Swallowed on purpose, and only here: an inbound message handler
             // rejecting would be an unhandledRejection, which server.js
             // treats as fatal — one malformed message would restart the
             // process and disconnect every other tenant.
             console.error(`❌ [STAGE:HANDLER_ERROR] [user ${userId}] message handler error (non-fatal):`, error.message?.split('\n')[0]);
+            tracker.onInboundStage('HANDLER_ERROR', error.message?.split('\n')[0]);
         }
     });
 
@@ -1005,6 +1047,10 @@ function attachHandlers(userId, s, client) {
     client.on('message_ack', async (msg, ack) => {
         try {
             const waId = msg?.id?._serialized;
+            const rawTo = String(msg?.to || '');
+            const rawFrom = String(msg?.from || '');
+            const shape = getFromShape(rawTo || rawFrom);
+            tracker.log('MESSAGE_ACK', `id=${waId || 'none'} ack=${ack} shape=${shape}`);
             if (!waId || typeof ack !== 'number') return;
             await updateMessageAckStatus(userId, waId, ack);
         } catch (ackErr) {
@@ -1374,6 +1420,9 @@ async function getDebugState(userId) {
     const messageListeners = s?.client && typeof s.client.listenerCount === 'function'
         ? s.client.listenerCount('message')
         : 0;
+    const messageCreateListeners = s?.client && typeof s.client.listenerCount === 'function'
+        ? s.client.listenerCount('message_create')
+        : 0;
     const messageAckListeners = s?.client && typeof s.client.listenerCount === 'function'
         ? s.client.listenerCount('message_ack')
         : 0;
@@ -1401,8 +1450,16 @@ async function getDebugState(userId) {
         linkedNumber,
         listenerCounts: {
             message: messageListeners,
+            message_create: messageCreateListeners,
             message_ack: messageAckListeners
         },
+        inboundEventCount: tracker ? tracker.inboundEventCount : 0,
+        lastInboundEventAt: tracker ? tracker.lastInboundEventAt : null,
+        lastInboundStage: tracker ? tracker.lastInboundStage : null,
+        lastInboundReason: tracker ? tracker.lastInboundReason : null,
+        lastFrameNavigationAt: tracker ? tracker.lastFrameNavigationAt : null,
+        readyAt: tracker ? tracker.readyAt : null,
+        clientGeneration: tracker ? tracker.clientGeneration : 0,
         activeTimers,
         userDisconnected: !!(s && s.userDisconnected),
         isInitializing: !!(s && s.isInitializing),
