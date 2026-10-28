@@ -1240,19 +1240,21 @@ async function cancelScheduledMessage(userId, id) {
 }
 
 async function createAppointmentReminder(userId, appointmentId, phone, body, scheduledAt, reminderType, status = 'pending', errorMessage = null) {
-    if (status === 'skipped') {
+    if (status !== 'pending') {
         const res = await query(
             `INSERT INTO scheduled_messages (user_id, appointment_id, phone, body, scheduled_at, reminder_type, status, error_message)
-             VALUES ($1, $2, $3, $4, $5, $6, 'skipped', $7)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (appointment_id, reminder_type) WHERE status != 'cancelled' AND appointment_id IS NOT NULL
+             DO NOTHING
              RETURNING *`,
-            [userId, appointmentId, phone, body, scheduledAt, reminderType, errorMessage]
+            [userId, appointmentId, phone, body, scheduledAt, reminderType, status, errorMessage]
         );
         return res.rows[0] || null;
     }
     const res = await query(
         `INSERT INTO scheduled_messages (user_id, appointment_id, phone, body, scheduled_at, reminder_type, status)
          VALUES ($1, $2, $3, $4, $5, $6, 'pending')
-         ON CONFLICT (appointment_id, reminder_type) WHERE status = 'pending' AND appointment_id IS NOT NULL
+         ON CONFLICT (appointment_id, reminder_type) WHERE status != 'cancelled' AND appointment_id IS NOT NULL
          DO NOTHING
          RETURNING *`,
         [userId, appointmentId, phone, body, scheduledAt, reminderType]
@@ -1262,7 +1264,7 @@ async function createAppointmentReminder(userId, appointmentId, phone, body, sch
 
 async function cancelAppointmentReminders(userId, appointmentId, client = null) {
     return runSql(
-        "UPDATE scheduled_messages SET status = 'cancelled' WHERE user_id = $1 AND appointment_id = $2 AND status = 'pending'",
+        "UPDATE scheduled_messages SET status = 'cancelled' WHERE user_id = $1 AND appointment_id = $2 AND status != 'cancelled'",
         [userId, appointmentId],
         client
     );

@@ -131,8 +131,59 @@ function buildReminderVars(appointment, { user, timezone, project }) {
 }
 
 /**
+ * Evaluates whether an appointment recipient identifier can be messaged.
+ * Returns { reachable: boolean, reason?: string }.
+ */
+async function checkIdentifierDeliverability(userId, rawPhone) {
+    if (!rawPhone || typeof rawPhone !== 'string') {
+        return { reachable: false, reason: 'Missing phone identifier' };
+    }
+    const clean = rawPhone.trim();
+    if (!clean) {
+        return { reachable: false, reason: 'Empty phone identifier' };
+    }
+
+    const digits = clean.replace(/\D/g, '');
+    if (!digits || /^0+$/.test(digits) || /^910+$/.test(digits)) {
+        return { reachable: false, reason: 'Invalid or dummy phone number' };
+    }
+
+    // Explicit @lid or 14-15 digit multi-device LID starting with 2
+    if (clean.includes('@lid') || (digits.length >= 14 && digits.startsWith('2'))) {
+        let hasResolvableChat = false;
+        try {
+            const whatsappClient = require('./whatsapp-client');
+            const session = whatsappClient.getSession ? whatsappClient.getSession(Number(userId), false) : null;
+            if (session && session.isConnected && session.client) {
+                if (typeof session.client.getContactById === 'function') {
+                    const c = await session.client.getContactById(`${digits}@lid`).catch(() => null);
+                    if (c && (c.number || (c.id && c.id._serialized))) hasResolvableChat = true;
+                }
+                if (!hasResolvableChat && typeof session.client.getChatById === 'function') {
+                    const ch = await session.client.getChatById(`${digits}@lid`).catch(() => null);
+                    if (ch && ch.id && ch.id._serialized) hasResolvableChat = true;
+                }
+            } else {
+                const { queryGet } = require('./db-pool');
+                const contact = await queryGet('SELECT id FROM contacts WHERE user_id = $1 AND (phone = $2 OR phone = $3)', [userId, clean, digits]);
+                if (contact && contact.id) {
+                    hasResolvableChat = true;
+                }
+            }
+        } catch (_) {}
+
+        if (!hasResolvableChat) {
+            return { reachable: false, reason: 'LID identifier has no resolvable chat' };
+        }
+    }
+
+    return { reachable: true };
+}
+
+/**
  * Schedules 24h and 2h reminders for a confirmed upcoming appointment.
- * Overdue or past trigger times are safely skipped.
+ * Overdue or past trigger times are stored as skipped_past.
+ * Unreachable recipient identifiers are stored as skipped_unreachable.
  *
  * @param {number} userId - Tenant owner id
  * @param {object} appointment - Appointment DB record
@@ -169,11 +220,44 @@ async function scheduleAppointmentReminders(userId, appointment, { now = new Dat
     const project = await resolveProjectForAppointment(userId, appointment);
     const vars = buildReminderVars(appointment, { user, timezone, project });
 
-    const scheduled = [];
-
-    // Schedule 24-hour reminder if its scheduled_at is still in the future, else mark skipped
     const template24h = (custom24h && custom24h.trim()) || DEFAULT_TEMPLATES['24h'];
     const body24h = renderReminderText(template24h, vars);
+    const template2h = (custom2h && custom2h.trim()) || DEFAULT_TEMPLATES['2h'];
+    const body2h = renderReminderText(template2h, vars);
+
+    const scheduled = [];
+
+    // Check deliverability of recipient identifier
+    const deliverability = await checkIdentifierDeliverability(userId, appointment.phone);
+    if (!deliverability.reachable) {
+        const [row24, row2] = await Promise.all([
+            createAppointmentReminder(
+                userId,
+                appointment.id,
+                appointment.phone,
+                body24h,
+                target24h,
+                REMINDER_TYPES.HOURS_24,
+                'skipped_unreachable',
+                deliverability.reason || 'Unreachable recipient identifier'
+            ),
+            createAppointmentReminder(
+                userId,
+                appointment.id,
+                appointment.phone,
+                body2h,
+                target2h,
+                REMINDER_TYPES.HOURS_2,
+                'skipped_unreachable',
+                deliverability.reason || 'Unreachable recipient identifier'
+            )
+        ]);
+        if (row24) scheduled.push(row24);
+        if (row2) scheduled.push(row2);
+        return scheduled;
+    }
+
+    // Schedule 24-hour reminder if its scheduled_at is still in the future, else mark skipped_past
     if (target24h.getTime() > currentMs) {
         const row = await createAppointmentReminder(
             userId,
@@ -192,15 +276,13 @@ async function scheduleAppointmentReminders(userId, appointment, { now = new Dat
             body24h,
             target24h,
             REMINDER_TYPES.HOURS_24,
-            'skipped',
-            'Booked less than 24h ahead'
+            'skipped_past',
+            'Time already passed (booked less than 24h ahead)'
         );
         if (row) scheduled.push(row);
     }
 
-    // Schedule 2-hour reminder if its scheduled_at is still in the future, else mark skipped
-    const template2h = (custom2h && custom2h.trim()) || DEFAULT_TEMPLATES['2h'];
-    const body2h = renderReminderText(template2h, vars);
+    // Schedule 2-hour reminder if its scheduled_at is still in the future, else mark skipped_past
     if (target2h.getTime() > currentMs) {
         const row = await createAppointmentReminder(
             userId,
@@ -219,8 +301,8 @@ async function scheduleAppointmentReminders(userId, appointment, { now = new Dat
             body2h,
             target2h,
             REMINDER_TYPES.HOURS_2,
-            'skipped',
-            'Booked less than 2h ahead'
+            'skipped_past',
+            'Time already passed (booked less than 2h ahead)'
         );
         if (row) scheduled.push(row);
     }
@@ -234,13 +316,13 @@ async function scheduleAppointmentReminders(userId, appointment, { now = new Dat
 }
 
 /**
- * Cancels all pending reminders for a given appointment.
+ * Cancels all pending or active reminders for a given appointment.
  */
 async function cancelAppointmentReminders(userId, appointmentId, reason = 'Appointment cancelled') {
     if (!userId || !appointmentId) return;
     const { runSql } = require('./db-pool');
     await runSql(
-        "UPDATE scheduled_messages SET status = 'cancelled', error_message = $1 WHERE user_id = $2 AND appointment_id = $3 AND status = 'pending'",
+        "UPDATE scheduled_messages SET status = 'cancelled', error_message = $1 WHERE user_id = $2 AND appointment_id = $3 AND status != 'cancelled'",
         [reason, userId, appointmentId]
     );
 }

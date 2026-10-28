@@ -3528,8 +3528,8 @@ function renderCompactReminders(reminders) {
     if (!reminders || !reminders.length) {
         return '<span class="text-secondary-sm">None</span>';
     }
-    const r24 = reminders.find(r => r.type === '24h');
-    const r2 = reminders.find(r => r.type === '2h');
+    const r24 = reminders.find(r => (r.reminder_type === '24h' || r.type === '24h'));
+    const r2 = reminders.find(r => (r.reminder_type === '2h' || r.type === '2h'));
 
     const formatChip = (r, label) => {
         if (!r) return `${label} —`;
@@ -3540,11 +3540,14 @@ function renderCompactReminders(reminders) {
         if (r.status === 'sent') {
             return `<span class="text-warning font-bold" title="${label} dispatched (awaiting server message ID)">… ${label}</span>`;
         }
-        if (r.status === 'scheduled') return `<span class="text-primary font-bold" title="${label} scheduled">⏱ ${label}</span>`;
+        if (r.status === 'pending' || r.status === 'scheduled') return `<span class="text-primary font-bold" title="${label} scheduled">⏱ ${label}</span>`;
         if (r.status === 'sending') return `<span class="text-warning font-bold" title="${label} sending">… ${label}</span>`;
         if (r.status === 'failed') return `<span class="text-danger font-bold" title="${label} failed: ${escapeHtml(r.error_message || '')}">⚠ ${label}</span>`;
+        if (r.status === 'skipped_past') return `<span class="text-secondary" title="${label} skipped: time already passed">⊘ ${label} (past)</span>`;
+        if (r.status === 'skipped_unreachable') return `<span class="text-secondary" title="${label} skipped: unreachable identifier (${escapeHtml(r.error_message || '')})">⊘ ${label} (unreachable)</span>`;
         if (r.status === 'skipped') return `<span class="text-secondary" title="${label} skipped: ${escapeHtml(r.error_message || 'Notice period')}">⊘ ${label}</span>`;
-        return `<span class="text-secondary" title="${label} cancelled: ${escapeHtml(r.error_message || 'Cancelled')}">✕ ${label}</span>`;
+        if (r.status === 'cancelled') return `<span class="text-secondary" title="${label} cancelled: ${escapeHtml(r.error_message || 'Cancelled')}">✕ ${label}</span>`;
+        return `<span class="text-secondary">${label} —</span>`;
     };
 
     return `<span class="reminder-compact-indicator font-mono">${formatChip(r24, '24h')} · ${formatChip(r2, '2h')}</span>`;
@@ -3620,8 +3623,8 @@ async function openAppointmentDetailModal(appointmentId) {
         if (subTitleEl) subTitleEl.textContent = `ID: ${appt.id} • ${formatDate(appt.start_at)}`;
 
         const reminders = appt.reminders || [];
-        const r24 = reminders.find(r => r.type === '24h');
-        const r2 = reminders.find(r => r.type === '2h');
+        const r24 = reminders.find(r => (r.reminder_type === '24h' || r.type === '24h'));
+        const r2 = reminders.find(r => (r.reminder_type === '2h' || r.type === '2h'));
 
         const renderReminderCard = (label, r) => {
             if (!r) {
@@ -3636,11 +3639,14 @@ async function openAppointmentDetailModal(appointmentId) {
             }
 
             const statusClassMap = {
+                pending: 'reminder-chip-scheduled',
                 scheduled: 'reminder-chip-scheduled',
                 sending: 'reminder-chip-sending',
                 sent: 'reminder-chip-sent',
                 failed: 'reminder-chip-failed',
                 skipped: 'reminder-chip-skipped',
+                skipped_past: 'reminder-chip-skipped',
+                skipped_unreachable: 'reminder-chip-skipped',
                 cancelled: 'reminder-chip-cancelled'
             };
             const cls = statusClassMap[r.status] || 'reminder-chip-skipped';
@@ -3650,7 +3656,7 @@ async function openAppointmentDetailModal(appointmentId) {
                 statusBadge = `<span class="reminder-chip reminder-chip-sent">${Icon('check-circle', 'icon-inline')}✓ Sent · ${formatDate(r.sent_at)}</span>`;
             } else if (r.status === 'sent') {
                 statusBadge = `<span class="reminder-chip reminder-chip-sending">${Icon('loader', 'icon-inline')}Dispatched (Awaiting ID)</span>`;
-            } else if (r.status === 'scheduled') {
+            } else if (r.status === 'pending' || r.status === 'scheduled') {
                 const targetTime = new Date(r.scheduled_at + (r.scheduled_at.includes('Z') || r.scheduled_at.includes('+') ? '' : 'Z')).getTime();
                 const dueInMins = Math.round((targetTime - Date.now()) / 60000);
                 const hrs = Math.floor(dueInMins / 60);
@@ -3661,6 +3667,10 @@ async function openAppointmentDetailModal(appointmentId) {
                 statusBadge = `<span class="reminder-chip reminder-chip-sending">${Icon('loader', 'icon-inline')}Sending…</span>`;
             } else if (r.status === 'failed') {
                 statusBadge = `<span class="reminder-chip reminder-chip-failed">${Icon('alert-triangle', 'icon-inline')}Failed</span>`;
+            } else if (r.status === 'skipped_past') {
+                statusBadge = `<span class="reminder-chip reminder-chip-skipped">${Icon('slash', 'icon-inline')}Skipped: time already passed</span>`;
+            } else if (r.status === 'skipped_unreachable') {
+                statusBadge = `<span class="reminder-chip reminder-chip-skipped">${Icon('slash', 'icon-inline')}Skipped: unreachable</span>`;
             } else if (r.status === 'skipped') {
                 statusBadge = `<span class="reminder-chip reminder-chip-skipped">${Icon('slash', 'icon-inline')}Skipped</span>`;
             } else if (r.status === 'cancelled') {
@@ -3674,7 +3684,7 @@ async function openAppointmentDetailModal(appointmentId) {
                         ${statusBadge}
                     </div>
                     <div class="reminder-card-time">
-                        Scheduled for: <strong>${formatDate(r.scheduled_at)}</strong> (IST)
+                        ${r.status === 'skipped_past' ? 'Trigger time was: ' : 'Scheduled for: '}<strong>${formatDate(r.scheduled_at)}</strong> (IST)
                     </div>
                     ${r.wa_message_id ? `<div class="text-secondary-sm font-mono mt-4">WA Message ID: ${escapeHtml(r.wa_message_id)}</div>` : ''}
                     ${r.error_message ? `<div class="reminder-card-reason">${escapeHtml(r.error_message)}</div>` : ''}
@@ -3731,8 +3741,8 @@ async function openAppointmentDetailModal(appointmentId) {
             try {
                 const freshAppt = await api(`/api/appointments/${appointmentId}`);
                 const freshReminders = freshAppt.reminders || [];
-                const fr24 = freshReminders.find(r => r.type === '24h');
-                const fr2 = freshReminders.find(r => r.type === '2h');
+                const fr24 = freshReminders.find(r => (r.reminder_type === '24h' || r.type === '24h'));
+                const fr2 = freshReminders.find(r => (r.reminder_type === '2h' || r.type === '2h'));
                 const grid = document.querySelector('#appointmentDetailModalBody .reminder-cards-grid');
                 if (grid) {
                     grid.innerHTML = `

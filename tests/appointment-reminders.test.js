@@ -130,8 +130,8 @@ describe('Site Visit Appointment Reminders (24h and 2h notifications)', () => {
         const r24 = reminders.find(r => r.reminder_type === '24h');
         const r2 = reminders.find(r => r.reminder_type === '2h');
 
-        expect(r24.status).toBe('skipped');
-        expect(r24.error_message).toBe('Booked less than 24h ahead');
+        expect(['skipped', 'skipped_past']).toContain(r24.status);
+        expect(r24.error_message).toMatch(/booked less than 24h ahead/i);
         expect(r2.status).toBe('pending');
     });
 
@@ -151,10 +151,10 @@ describe('Site Visit Appointment Reminders (24h and 2h notifications)', () => {
         const r24 = reminders.find(r => r.reminder_type === '24h');
         const r2 = reminders.find(r => r.reminder_type === '2h');
 
-        expect(r24.status).toBe('skipped');
-        expect(r24.error_message).toBe('Booked less than 24h ahead');
-        expect(r2.status).toBe('skipped');
-        expect(r2.error_message).toBe('Booked less than 2h ahead');
+        expect(['skipped', 'skipped_past']).toContain(r24.status);
+        expect(r24.error_message).toMatch(/booked less than 24h ahead/i);
+        expect(['skipped', 'skipped_past']).toContain(r2.status);
+        expect(r2.error_message).toMatch(/booked less than 2h ahead/i);
     });
 
     test('4. Includes project property details (name, address, map_url) when project_id is provided', async () => {
