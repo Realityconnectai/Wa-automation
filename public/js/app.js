@@ -1766,7 +1766,6 @@ async function loadChatbotRules() {
                     </div>
                 </div>
                 <div class="rule-actions">
-                    <button class="btn btn-sm btn-secondary contact-media-btn" type="button" data-contact-media="${escapeHtml(c.phone)}" aria-label="View received media from ${escapeHtml(c.name || c.phone)}">Media</button>
                     <button
                         class="btn btn-sm btn-secondary"
                         data-action="toggle-rule" data-id="${rule.id}" data-value="${rule.is_active ? 0 : 1}"
@@ -1787,6 +1786,7 @@ async function loadChatbotRules() {
             </div>
         `).join('');
     } catch (err) {
+        console.error('Failed to load chatbot rules:', err);
         hideSkeleton('rulesSkeleton');
         showErrorBanner('chatbotError', 'Failed to load chatbot rules.', loadChatbotRules);
         document.getElementById('rulesList').innerHTML = '';
