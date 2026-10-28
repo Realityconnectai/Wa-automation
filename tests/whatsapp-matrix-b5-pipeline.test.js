@@ -244,7 +244,12 @@ describe('Matrix B5: Message Pipeline Verification', () => {
         // Inbound message to Tenant B
         clientB.emit('message', makeFakeMsg({ id: 'msg_b_1', body: 'Question for Tenant B' }));
 
-        await new Promise(r => setTimeout(r, 150));
+        // Wait for both client replies to resolve asynchronously
+        const start = Date.now();
+        while (Date.now() - start < 2000) {
+            if (clientA.sent.length > 0 && clientB.sent.length > 0) break;
+            await new Promise(r => setTimeout(r, 25));
+        }
 
         // Tenant A replies with Tenant A default reply
         expect(clientA.sent.some(s => s.content === 'Hello from Tenant A!')).toBe(true);
