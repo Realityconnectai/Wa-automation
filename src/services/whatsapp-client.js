@@ -78,6 +78,36 @@ function countActiveSessions() {
  * route parameter in some call paths. Every caller happens to be internal
  * today; this makes it safe regardless of who calls it next.
  */
+/**
+ * Detects post-ready WhatsApp Web reloads and initiates clean session restart.
+ *
+ * WhatsApp Web occasionally reloads its page (~5-6m after initial linking).
+ * Upstream whatsapp-web.js inject() aborts on reloaded pages due to its
+ * _hasSyncedHandled guard, leaving the client in a "zombie CONNECTED" state
+ * where no Store listeners or LoadUtils exist on the reloaded DOM.
+ *
+ * Because session credentials are already saved to disk (.wwebjs_auth/user_X),
+ * triggering a clean restart revives the session via the fast resume path (~15s)
+ * with all message listeners cleanly re-attached.
+ */
+function handlePageNavigation(userId, s, url) {
+    if (!s || s.destroyed || s.userDisconnected || s.restartTimer || !s.isConnected) {
+        return;
+    }
+    // If navigation URL is logout page, let disconnected/logout handler take it
+    if (url && (url.includes('post_logout=1') || url.includes('/logout'))) {
+        return;
+    }
+
+    const tracker = getLinkingTracker(userId);
+    console.warn(`🔄 [user ${userId}] WhatsApp Web reloaded after ready (zombie prevention) — scheduling clean restart.`);
+    tracker.log('RELOAD_DETECTED', `url="${url || ''}" action="scheduleRestart"`);
+
+    s.isConnected = false;
+    clearTimers(s);
+    scheduleRestart(userId, 2000);
+}
+
 function authDataPath(userId) {
     const id = Number(userId);
     if (!Number.isSafeInteger(id) || id <= 0) {
@@ -537,8 +567,9 @@ async function initWhatsAppClient(userId, options = {}) {
     clearStaleLocks(userId);
 
     try {
+        const onNav = (navUrl) => handlePageNavigation(userId, s, navUrl);
         s.client = new Client({
-            authStrategy: new InstrumentedLocalAuth({ dataPath: authDataPath(userId) }, tracker),
+            authStrategy: new InstrumentedLocalAuth({ dataPath: authDataPath(userId) }, tracker, onNav),
             restartOnAuthFail: true,
             takeoverOnConflict: true,
             takeoverTimeoutMs: 0,
@@ -1688,6 +1719,7 @@ module.exports = {
     MAX_CONCURRENT_SESSIONS,
     MAX_SSE_CLIENTS_PER_USER,
     MAX_SSE_CLIENTS_TOTAL,
+    handlePageNavigation,
     _clearRecentInboundMsgIdsForTesting: () => recentInboundMsgIds.clear()
 };
 

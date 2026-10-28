@@ -179,5 +179,47 @@ describe('Phase A: WhatsApp Lifecycle Instrumentation', () => {
         expect(sessionAfterLoading.qrTimeout).toBeNull();
         expect(sessionAfterLoading.initWatchdog).toBeNull();
     });
+
+    describe('Post-ready reload handling (zombie prevention)', () => {
+        test('handlePageNavigation ignores navigation when client is not connected', () => {
+            const s = wa.getSession(adminUser.id);
+            s.isConnected = false;
+            wa.handlePageNavigation(adminUser.id, s, 'https://web.whatsapp.com/');
+            expect(s.restartTimer).toBeNull();
+            expect(s.isConnected).toBe(false);
+        });
+
+        test('handlePageNavigation triggers clean restart when navigation occurs after ready', () => {
+            const s = wa.getSession(adminUser.id);
+            s.isConnected = true;
+            s.userDisconnected = false;
+            s.destroyed = false;
+            s.restartTimer = null;
+
+            wa.handlePageNavigation(adminUser.id, s, 'https://web.whatsapp.com/');
+
+            expect(s.isConnected).toBe(false);
+            expect(s.restartTimer).not.toBeNull();
+            clearTimeout(s.restartTimer);
+            s.restartTimer = null;
+        });
+
+        test('handlePageNavigation ignores navigation when user explicitly disconnected', () => {
+            const s = wa.getSession(adminUser.id);
+            s.isConnected = true;
+            s.userDisconnected = true;
+            wa.handlePageNavigation(adminUser.id, s, 'https://web.whatsapp.com/');
+            expect(s.restartTimer).toBeNull();
+        });
+
+        test('handlePageNavigation ignores logout navigation (post_logout=1)', () => {
+            const s = wa.getSession(adminUser.id);
+            s.isConnected = true;
+            s.userDisconnected = false;
+            wa.handlePageNavigation(adminUser.id, s, 'https://web.whatsapp.com/?post_logout=1');
+            expect(s.restartTimer).toBeNull();
+            expect(s.isConnected).toBe(true);
+        });
+    });
 });
 

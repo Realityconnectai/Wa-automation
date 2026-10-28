@@ -157,7 +157,7 @@ function getLinkingTracker(userId) {
     return tracker;
 }
 
-function attachPageDiagnostics(page, tracker) {
+function attachPageDiagnostics(page, tracker, onNavigation = null) {
     if (!page || typeof page.on !== 'function') return;
 
     page.on('console', msg => {
@@ -202,7 +202,11 @@ function attachPageDiagnostics(page, tracker) {
         try {
             // Main frame navigation only to avoid iframe noise
             if (!frame.parentFrame || frame === page.mainFrame()) {
-                tracker.onFrameNavigated(frame.url());
+                const url = frame.url();
+                tracker.onFrameNavigated(url);
+                if (typeof onNavigation === 'function') {
+                    onNavigation(url, frame);
+                }
             }
         } catch (_) {}
     });
@@ -224,9 +228,10 @@ function attachPageDiagnostics(page, tracker) {
 const { LocalAuth } = require('whatsapp-web.js');
 
 class InstrumentedLocalAuth extends LocalAuth {
-    constructor(opts, tracker) {
+    constructor(opts, tracker, onNavigation = null) {
         super(opts);
         this.tracker = tracker;
+        this.onNavigation = onNavigation;
     }
 
     async beforeBrowserInitialized() {
@@ -254,7 +259,7 @@ class InstrumentedLocalAuth extends LocalAuth {
             } catch (_) {}
             this.tracker.log('CHROME_LAUNCH_END', `chromeVersion="${chromeVer}"`);
             if (page) {
-                attachPageDiagnostics(page, this.tracker);
+                attachPageDiagnostics(page, this.tracker, this.onNavigation);
             }
         }
     }
