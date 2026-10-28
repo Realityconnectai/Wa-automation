@@ -257,8 +257,17 @@ describe('Phase 1: Safety, Compliance & CRM Gaps', () => {
                 .send({ paused: true, duration_minutes: 60, reason: 'Senior agent handling custom proposal' });
 
             expect(pauseRes.status).toBe(200);
+            expect(pauseRes.body.phone).toBe(phone); // admin sees full phone
             expect(pauseRes.body.is_ai_paused).toBe(true);
             expect(pauseRes.body.ai_paused_until).toBeTruthy();
+
+            // Agent (non-admin) call receives masked phone
+            const agentPauseRes = await request(app)
+                .post(`/api/messages/conversation/${phone}/pause-ai`)
+                .set('Cookie', agentCookieA)
+                .send({ paused: true });
+            expect(agentPauseRes.status).toBe(200);
+            expect(agentPauseRes.body.phone).toContain('XXXXX'); // masked for agent
 
             // Verify db state
             const isPaused = await db.isConversationAiPaused(adminA.id, phone);

@@ -519,7 +519,7 @@ router.post('/messages/conversation/:phone/pause-ai', writeLimiter, requireDurab
     const deal = await setConversationAiPause(uid, phone, paused, durationMinutes, reason, uid);
     res.json({
         success: true,
-        phone,
+        phone: isAuthorizedForFullPhone(req.user) ? phone : maskPhoneNumber(phone),
         is_ai_paused: paused,
         ai_paused_until: deal?.ai_paused_until || null
     });
