@@ -63,8 +63,8 @@ function applyPatch() {
     } else if (content.includes(targetBlockCRLF)) {
         content = content.replace(targetBlockCRLF, replacementLF.replace(/\n/g, '\r\n'));
     } else {
-        console.warn('⚠️  Could not locate insertion point in whatsapp-web.js Utils.js');
-        return;
+        console.error('❌ Failed to apply patch: Could not locate insertion point in whatsapp-web.js Injected/Utils.js');
+        process.exit(1);
     }
 
     fs.writeFileSync(targetFile, content, 'utf8');
@@ -111,4 +111,8 @@ function applyPatch() {
     }
 }
 
-applyPatch();
+if (require.main === module) {
+    applyPatch();
+}
+
+module.exports = { applyPatch };
