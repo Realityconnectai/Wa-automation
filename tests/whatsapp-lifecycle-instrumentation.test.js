@@ -87,17 +87,17 @@ describe('Phase A: WhatsApp Lifecycle Instrumentation', () => {
         expect(debug.activeTimers.watchdog).toBe(true);
     });
 
-    test('GET /api/whatsapp/debug is forbidden when WA_DEBUG is not set to true', async () => {
+    test('GET /api/whatsapp/debug returns 404 when WA_DEBUG is not set to true', async () => {
         process.env.WA_DEBUG = 'false';
         const res = await request(app)
             .get('/api/whatsapp/debug')
             .set('Cookie', adminCookie);
 
-        expect(res.status).toBe(403);
-        expect(res.body.code).toBe('DEBUG_DISABLED');
+        expect(res.status).toBe(404);
+        expect(res.body.code).toBe('NOT_FOUND');
     });
 
-    test('GET /api/whatsapp/debug returns 200 with tenant-scoped debug data when WA_DEBUG=true', async () => {
+    test('GET /api/whatsapp/debug returns 200 with tenant-scoped debug data and linking fields when WA_DEBUG=true', async () => {
         process.env.WA_DEBUG = 'true';
         wa.setMockAllowedForTesting(true);
         await wa.initWhatsAppClient(adminUser.id);
@@ -112,6 +112,10 @@ describe('Phase A: WhatsApp Lifecycle Instrumentation', () => {
         expect(resAdmin.body.success).toBe(true);
         expect(resAdmin.body.data.linkedNumber).toBe('9198****3210');
         expect(resAdmin.body.data.liveState).toBe('CONNECTED');
+        expect(resAdmin.body.data).toHaveProperty('lastEvent');
+        expect(resAdmin.body.data).toHaveProperty('lastEventAgeSec');
+        expect(resAdmin.body.data).toHaveProperty('currentQRHash');
+        expect(resAdmin.body.data).toHaveProperty('qrCounter');
 
         // Regular user should have distinct tenant state
         const resUser = await request(app)

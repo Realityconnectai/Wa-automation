@@ -5,6 +5,12 @@ const path   = require('path');
 const { AUTH_ROOT, CACHE_ROOT } = require('../config/paths');
 const { processMessage } = require('./chatbot');
 const { logMessage, updateMessageAckStatus, getSetting, setSetting } = require('./database');
+const { getLinkingTracker, InstrumentedLocalAuth } = require('../utils/wa-linking-logger');
+
+let wwebjsVersion = 'unknown';
+try { wwebjsVersion = require('whatsapp-web.js/package.json').version; } catch (_) {}
+let puppeteerVersion = 'unknown';
+try { puppeteerVersion = require('puppeteer/package.json').version; } catch (_) {}
 
 // ─── Per-user session registry ─────────────────────────────────
 // Each signed-up account gets its own isolated whatsapp-web.js Client,
@@ -113,9 +119,13 @@ function newSessionState() {
 
 function getSession(userId, createIfMissing = true) {
     if (!sessions.has(userId) && createIfMissing) {
-        sessions.set(userId, newSessionState());
+        const s = newSessionState();
+        s.userId = Number(userId);
+        sessions.set(userId, s);
     }
-    return sessions.get(userId);
+    const s = sessions.get(userId);
+    if (s && !s.userId) s.userId = Number(userId);
+    return s;
 }
 
 function forceKillProcessTree(pid) {
@@ -198,12 +208,13 @@ function removeSseClient(s, client) {
 
 // ─── Timers ───────────────────────────────────────────────────
 function clearTimers(s) {
-    if (s.keepAliveTimer)   { clearInterval(s.keepAliveTimer);  s.keepAliveTimer   = null; }
-    if (s.watchdogTimer)    { clearInterval(s.watchdogTimer);   s.watchdogTimer    = null; }
-    if (s.restartTimer)     { clearTimeout(s.restartTimer);     s.restartTimer     = null; }
-    if (s.hibernationTimer) { clearTimeout(s.hibernationTimer); s.hibernationTimer = null; }
-    if (s.initWatchdog)     { clearTimeout(s.initWatchdog);     s.initWatchdog     = null; }
-    if (s.qrTimeout)        { clearTimeout(s.qrTimeout);        s.qrTimeout        = null; }
+    const tracker = s?.userId ? getLinkingTracker(s.userId) : null;
+    if (s.keepAliveTimer)   { clearInterval(s.keepAliveTimer);  s.keepAliveTimer   = null; tracker?.logTimer('keepAlive', 'cleared'); }
+    if (s.watchdogTimer)    { clearInterval(s.watchdogTimer);   s.watchdogTimer    = null; tracker?.logTimer('watchdog', 'cleared'); }
+    if (s.restartTimer)     { clearTimeout(s.restartTimer);     s.restartTimer     = null; tracker?.logTimer('restartTimer', 'cleared'); }
+    if (s.hibernationTimer) { clearTimeout(s.hibernationTimer); s.hibernationTimer = null; tracker?.logTimer('hibernation', 'cleared'); }
+    if (s.initWatchdog)     { clearTimeout(s.initWatchdog);     s.initWatchdog     = null; tracker?.logTimer('initWatchdog', 'cleared'); }
+    if (s.qrTimeout)        { clearTimeout(s.qrTimeout);        s.qrTimeout        = null; tracker?.logTimer('qrTimeout', 'cleared'); }
 }
 
 // ─── Session Hibernation ──────────────────────────────────────
@@ -328,10 +339,14 @@ function scheduleRestart(userId, baseDelayMs = 8000) {
     const backoff = Math.round(capped * (0.75 + Math.random() * 0.5));
     console.log(`🔄 [user ${userId}] Scheduling WhatsApp restart in ${(backoff / 1000).toFixed(0)}s (failure #${s.crashCount})...`);
 
+    const tracker = getLinkingTracker(userId);
+    tracker.logTimer('restartTimer', 'armed', `${backoff}ms`);
+
     broadcastSSE(userId, { type: 'disconnected' });
 
     s.restartTimer = setTimeout(async () => {
         s.restartTimer = null;
+        tracker.logTimer('restartTimer', 'fired');
         if (s.destroyed) return;
         await safeDestroyClient(s);
         s.isInitializing = false;
@@ -350,6 +365,8 @@ async function processInitQueue() {
 
     const { userId, client } = initQueue.shift();
     const s = getSession(userId, false);
+    const tracker = getLinkingTracker(userId);
+    tracker.log('QUEUE_DISPATCHED');
 
     if (!s || s.destroyed || !s.client) {
         isInitializingAnyClient = false;
@@ -483,12 +500,23 @@ async function initWhatsAppClient(userId, options = {}) {
 
     s.lastError = null;
     s.crashCount = 0;
+    const tracker = getLinkingTracker(userId);
+    tracker.reset();
+    tracker.log('INIT_REQUESTED');
+    tracker.logLibraryFacts({
+        wwebjsVersion,
+        puppeteerVersion,
+        webVersionCache: 'none'
+    });
+
     clearTimers(s);
     try { await setSetting(userId, 'wa_user_disconnected', 'false'); } catch (_) {}
 
-    if (s.initWatchdog) clearTimeout(s.initWatchdog);
+    if (s.initWatchdog) { clearTimeout(s.initWatchdog); tracker.logTimer('initWatchdog', 'cleared'); }
+    tracker.logTimer('initWatchdog', 'armed', '95s');
     s.initWatchdog = setTimeout(() => {
         s.initWatchdog = null;
+        tracker.logTimer('initWatchdog', 'fired');
         if (s.isInitializing && !s.isConnected && !s.currentQR) {
             console.warn(`🐕 [user ${userId}] Init watchdog: client did not reach ready/QR in 95s — clearing state.`);
             s.isInitializing = false;
@@ -510,7 +538,7 @@ async function initWhatsAppClient(userId, options = {}) {
 
     try {
         s.client = new Client({
-            authStrategy: new LocalAuth({ dataPath: authDataPath(userId) }),
+            authStrategy: new InstrumentedLocalAuth({ dataPath: authDataPath(userId) }, tracker),
             restartOnAuthFail: true,
             takeoverOnConflict: true,
             takeoverTimeoutMs: 0,
@@ -576,6 +604,7 @@ async function initWhatsAppClient(userId, options = {}) {
     attachHandlers(userId, s, client);
 
     console.log(`⏳ [user ${userId}] Added to WhatsApp initialization queue...`);
+    tracker.log('QUEUE_WAIT', `queue_length=${initQueue.length + 1}`);
     initQueue.push({ userId, client });
     processInitQueue();
 
@@ -620,16 +649,21 @@ function maskPhone(phone) {
 }
 
 function attachHandlers(userId, s, client) {
+    const tracker = getLinkingTracker(userId);
+
     // ── QR ──────────────────────────────────────────────────
     client.on('qr', async (qr) => {
         console.log(`📱 [user ${userId}] QR Code ready — open Settings → WhatsApp QR to scan.`);
+        tracker.onQR(qr);
         s.isConnected = false;
-        if (s.initWatchdog) { clearTimeout(s.initWatchdog); s.initWatchdog = null; }
+        if (s.initWatchdog) { clearTimeout(s.initWatchdog); s.initWatchdog = null; tracker.logTimer('initWatchdog', 'cleared'); }
 
         // Auto-teardown idle QR code after 3 minutes if unscanned to free RAM & CPU
         if (!s.qrTimeout) {
+            tracker.logTimer('qrTimeout', 'armed', '180s');
             s.qrTimeout = setTimeout(async () => {
                 s.qrTimeout = null;
+                tracker.logTimer('qrTimeout', 'fired');
                 if (!s.isConnected && s.client) {
                     console.log(`⏱️ [user ${userId}] QR code scan timed out after 3 minutes — stopping idle Chrome.`);
                     clearTimers(s);
@@ -655,21 +689,24 @@ function attachHandlers(userId, s, client) {
     // ── Loading Screen & State Tracking ─────────────────────
     client.on('loading_screen', (percent, message) => {
         console.log(`⏳ [user ${userId}] WhatsApp Loading: ${percent}% — ${message || 'syncing'}`);
+        tracker.log('LOADING_SCREEN', `percent=${percent}% message="${message || 'syncing'}"`);
         broadcastSSE(userId, { type: 'loading_screen', percent, message: message || 'syncing' });
     });
 
     client.on('change_state', (state) => {
         console.log(`🔄 [user ${userId}] WhatsApp State: ${state}`);
+        tracker.log('CHANGE_STATE', `state=${state}`);
         broadcastSSE(userId, { type: 'change_state', state });
     });
 
     // ── Auth ────────────────────────────────────────────────
     client.on('authenticated', () => {
         console.log(`✅ [user ${userId}] WhatsApp Authenticated!`);
+        tracker.log('AUTHENTICATED');
         s.currentQR = null;
         s.isInitializing = false;
-        if (s.initWatchdog) { clearTimeout(s.initWatchdog); s.initWatchdog = null; }
-        if (s.qrTimeout) { clearTimeout(s.qrTimeout); s.qrTimeout = null; }
+        if (s.initWatchdog) { clearTimeout(s.initWatchdog); s.initWatchdog = null; tracker.logTimer('initWatchdog', 'cleared'); }
+        if (s.qrTimeout) { clearTimeout(s.qrTimeout); s.qrTimeout = null; tracker.logTimer('qrTimeout', 'cleared'); }
         broadcastSSE(userId, { type: 'authenticated' });
     });
 
@@ -677,6 +714,7 @@ function attachHandlers(userId, s, client) {
     client.on('ready', () => {
         if (s.isConnected) return;
         console.log(`✅ [user ${userId}] WhatsApp Client is READY!`);
+        tracker.log('READY', `phone=${client.info?.wid?.user || 'unknown'}`);
         s.isConnected    = true;
         s.isInitializing = false;
         s.isHibernated   = false;
@@ -686,8 +724,8 @@ function attachHandlers(userId, s, client) {
         s.lastActivityAt = Date.now();
         s.transientKeepAliveFailures = 0;
         s.nonConnectedCount = 0;
-        if (s.initWatchdog) { clearTimeout(s.initWatchdog); s.initWatchdog = null; }
-        if (s.qrTimeout) { clearTimeout(s.qrTimeout); s.qrTimeout = null; }
+        if (s.initWatchdog) { clearTimeout(s.initWatchdog); s.initWatchdog = null; tracker.logTimer('initWatchdog', 'cleared'); }
+        if (s.qrTimeout) { clearTimeout(s.qrTimeout); s.qrTimeout = null; tracker.logTimer('qrTimeout', 'cleared'); }
 
         try {
             if (client.pupBrowser?.process()?.pid) {
@@ -701,6 +739,7 @@ function attachHandlers(userId, s, client) {
 
         clearTimers(s);
 
+        tracker.logTimer('keepAlive', 'armed', '15s');
         s.staleConnectedSince = null;
         s.keepAliveTimer = setInterval(async () => {
             try {
@@ -744,12 +783,14 @@ function attachHandlers(userId, s, client) {
         }, 15000);
         s.keepAliveTimer.unref?.();
 
+        tracker.logTimer('watchdog', 'armed', '90s');
         s.watchdogTimer = setInterval(() => {
             if (s.currentQR || s.isInitializing || s.restartTimer || s.destroyed || s.userDisconnected) {
                 return;
             }
             if (!s.isConnected) {
                 console.warn(`🐕 [user ${userId}] Watchdog: not connected and not restarting — triggering restart.`);
+                tracker.logTimer('watchdog', 'fired');
                 scheduleRestart(userId, 5000);
             }
         }, 90000);
@@ -759,6 +800,7 @@ function attachHandlers(userId, s, client) {
     // ── Auth failure ─────────────────────────────────────────
     client.on('auth_failure', async msg => {
         console.error(`❌ [user ${userId}] WhatsApp Auth failure:`, msg);
+        tracker.log('AUTH_FAILURE', `msg="${msg}"`);
         s.isConnected    = false;
         s.isInitializing = false;
         s.currentQR      = null;
@@ -776,6 +818,7 @@ function attachHandlers(userId, s, client) {
     // ── Disconnected ─────────────────────────────────────────
     client.on('disconnected', async (reason) => {
         console.log(`❌ [user ${userId}] WhatsApp disconnected:`, reason);
+        tracker.log('DISCONNECTED', `reason="${reason}"`);
         s.isConnected    = false;
         s.isInitializing = false;
         s.currentQR      = null;
@@ -1335,6 +1378,11 @@ async function getDebugState(userId) {
     };
 
     const chromeProcessCount = getChromeProcessCount(s);
+    const tracker = getLinkingTracker(userId);
+    const lastEvent = tracker ? tracker.lastEvent : null;
+    const lastEventAgeSec = tracker && tracker.lastEventAt ? Math.round((Date.now() - tracker.lastEventAt) / 1000) : null;
+    const currentQRHash = tracker ? tracker.currentQRHash : null;
+    const qrCounter = tracker ? tracker.qrCounter : 0;
 
     return {
         storedState,
@@ -1348,9 +1396,14 @@ async function getDebugState(userId) {
         activeTimers,
         userDisconnected: !!(s && s.userDisconnected),
         isInitializing: !!(s && s.isInitializing),
-        chromeProcessCount
+        chromeProcessCount,
+        lastEvent,
+        lastEventAgeSec,
+        currentQRHash,
+        qrCounter
     };
 }
+
 
 /**
  * Sends a text message on behalf of one account.

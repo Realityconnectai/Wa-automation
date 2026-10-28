@@ -164,10 +164,10 @@ router.get('/status', (req, res) => {
 
 router.get('/whatsapp/debug', asyncHandler(async (req, res) => {
     if (process.env.WA_DEBUG !== 'true') {
-        return res.status(403).json({
+        return res.status(404).json({
             success: false,
-            error: 'WhatsApp debug endpoint is disabled. Set WA_DEBUG=true to enable.',
-            code: 'DEBUG_DISABLED'
+            error: 'Not found',
+            code: 'NOT_FOUND'
         });
     }
     const data = await getDebugState(req.user.id);
