@@ -4284,9 +4284,19 @@ function applyConnectionState(data) {
         if (statusText) statusText.textContent = 'Reconnecting…';
         if (connInfo)   connInfo.innerHTML   = `<p class="text-warning">${Icon('refresh-cw', 'icon-inline')} Reconnecting WhatsApp session…</p>`;
 
+    } else if (data.type === 'authenticated') {
+        hide(qrLoading); hide(qrImage); hide(qrSuccess);
+        if (statusDot)  statusDot.className  = 'status-dot warning';
+        if (statusText) statusText.textContent = 'Authenticated';
+        if (connInfo)   connInfo.innerHTML   = `<p class="text-warning">${Icon('check-circle', 'icon-inline')} WhatsApp authenticated! Finalizing sync with phone…</p>`;
+
     } else if (data.type === 'loading_screen') {
+        hide(qrLoading); hide(qrImage); hide(qrSuccess);
+        if (statusDot)  statusDot.className  = 'status-dot warning';
+        const pct = data.percent !== undefined ? data.percent : 0;
+        if (statusText) statusText.textContent = `Syncing (${pct}%)`;
         if (connInfo) {
-            connInfo.innerHTML = `<p class="text-muted">${Icon('loader', 'icon-inline')} Syncing WhatsApp data: ${data.percent || 0}% (${escapeHtml(data.message || 'syncing')})</p>`;
+            connInfo.innerHTML = `<p class="text-muted">${Icon('loader', 'icon-inline')} Linking / syncing WhatsApp data: ${pct}% (${escapeHtml(data.message || 'syncing')})</p>`;
         }
 
     } else if (data.type === 'logged_out') {

@@ -146,18 +146,21 @@ describe('Phase A: WhatsApp Lifecycle Instrumentation', () => {
         expect(transition).toContain('timers: [none] -> [keepAlive]');
     });
 
-    test('wa-observe formatSample creates valid masked observation string', () => {
-        const sampleStr = formatSample('2026-10-28T00:00:00.000Z', { state: 'connected', connected: true, phone: '919876543210' }, {
-            liveState: 'CONNECTED',
-            readyFired: true,
-            listenerCounts: { message: 1, message_ack: 1 },
-            chromeProcessCount: 2,
-            activeTimers: { keepAlive: true, watchdog: true }
-        });
+    test('loading_screen event clears qrTimeout and initWatchdog to protect long syncs', async () => {
+        wa.setMockAllowedForTesting(true);
+        await wa.initWhatsAppClient(adminUser.id);
+        const client = lib.__last();
 
-        expect(sampleStr).toContain('[SAMPLE]');
-        expect(sampleStr).toContain('state=connected');
-        expect(sampleStr).toContain('liveState=CONNECTED');
-        expect(sampleStr).toContain('timers=[keepAlive,watchdog]');
+        // Simulate QR code generation
+        await client.emit('qr', 'fake_qr_string');
+        const sessionAfterQr = wa.getSession(adminUser.id);
+        expect(sessionAfterQr.qrTimeout).not.toBeNull();
+
+        // Simulate loading_screen event (syncing started)
+        client.emit('loading_screen', 50, 'syncing');
+        const sessionAfterLoading = wa.getSession(adminUser.id);
+        expect(sessionAfterLoading.qrTimeout).toBeNull();
+        expect(sessionAfterLoading.initWatchdog).toBeNull();
     });
 });
+

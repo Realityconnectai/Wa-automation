@@ -455,7 +455,7 @@ async function initWhatsAppClient(userId, options = {}) {
     s.userDisconnected = false;
 
     if (s.isInitializing) {
-        if (s.startedAt && Date.now() - s.startedAt > 90000) {
+        if (!s.currentQR && s.startedAt && Date.now() - s.startedAt > 90000) {
             console.warn(`⚠️ [user ${userId}] WhatsApp initialization stalled for >90s — resetting and re-initializing.`);
             s.isInitializing = false;
             await safeDestroyClient(s);
@@ -690,6 +690,16 @@ function attachHandlers(userId, s, client) {
     client.on('loading_screen', (percent, message) => {
         console.log(`⏳ [user ${userId}] WhatsApp Loading: ${percent}% — ${message || 'syncing'}`);
         tracker.log('LOADING_SCREEN', `percent=${percent}% message="${message || 'syncing'}"`);
+        if (s.qrTimeout) {
+            clearTimeout(s.qrTimeout);
+            s.qrTimeout = null;
+            tracker.logTimer('qrTimeout', 'cleared', 'loading_screen sync started');
+        }
+        if (s.initWatchdog) {
+            clearTimeout(s.initWatchdog);
+            s.initWatchdog = null;
+            tracker.logTimer('initWatchdog', 'cleared', 'loading_screen sync started');
+        }
         broadcastSSE(userId, { type: 'loading_screen', percent, message: message || 'syncing' });
     });
 
