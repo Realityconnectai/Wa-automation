@@ -1,0 +1,159 @@
+﻿diff --git a/src/services/whatsapp-client.js b/src/services/whatsapp-client.js
+index 0612164..656fac9 100644
+--- a/src/services/whatsapp-client.js
++++ b/src/services/whatsapp-client.js
+@@ -78,6 +78,36 @@ function countActiveSessions() {
+  * route parameter in some call paths. Every caller happens to be internal
+  * today; this makes it safe regardless of who calls it next.
+  */
++/**
++ * Detects post-ready WhatsApp Web reloads and initiates clean session restart.
++ *
++ * WhatsApp Web occasionally reloads its page (~5-6m after initial linking).
++ * Upstream whatsapp-web.js inject() aborts on reloaded pages due to its
++ * _hasSyncedHandled guard, leaving the client in a "zombie CONNECTED" state
++ * where no Store listeners or LoadUtils exist on the reloaded DOM.
++ *
++ * Because session credentials are already saved to disk (.wwebjs_auth/user_X),
++ * triggering a clean restart revives the session via the fast resume path (~15s)
++ * with all message listeners cleanly re-attached.
++ */
++function handlePageNavigation(userId, s, url) {
++    if (!s || s.destroyed || s.userDisconnected || s.restartTimer || !s.isConnected) {
++        return;
++    }
++    // If navigation URL is logout page, let disconnected/logout handler take it
++    if (url && (url.includes('post_logout=1') || url.includes('/logout'))) {
++        return;
++    }
++
++    const tracker = getLinkingTracker(userId);
++    console.warn(`≡ƒöä [user ${userId}] WhatsApp Web reloaded after ready (zombie prevention) ΓÇö scheduling clean restart.`);
++    tracker.log('RELOAD_DETECTED', `url="${url || ''}" action="scheduleRestart"`);
++
++    s.isConnected = false;
++    clearTimers(s);
++    scheduleRestart(userId, 2000);
++}
++
+ function authDataPath(userId) {
+     const id = Number(userId);
+     if (!Number.isSafeInteger(id) || id <= 0) {
+@@ -537,8 +567,9 @@ async function initWhatsAppClient(userId, options = {}) {
+     clearStaleLocks(userId);
+ 
+     try {
++        const onNav = (navUrl) => handlePageNavigation(userId, s, navUrl);
+         s.client = new Client({
+-            authStrategy: new InstrumentedLocalAuth({ dataPath: authDataPath(userId) }, tracker),
++            authStrategy: new InstrumentedLocalAuth({ dataPath: authDataPath(userId) }, tracker, onNav),
+             restartOnAuthFail: true,
+             takeoverOnConflict: true,
+             takeoverTimeoutMs: 0,
+@@ -1688,6 +1719,7 @@ module.exports = {
+     MAX_CONCURRENT_SESSIONS,
+     MAX_SSE_CLIENTS_PER_USER,
+     MAX_SSE_CLIENTS_TOTAL,
++    handlePageNavigation,
+     _clearRecentInboundMsgIdsForTesting: () => recentInboundMsgIds.clear()
+ };
+ 
+diff --git a/src/utils/wa-linking-logger.js b/src/utils/wa-linking-logger.js
+index f0df13e..b70a4ce 100644
+--- a/src/utils/wa-linking-logger.js
++++ b/src/utils/wa-linking-logger.js
+@@ -157,7 +157,7 @@ function getLinkingTracker(userId) {
+     return tracker;
+ }
+ 
+-function attachPageDiagnostics(page, tracker) {
++function attachPageDiagnostics(page, tracker, onNavigation = null) {
+     if (!page || typeof page.on !== 'function') return;
+ 
+     page.on('console', msg => {
+@@ -202,7 +202,11 @@ function attachPageDiagnostics(page, tracker) {
+         try {
+             // Main frame navigation only to avoid iframe noise
+             if (!frame.parentFrame || frame === page.mainFrame()) {
+-                tracker.onFrameNavigated(frame.url());
++                const url = frame.url();
++                tracker.onFrameNavigated(url);
++                if (typeof onNavigation === 'function') {
++                    onNavigation(url, frame);
++                }
+             }
+         } catch (_) {}
+     });
+@@ -224,9 +228,10 @@ function attachPageDiagnostics(page, tracker) {
+ const { LocalAuth } = require('whatsapp-web.js');
+ 
+ class InstrumentedLocalAuth extends LocalAuth {
+-    constructor(opts, tracker) {
++    constructor(opts, tracker, onNavigation = null) {
+         super(opts);
+         this.tracker = tracker;
++        this.onNavigation = onNavigation;
+     }
+ 
+     async beforeBrowserInitialized() {
+@@ -254,7 +259,7 @@ class InstrumentedLocalAuth extends LocalAuth {
+             } catch (_) {}
+             this.tracker.log('CHROME_LAUNCH_END', `chromeVersion="${chromeVer}"`);
+             if (page) {
+-                attachPageDiagnostics(page, this.tracker);
++                attachPageDiagnostics(page, this.tracker, this.onNavigation);
+             }
+         }
+     }
+diff --git a/tests/whatsapp-lifecycle-instrumentation.test.js b/tests/whatsapp-lifecycle-instrumentation.test.js
+index 4509ab4..b364605 100644
+--- a/tests/whatsapp-lifecycle-instrumentation.test.js
++++ b/tests/whatsapp-lifecycle-instrumentation.test.js
+@@ -179,5 +179,47 @@ describe('Phase A: WhatsApp Lifecycle Instrumentation', () => {
+         expect(sessionAfterLoading.qrTimeout).toBeNull();
+         expect(sessionAfterLoading.initWatchdog).toBeNull();
+     });
++
++    describe('Post-ready reload handling (zombie prevention)', () => {
++        test('handlePageNavigation ignores navigation when client is not connected', () => {
++            const s = wa.getSession(adminUser.id);
++            s.isConnected = false;
++            wa.handlePageNavigation(adminUser.id, s, 'https://web.whatsapp.com/');
++            expect(s.restartTimer).toBeNull();
++            expect(s.isConnected).toBe(false);
++        });
++
++        test('handlePageNavigation triggers clean restart when navigation occurs after ready', () => {
++            const s = wa.getSession(adminUser.id);
++            s.isConnected = true;
++            s.userDisconnected = false;
++            s.destroyed = false;
++            s.restartTimer = null;
++
++            wa.handlePageNavigation(adminUser.id, s, 'https://web.whatsapp.com/');
++
++            expect(s.isConnected).toBe(false);
++            expect(s.restartTimer).not.toBeNull();
++            clearTimeout(s.restartTimer);
++            s.restartTimer = null;
++        });
++
++        test('handlePageNavigation ignores navigation when user explicitly disconnected', () => {
++            const s = wa.getSession(adminUser.id);
++            s.isConnected = true;
++            s.userDisconnected = true;
++            wa.handlePageNavigation(adminUser.id, s, 'https://web.whatsapp.com/');
++            expect(s.restartTimer).toBeNull();
++        });
++
++        test('handlePageNavigation ignores logout navigation (post_logout=1)', () => {
++            const s = wa.getSession(adminUser.id);
++            s.isConnected = true;
++            s.userDisconnected = false;
++            wa.handlePageNavigation(adminUser.id, s, 'https://web.whatsapp.com/?post_logout=1');
++            expect(s.restartTimer).toBeNull();
++            expect(s.isConnected).toBe(true);
++        });
++    });
+ });
+ 

@@ -47,6 +47,9 @@ try { puppeteerVersion = require('puppeteer/package.json').version; } catch (_) 
 log('INIT_REQUESTED', `tempDataPath="${tempDir}"`);
 log('LIBRARY_FACTS', `wwebjs="${wwebjsVersion}" puppeteer="${puppeteerVersion}" chrome="pending" webVersionCache="none"`);
 
+let firstNavAfterReadyAt = null;
+const inboundEventsHistory = [];
+
 const trackerAdapter = {
     log(stage, details) {
         log(stage, details);
@@ -59,7 +62,12 @@ const trackerAdapter = {
         } catch (_) {
             safeUrl = String(url).split('?')[0];
         }
-        log('PAGE_FRAMENAVIGATED', `url="${safeUrl}"`);
+        if (readyAt && !firstNavAfterReadyAt) {
+            firstNavAfterReadyAt = Date.now();
+            log('PAGE_FRAMENAVIGATED_POST_READY', `url="${safeUrl}" delay_from_ready=${((firstNavAfterReadyAt - readyAt) / 1000).toFixed(1)}s`);
+        } else {
+            log('PAGE_FRAMENAVIGATED', `url="${safeUrl}"`);
+        }
     },
     onInboundEvent(event, meta = {}) {
         const id = meta.id || 'none';
@@ -73,6 +81,23 @@ const trackerAdapter = {
         const reason = meta.reason ? ` reason="${meta.reason}"` : '';
 
         log(`INBOUND_${event.toUpperCase()}`, `id=${id} type=${type} fromMe=${fromMe} isGroup=${isGroup} isStatus=${isStatus} shape=${shape} from=${from} stage=${stage}${reason}`);
+
+        if (event === 'message' || event === 'message_create') {
+            const now = Date.now();
+            const delaySec = readyAt ? ((now - readyAt) / 1000).toFixed(1) + 's' : 'pre-ready';
+            const navTiming = firstNavAfterReadyAt ? 'after' : 'before';
+            inboundEventsHistory.push({
+                num: inboundEventsHistory.length + 1,
+                event,
+                time: new Date().toLocaleTimeString(),
+                id: String(id).slice(-10),
+                from,
+                fromMe,
+                isGroup,
+                delaySec,
+                navTiming
+            });
+        }
     },
     onInboundStage(stage, reason = '') {
         log(`INBOUND_STAGE:${stage}`, reason ? `reason="${reason}"` : '');
@@ -275,8 +300,32 @@ client.on('message_ack', (msg, ack) => {
     } catch (_) {}
 });
 
+function printSummaryTable() {
+    console.log('\n================================== SUMMARY TABLE ==================================');
+    console.log(`First Navigation Post-Ready: ${firstNavAfterReadyAt ? `Yes (${((firstNavAfterReadyAt - readyAt) / 1000).toFixed(1)}s after ready)` : 'No'}`);
+    console.log(`Total Inbound Message Events Received: ${inboundEventsHistory.length}`);
+    console.log('-----------------------------------------------------------------------------------');
+    console.log('| Send # | Event          | Time     | From (Masked) | Delay  | Before/After Nav  |');
+    console.log('-----------------------------------------------------------------------------------');
+    if (inboundEventsHistory.length === 0) {
+        console.log('| (No inbound message events received)                                             |');
+    } else {
+        inboundEventsHistory.forEach(item => {
+            const num = String(item.num).padEnd(6);
+            const evt = String(item.event).padEnd(14);
+            const tm = String(item.time).padEnd(8);
+            const fr = String(item.from).padEnd(13);
+            const dl = String(item.delaySec).padEnd(6);
+            const nav = String(item.navTiming).padEnd(17);
+            console.log(`| ${num} | ${evt} | ${tm} | ${fr} | ${dl} | ${nav} |`);
+        });
+    }
+    console.log('===================================================================================\n');
+}
+
 async function cleanup() {
-    console.log('\nCleaning up minimal listener client and temp data...');
+    printSummaryTable();
+    console.log('Cleaning up minimal listener client and temp data...');
     try {
         await client.destroy().catch(() => {});
     } catch (_) {}
