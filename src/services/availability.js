@@ -328,16 +328,21 @@ async function rescheduleAppointment(userId, id, { startIso, notes }) {
 }
 
 /** Cancels an appointment and best-effort removes its calendar event and scheduled reminders. Returns the cancelled row, or null if it didn't exist. */
-async function cancelAppointment(userId, id) {
-    const row = await dbCancelAppointment(userId, id);
-    if (row) {
+async function cancelAppointment(userId, id, options = {}) {
+    const row = await dbCancelAppointment(userId, id, options);
+    if (!row) return null;
+    if (row.alreadyCancelled) return row;
+
+    try {
+        await cancelAppointmentReminders(userId, id);
+    } catch (remErr) {
+        console.warn('⚠️ Could not cancel appointment reminders (non-fatal):', remErr.message);
+    }
+    if (row.calendar_event_id) {
         try {
-            await cancelAppointmentReminders(userId, id);
-        } catch (remErr) {
-            console.warn('⚠️ Could not cancel appointment reminders (non-fatal):', remErr.message);
-        }
-        if (row.calendar_event_id) {
             await cancelAppointmentEvent(userId, row.calendar_event_id);
+        } catch (calErr) {
+            console.warn('⚠️ Could not cancel Google Calendar event (non-fatal):', calErr.message);
         }
     }
     return row;

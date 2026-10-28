@@ -1260,10 +1260,11 @@ async function createAppointmentReminder(userId, appointmentId, phone, body, sch
     return res.rows[0] || null;
 }
 
-async function cancelAppointmentReminders(userId, appointmentId) {
+async function cancelAppointmentReminders(userId, appointmentId, client = null) {
     return runSql(
         "UPDATE scheduled_messages SET status = 'cancelled' WHERE user_id = $1 AND appointment_id = $2 AND status = 'pending'",
-        [userId, appointmentId]
+        [userId, appointmentId],
+        client
     );
 }
 
@@ -2169,12 +2170,21 @@ async function updateAppointment(userId, id, { startAt, endAt, notes }) {
     });
 }
 
-async function cancelAppointment(userId, id) {
-    const row = await queryGet("SELECT * FROM appointments WHERE id = $1 AND user_id = $2 AND status = 'confirmed'", [id, userId]);
-    if (!row) return null;
-    await runSql("UPDATE appointments SET status = 'cancelled' WHERE id = $1 AND user_id = $2", [id, userId]);
-    await cancelAppointmentReminders(userId, id);
-    return { ...row, status: 'cancelled' };
+async function cancelAppointment(userId, id, { cancelledBy = null } = {}) {
+    return transaction(async (tx) => {
+        const res = await tx.query("SELECT * FROM appointments WHERE id = $1 AND user_id = $2 FOR UPDATE", [id, userId]);
+        const row = res.rows[0];
+        if (!row) return null; // Not found or belongs to another tenant
+        if (row.status === 'cancelled') {
+            return { ...row, alreadyCancelled: true };
+        }
+        await tx.query(
+            "UPDATE appointments SET status = 'cancelled', cancelled_at = CURRENT_TIMESTAMP, cancelled_by = $3 WHERE id = $1 AND user_id = $2",
+            [id, userId, cancelledBy]
+        );
+        await cancelAppointmentReminders(userId, id, tx.client);
+        return { ...row, status: 'cancelled', alreadyCancelled: false, cancelled_at: new Date(), cancelled_by: cancelledBy };
+    });
 }
 
 async function getUpcomingConfirmedAppointments(userId = null, fromDate = new Date()) {

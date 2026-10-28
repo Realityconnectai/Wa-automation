@@ -118,11 +118,14 @@ router.patch('/:id', writeLimiter, requireDurableWrite, asyncHandler(async (req,
 
 router.delete('/:id', writeLimiter, asyncHandler(async (req, res) => {
     const id = requireId(req.params.id, 'appointment id');
-    const row = await cancelAppointment(req.user.id, id);
+    const row = await cancelAppointment(req.user.id, id, { cancelledBy: req.user.email || `user_${req.user.id}` });
     if (!row) {
-        return res.status(409).json({ success: false, error: 'That appointment was not found, or is already cancelled.' });
+        return res.status(404).json({ success: false, error: 'Appointment not found' });
     }
-    res.json({ success: true });
+    if (row.alreadyCancelled) {
+        return res.json({ success: true, message: 'Appointment is already cancelled.', alreadyCancelled: true });
+    }
+    res.json({ success: true, message: 'Appointment cancelled' });
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {

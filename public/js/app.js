@@ -3761,14 +3761,34 @@ function closeAppointmentDetailModal() {
     }
 }
 
-async function cancelAppointment(id) {
+async function cancelAppointment(id, btn) {
     if (!confirm('Cancel this appointment?')) return;
+    if (btn) {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        btn.dataset.originalText = btn.textContent;
+        btn.textContent = 'Cancelling…';
+    }
     try {
-        await api(`/api/appointments/${id}`, { method: 'DELETE' });
-        showToast('Appointment cancelled', 'success');
-        loadAppointments();
+        const res = await api(`/api/appointments/${id}`, { method: 'DELETE' });
+        if (res && res.alreadyCancelled) {
+            showToast('Appointment is already cancelled', 'info');
+        } else {
+            showToast('Appointment cancelled', 'success');
+        }
+        await loadAppointments();
+        const subTitleEl = document.getElementById('appointmentDetailSubTitle');
+        if (subTitleEl && subTitleEl.textContent.includes(`ID: ${id}`)) {
+            await openAppointmentDetailModal(id);
+        }
     } catch (err) {
         showToast(err.message || 'Failed to cancel appointment', 'error');
+        await loadAppointments();
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = btn.dataset.originalText || 'Cancel';
+        }
     }
 }
 
@@ -4416,7 +4436,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             case 'edit-contact': openEditContactModal(id); break;
             case 'delete-contact': deleteContact(id); break;
             case 'cancel-scheduled': cancelScheduled(id); break;
-            case 'cancel-appointment': cancelAppointment(id); break;
+            case 'cancel-appointment': cancelAppointment(id, button); break;
         }
     });
 
@@ -5050,7 +5070,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         const contactLink = e.target.closest('[data-open-appointment]');
         if (contactLink) return openAppointmentDetailModal(contactLink.dataset.openAppointment);
         const cancelBtn = e.target.closest('[data-action="cancel-appointment"]');
-        if (cancelBtn) return cancelAppointment(cancelBtn.dataset.id);
+        if (cancelBtn) {
+            e.stopPropagation();
+            return cancelAppointment(cancelBtn.dataset.id, cancelBtn);
+        }
     });
     document.getElementById('appointmentDetailModalClose')?.addEventListener('click', closeAppointmentDetailModal);
     document.getElementById('appointmentDetailModalBackdrop')?.addEventListener('click', (e) => {
