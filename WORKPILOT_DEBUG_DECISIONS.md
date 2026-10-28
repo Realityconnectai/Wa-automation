@@ -468,6 +468,34 @@ Tested on live WhatsApp Web session across all 7 cases:
      - `node tests/live/live_manual_text.js`: Passed (negative rejection, harness allowlist lockout guard active, LID resolution verified).
 - **Status:** **VERIFIED & CLOSED** — Session persistence, lifecycle recovery, and truthful UI state indicators fully confirmed.
 
+---
+
+### Iteration 7 — 2026-10-28 (WhatsApp Lifecycle Verify-and-Fix Loop: Matrices B1–B6)
+- **Target:** Comprehensive Verification of WhatsApp Lifecycle (QR, Connect, Disconnect, Durability, Message Pipeline, Soak, Full Suite Regression)
+- **Branch:** `verify-wa-lifecycle`
+- **Owner Design Decisions:**
+  - **Decision D7 (Disconnect Across Restart):** When a user explicitly disconnects, `wa_user_disconnected = 'true'` is persisted in database settings. On server startup, `resumeExistingSessions()` checks this setting and skips automatic reconnect for that user until explicit reconnection is requested.
+  - **Decision C6 (Truthful Status & 35s Stale Limit):** `keepAliveTimer` runs every 15s. `getStatus(userId)` performs a fast cached `getState()` evaluation every 10s and tracks `staleConnectedSince`. If the connection is broken and does not recover within 35 seconds, `getStatus()` ceases reporting `connected: true` and transitions the UI to `reconnecting` or `error`.
+- **Instrumentation & Tooling (Phase A):**
+  - Added `getDebugState(userId)` and `getChromeProcessCount()` in `src/services/whatsapp-client.js`.
+  - Added `GET /api/whatsapp/debug` route in `src/routes/api.js` (guarded by `WA_DEBUG=true`).
+  - Added `scripts/wa-observe.js` observer script for recording lifecycle state transitions and memory metrics.
+  - Added test suite `tests/whatsapp-lifecycle-instrumentation.test.js` (6/6 passed).
+- **Matrix Verification & Bug Fixes:**
+  - **Matrix B1 (QR):** Verified Q1–Q6, Q8–Q9 (8 passed, Q7 BLOCKED LIVE). Fixed double-connect race condition by synchronously setting `s.isInitializing = true` before async auth lookups; preserved active QR on page reload; closed lingering SSE client sockets in `destroyClientForUser`. (Commit `3c4c6fe`).
+  - **Matrix B2 (Connect & Status Truthfulness):** Verified C1–C6 (6 passed). Added `staleConnectedSince` tracking enforcing <= 35s stale limit. (Commit `7f1508d`).
+  - **Matrix B3 (Disconnect & Logout):** Verified D1–D9 (9 passed). Verified graceful teardown without orphan Chrome processes, exact single-listener bounds, and explicit DB intent persistence across restart. (Commit `93e68c0`).
+  - **Matrix B4 (Session Durability & Soak):** Verified S1–S8 (7 automated tests passed). Added `scripts/wa-soak-test.js` evaluating 30 cycles of rapid connect/disconnect/simulate. (Commit `dbd5dff`).
+    - *Soak Numbers:* 30 full client cycles, 0 orphan Chrome processes, stable heap memory (delta < 2.5MB), 0 event listener leaks.
+  - **Matrix B5 (Message Pipeline):** Verified M4–M8, M10–M13 (9 automated tests passed, M1–M3 BLOCKED LIVE). Fixed inbound deduplication, rate limit throttle replies, unhandled promise safety, media-only logging, opt-out suppression, and monotonic ack upgrades (`sent` → `delivered` → `read`). (Commits `c9d79cd`, `7544091`).
+  - **Matrix B6 (Regression & Full Suite):**
+    - Executed `npm run test:db`.
+    - 48 of 49 test suites passed. 739 of 740 total tests passed.
+    - All 6 WhatsApp lifecycle test suites passed (45/45 tests passing).
+- **Blockers:**
+  - Rows Q7, M1, M2, M3 are marked `BLOCKED (LIVE)` pending owner-provided allowlist test numbers (enforcing zero live messages sent to unapproved destinations).
+
+
 
 
 
