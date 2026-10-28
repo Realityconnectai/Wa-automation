@@ -86,7 +86,10 @@ describe('Matrix B5: Message Pipeline Verification', () => {
         const msg2 = makeFakeMsg({ id: duplicateMsgId, body: 'Hello property enquiry' });
 
         client.emit('message', msg1);
-        await new Promise(r => setTimeout(r, 100));
+        const start = Date.now();
+        while (Date.now() - start < 3000 && client.sent.length < 1) {
+            await new Promise(r => setTimeout(r, 50));
+        }
 
         const repliesBefore = client.sent.length;
         expect(repliesBefore).toBe(1);
@@ -111,11 +114,16 @@ describe('Matrix B5: Message Pipeline Verification', () => {
             await new Promise(r => setTimeout(r, 30));
         }
 
-        // Wait for asynchronous processing
-        await new Promise(r => setTimeout(r, 200));
+        // Poll until asynchronous queue processing completes
+        const pollStart = Date.now();
+        let inboundMsgs = [];
+        while (Date.now() - pollStart < 3000) {
+            inboundMsgs = await db.getMessagesByPhone(userA.id, senderPhone);
+            if (inboundMsgs.length >= 10) break;
+            await new Promise(r => setTimeout(r, 50));
+        }
 
         // Inbound messages must be stored in database
-        const inboundMsgs = await db.getMessagesByPhone(userA.id, senderPhone);
         expect(inboundMsgs.length).toBeGreaterThanOrEqual(10);
 
         // Rate limit should have throttled: sent messages contain exactly 1 throttle reply
