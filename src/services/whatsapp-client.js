@@ -433,21 +433,9 @@ async function initWhatsAppClient(userId, options = {}) {
         }
     }
 
-    try {
-        const { getUserById } = require('./database');
-        const user = await getUserById(userId);
-        if (!user || user.status !== 'active' || (user.role !== 'admin' && !user.wa_enabled)) {
-            console.warn(`⚠️ [user ${userId}] Denying WhatsApp client start — wa_enabled is 0 or account is not active.`);
-            return { accepted: false, reason: 'WhatsApp access is not enabled for this account.' };
-        }
-    } catch (e) {
-        // Non-fatal if DB not loaded (test harness)
-    }
-
     const s = getSession(userId);
     s.destroyed = false;
     s.userDisconnected = false;
-    try { await setSetting(userId, 'wa_user_disconnected', 'false'); } catch (_) {}
 
     if (s.isInitializing) {
         if (s.startedAt && Date.now() - s.startedAt > 90000) {
@@ -461,21 +449,42 @@ async function initWhatsAppClient(userId, options = {}) {
             return { accepted: true, alreadyStarting: true };
         }
     }
+    if (s.currentQR && s.client) {
+        broadcastSSE(userId, { type: 'qr', data: s.currentQR });
+        return { accepted: true, alreadyStarting: true, qr: s.currentQR };
+    }
     if (s.isConnected && s.client) {
         return { accepted: true, alreadyConnected: true };
     }
+
+    // Atomically claim initializing state before any async await to prevent double-connect race
+    s.isInitializing = true;
+    s.startedAt = Date.now();
+
+    try {
+        const { getUserById } = require('./database');
+        const user = await getUserById(userId);
+        if (!user || user.status !== 'active' || (user.role !== 'admin' && !user.wa_enabled)) {
+            s.isInitializing = false;
+            console.warn(`⚠️ [user ${userId}] Denying WhatsApp client start — wa_enabled is 0 or account is not active.`);
+            return { accepted: false, reason: 'WhatsApp access is not enabled for this account.' };
+        }
+    } catch (e) {
+        // Non-fatal if DB not loaded (test harness)
+    }
+
     if (!s.client && countActiveSessions() >= MAX_CONCURRENT_SESSIONS) {
+        s.isInitializing = false;
         const reason = 'The server is at capacity for concurrent WhatsApp connections right now. Please try again shortly.';
         console.warn(`⚠️ [user ${userId}] Refusing to start WhatsApp client — at the concurrent-session limit (${MAX_CONCURRENT_SESSIONS}).`);
         broadcastSSE(userId, { type: 'error', data: reason });
         return { accepted: false, reason };
     }
 
-    s.isInitializing = true;
-    s.startedAt = Date.now();
     s.lastError = null;
     s.crashCount = 0;
     clearTimers(s);
+    try { await setSetting(userId, 'wa_user_disconnected', 'false'); } catch (_) {}
 
     if (s.initWatchdog) clearTimeout(s.initWatchdog);
     s.initWatchdog = setTimeout(() => {
@@ -615,15 +624,7 @@ function attachHandlers(userId, s, client) {
     client.on('qr', async (qr) => {
         console.log(`📱 [user ${userId}] QR Code ready — open Settings → WhatsApp QR to scan.`);
         s.isConnected = false;
-        s.isInitializing = false;
         if (s.initWatchdog) { clearTimeout(s.initWatchdog); s.initWatchdog = null; }
-        try {
-            s.currentQR = await qrcode.toDataURL(qr);
-            // Tenant-scoped: only this account's listeners receive it.
-            broadcastSSE(userId, { type: 'qr', data: s.currentQR });
-        } catch (err) {
-            console.error(`[user ${userId}] Failed to generate QR data URL:`, err.message);
-        }
 
         // Auto-teardown idle QR code after 3 minutes if unscanned to free RAM & CPU
         if (!s.qrTimeout) {
@@ -638,6 +639,16 @@ function attachHandlers(userId, s, client) {
                 }
             }, 180000);
             s.qrTimeout.unref?.();
+        }
+
+        try {
+            s.currentQR = await qrcode.toDataURL(qr);
+            s.isInitializing = false;
+            // Tenant-scoped: only this account's listeners receive it.
+            broadcastSSE(userId, { type: 'qr', data: s.currentQR });
+        } catch (err) {
+            s.isInitializing = false;
+            console.error(`[user ${userId}] Failed to generate QR data URL:`, err.message);
         }
     });
 
@@ -979,6 +990,10 @@ async function destroyClientForUser(userId, { wipeAuth = false } = {}) {
     s.lastError = null;
 
     broadcastSSE(userId, { type: 'disconnected' });
+    if (Array.isArray(s.sseClients) && s.sseClients.length > 0) {
+        const clients = [...s.sseClients];
+        for (const c of clients) removeSseClient(s, c);
+    }
 
     if (wipeAuth && s.client) {
         try {
